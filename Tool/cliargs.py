@@ -1,10 +1,11 @@
+#/usr/bin/python3
 """Script to specify arguments on CLI"""
 import os
 import click
 import pysam
 import oxbow as ox
 import polars as pl
-import time 
+
 @click.command()
 @click.argument("input")
 def cli(input):
@@ -34,5 +35,4 @@ def cli(input):
     
     click.echo()
 if __name__ == "__main__":
-    time.sleep(100)
     cli()

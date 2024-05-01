@@ -5,6 +5,7 @@ import polars as pl
 
 
 from orffinder import find_orfs
+from findexonscds import getexons_and_cds
 
 def gettranscripts(seq, annotation, outfile="transcripts.fa"):
     '''
@@ -19,18 +20,18 @@ def gettranscripts(seq, annotation, outfile="transcripts.fa"):
     shutil.copyfile(annot.seqfn, outfile)
     return outfile
 
-##def findcoordinates(record_id, annotation):
+def matchcoordinates(annotation, df):
     '''
     docstring
     '''
-#annot = pybed.BedTool(annotation)
+    cds_df = getexons_and_cds(annotation)
 
+    idcol = df.get_column("tran_id")
+    for orfid in idcol:
+        exonregion = exon_df.filter(pl.col("tran_id") == orfid)
+        print(exonregion)
 
-
-
-
-
-
+    return exonregion
 
 
 def preporfs(transcript, starts, stops, minlength, maxlength):
@@ -41,12 +42,12 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
     counter = 0
     with open(transcript) as handle:
         for record in SeqIO.parse(handle, "fasta"):
-            if counter < 100:
+            if counter < 100: 
                 orfs = find_orfs(record.seq, starts, stops, minlength, maxlength)
+                tran_id = str(record.id).split("|")[0]          
                 if orfs:
                     for start, stop, length, orf in orfs:
-                        df_toadd = pl.DataFrame({"pos": [start], "end": [stop], "length": [length], "startorf": [orf[:3]], "stoporf": [orf[-3:]]})
+                        df_toadd = pl.DataFrame({"tran_id": [tran_id],"pos": [start], "end": [stop], "length": [length], "startorf": [orf[:3]], "stoporf": [orf[-3:]]})
                         df = pl.concat([df, df_toadd])
-            counter = counter + 1
-        print(df)
-#address problem with data frame! position|end and length do not get along!
+                        counter = counter +1
+        return df

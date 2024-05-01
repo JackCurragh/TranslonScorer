@@ -17,7 +17,7 @@ def find_orfs(sequence, start_codons=['ATG',], stop_codons=['TAA', 'TAG', 'TGA']
         elif codon in stop_codons:
             if in_orf:
                 if current_orf_length > minlength and current_orf_length < maxlength:
-                    orfs.append((current_orf_start, index + 3, current_orf_length, sequence[current_orf_start : index +3]))
+                    orfs.append((current_orf_start, index + 3, current_orf_length + 3, sequence[current_orf_start : index +3]))
                 in_orf = False
                 current_orf_start = None
                 current_orf_length = 0

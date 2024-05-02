@@ -47,7 +47,6 @@ def getexons_and_cds(annotation_file):
     exon_coords = exontranscriptcoords(groupedexons, "exon_start", "exon_stop")
     
     cds_coords = cdstranscriptcoords(groupedcds, exon_coords)
-    print(cds_coords)
     
     return cds_coords
 
@@ -85,53 +84,42 @@ def cdstranscriptcoords(cds_df, exon_df):
     '''
     docstring
     '''
-    # Initialize new columns to store calculated transcript coordinates
-    coord_start_list = []
-    coord_stop_list = []
-
     # Iterate over each row in the cds DataFrame
+    cds_tran_start = []
+    cds_tran_stop = []
+
     for i in range(len(cds_df)):
         # Get the transcript present in the current row of the cds DataFrame
         transcript_id = cds_df['tran_id'][i]
 
         # Find the corresponding row in the exon DataFrame with the same transcript_id
-        exon_row = exon_df.filter(exon_df['tran_id'] == transcript_id).select(pl.all())
+        exon_row = exon_df.filter(pl.col('tran_id') == transcript_id).select(pl.all())
         
         if exon_row is not None:
             # Get start and stop values from cds DataFrame for the current row
-            cds_start_values = cds_df['cds_start'].gather(i)
-            cds_stop_values = cds_df['cds_stop'].gather(i)
-            print(cds_start_values)
+            cds_start = min(cds_df['cds_start'].gather(i)[0])
+            cds_stop = max(cds_df['cds_stop'].gather(i)[0])
             # Get corresponding exon start and stop values from exon DataFrame
-            exon_start_values = exon_row['exon_start']
-            exon_stop_values = exon_row['exon_stop']
-            print(exon_start_values)
-            # Calculate the differences between cds_start and exon_start, and cds_stop and exon_stop for each value
-            start_diff = [cds_start - exon_start for cds_start, exon_start in zip(cds_start_values, exon_start_values)]
-            stop_diff = [cds_stop - exon_stop for cds_stop, exon_stop in zip(cds_stop_values, exon_stop_values)]
+            transcript_pairs = list(zip(exon_row['tran_coord_start'][0],exon_row['tran_coord_stop'][0]))
+            exon_pairs = zip(exon_row['exon_start'][0],exon_row['exon_stop'][0])
+            
 
-            # Calculate transcript coordinates by adding differences to exon transcript coordinates for each value
-            coord_start_values = [tran_start + diff for tran_start, diff in zip(exon_row['tran_coord_start'], start_diff)]
-            coord_stop_values = [tran_stop + diff for tran_stop, diff in zip(exon_row['tran_coord_stop'], stop_diff)]
+            for idx, exon in enumerate(exon_pairs):
+                if cds_start >= exon[0] and cds_start <= exon[1]:
+                    diff_start = abs(exon[0] - cds_start)
+                    cds_tran = transcript_pairs[idx][0] + diff_start
+                    cds_tran_start.append(cds_tran)
 
-            coord_start_list.append(coord_start_values)
-            coord_stop_list.append(coord_stop_values)
-        else:
-            # If the transcript is not found in the exon DataFrame, append empty lists
-            coord_start_list.append([])
-            coord_stop_list.append([])
+                if cds_stop >= exon[0] and cds_stop <= exon[1]:
+                    diff_stop = exon[1] - cds_stop
+                    cds_tran = transcript_pairs[idx][1] - diff_stop
+                    cds_tran_stop.append(cds_tran)
+    
 
-    # Add the transcript coordinates lists as new columns to the cds DataFrame
-    cds_df = cds_df.drop('coord_start')
-    cds_df = cds_df.drop('coord_stop')
-    cds_df = cds_df.with_columns((pl.Series(coord_start_list)).alias("coord_start"))
-    cds_df = cds_df.with_columns((pl.Series(coord_stop_list)).alias("coord_stop"))
-
-    return cds_df
-
-
-
-
+    df = cds_df.with_columns((pl.Series(cds_tran_start)).alias("cds_tran_start"))
+    cds_df_tran = df.with_columns((pl.Series(cds_tran_stop)).alias("cds_tran_stop"))
+    
+    return cds_df_tran
 
 
    

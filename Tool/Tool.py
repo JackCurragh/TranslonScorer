@@ -6,7 +6,7 @@ import polars as pl
 
 from readfiles import readbam
 from fileprocessor import dftobed, bedtobigwig
-from getcandidates import gettranscripts, preporfs, matchcoordinates
+from getcandidates import gettranscripts, preporfs, orfrelativeposition
 
 @click.group()
 def function():
@@ -70,7 +70,7 @@ def orfprep(seq, ann, tran, starts, stops, minlen, maxlen):
 
     orfdf = preporfs(transcript, starts.split(","), stops.split(","), minlen, maxlen)
     
-    matchcoordinates(ann, orfdf)
+    orfrelativeposition(ann, orfdf)
     
 if __name__ == "__main__":
     function()

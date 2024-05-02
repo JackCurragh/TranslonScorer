@@ -20,18 +20,36 @@ def gettranscripts(seq, annotation, outfile="transcripts.fa"):
     shutil.copyfile(annot.seqfn, outfile)
     return outfile
 
-def matchcoordinates(annotation, df):
+def orfrelativeposition(annotation, df):
     '''
     docstring
     '''
     cds_df = getexons_and_cds(annotation)
+    filtered_df = cds_df.select(pl.all().exclude("cds_start", "cds_stop"))
 
-    idcol = df.get_column("tran_id")
-    for orfid in idcol:
-        exonregion = exon_df.filter(pl.col("tran_id") == orfid)
-        print(exonregion)
+    idcol = df.select(pl.col("tran_id", "pos","end"))
+    
+    for orfid in idcol["tran_id"].unique():
+        cdsregion = filtered_df.filter(pl.col("tran_id") == orfid).select(pl.all())
+        orfregion = idcol.filter(pl.col("tran_id") == orfid).select(pl.all())
+        if not cdsregion.is_empty():
+            cdspair = [cdsregion['cds_tran_start'][0], cdsregion['cds_tran_stop'][0]]
+            orfpair = list(zip(orfregion['pos'], orfregion['end']))
+            for orf in orfpair:
+                if orf[0] < cdspair[0] and orf[1] < cdspair[0]:
+                    print(orf, cdspair, "upstream ORF detected")
+                elif orf[0] > cdspair[1] and orf[1] > cdspair[1]:
+                    print(orf, cdspair, "downstream ORF detected")
+                elif orf[0] < cdspair[0] and orf[1] < cdspair[1] and orf[1] > cdspair[0]:
+                    print(orf, cdspair, "Overlapping upstream ORF detected")
+                elif orf[0] < cdspair[1] and orf[0] > cdspair[0] and orf[1] > cdspair[1]:
+                    print(orf, cdspair, "Overlapping downstream ORF detected")
+                elif orf[0] >= cdspair[0] and orf[1] <= cdspair[1]:
+                    print(orf, cdspair, "Internal ORF detected")
+        else: print(f"non coding transcript: {orfid}")      
+            
 
-    return exonregion
+    return idcol
 
 
 def preporfs(transcript, starts, stops, minlength, maxlength):

@@ -1,4 +1,5 @@
 import polars as pl
+import numpy as np
 
 def extract_transcript_id(attr_str):
     '''
@@ -12,45 +13,58 @@ def extract_transcript_id(attr_str):
             return attr.split("=")[1]
         elif attr.startswith(" transcript_id "):
             return attr.split(" ")[2].replace('"', "")
-    return pl.nan
+    return ""
 
-def getexons_and_cds(annotation_file):
+def getexons_and_cds(annotation_file, tran=[]):
     '''
     docstring
     '''
-    # Read the annotation file into a DataFrame
     df = pl.read_csv(annotation_file, separator='\t', ignore_errors=True,
                      has_header=False, truncate_ragged_lines=True,
-                     comment_prefix = "#").select(["column_1", "column_2", "column_3","column_4", "column_5", "column_9"]).rename({"column_1":"chr",
-                     "column_2":"source", "column_3":"type", "column_4":"start", "column_5":"stop", "column_9":"attributes"})
-    # Filter to retain only coding regions (CDS)
-    coding_regions = df.filter((pl.col("type") == "CDS"))
-    
-    codinginfo = coding_regions.with_columns(pl.col("attributes")
+                     comment_prefix = "#").select(["column_1", "column_3","column_4", "column_5","column_7", "column_9"]).rename({"column_1":"chr",
+                     "column_3":"type", "column_4":"start", "column_5":"stop", "column_7":"strand", "column_9":"attributes"})
+    df = df.with_columns(pl.col("attributes")
                                     .apply(lambda attributes: extract_transcript_id(attributes)
-                                    ).alias("tran_id")).select(pl.all().exclude("attributes", "source"))
+                                    ).alias("tran_id")).select(pl.all())
+    if tran:
+        df = df.filter((pl.col("tran_id").is_in(tran)))
+    
+    #Getting CDS
+    coding_regions = df.filter((pl.col("type") == "CDS"))
 
-    groupedcds = codinginfo.group_by("tran_id").agg(
+    groupedcds = coding_regions.group_by("tran_id").agg(
                  pl.col("start").alias("cds_start"),
                  pl.col("stop").alias("cds_stop"))                                 
     #Getting exons
     exon_regions = df.filter((pl.col("type") == "exon"))
-
-    exoninfo = exon_regions.with_columns(pl.col("attributes")
-                                    .apply(lambda attributes: extract_transcript_id(attributes)
-                                    ).alias("tran_id")).select(pl.all().exclude("attributes", "source"))
-
-    groupedexons = exoninfo.group_by("tran_id").agg(
-                 pl.col("start").alias("exon_start"),
-                 pl.col("stop").alias("exon_stop"))
-
-    exon_coords = exontranscriptcoords(groupedexons, "exon_start", "exon_stop")
     
+    pos_exons, neg_exons = procesexons(exon_regions)
+    
+    exon_coords_plus = exontranscriptcoords(pos_exons, posstrand=True)
+    #column names switched to calculate inverse of positions for negative strands
+    exon_coords_neg = exontranscriptcoords(neg_exons, posstrand=False)
+    
+    exon_coords = pl.concat([exon_coords_plus, exon_coords_neg]).select(pl.all().exclude("strand"))
     cds_coords = cdstranscriptcoords(groupedcds, exon_coords)
     
-    return cds_coords
+    return cds_coords, exon_coords
 
-def exontranscriptcoords(df: pl.DataFrame, start_column: str, end_column: str) -> pl.DataFrame:
+def procesexons(df):
+    exonplus = df.filter((pl.col("strand") == "+"))
+    exonneg = df.filter((pl.col("strand") == "-"))
+
+    groupedexonspos = exonplus.group_by("tran_id").agg(
+                        pl.col("start").alias("exon_start"),
+                        pl.col("stop").alias("exon_stop"),
+                        pl.col("strand"))
+    groupedexonsneg = exonneg.group_by("tran_id").agg(
+                        pl.col("start").alias("exon_start"),
+                        pl.col("stop").alias("exon_stop"),
+                        pl.col("strand"))
+    
+    return groupedexonspos, groupedexonsneg
+
+def exontranscriptcoords(df: pl.DataFrame, posstrand=True) -> pl.DataFrame:
     '''
     docstring
     '''
@@ -58,9 +72,12 @@ def exontranscriptcoords(df: pl.DataFrame, start_column: str, end_column: str) -
     new_column_1 = []
     new_column_2 = []
     # Iterate over rows
+    start_column = "exon_start"
+    end_column = "exon_stop"
+
     for i in range(len(df)):
-        start_values = df[start_column][i]
-        end_values = df[end_column][i]
+        start_values = df[start_column][i] if posstrand else sorted(df[start_column][i], reverse=True)
+        end_values = df[end_column][i] if posstrand else sorted(df[end_column][i], reverse=True)
         new_start_values = []  # Starting value is 0
         new_stop_values = []
         for j in range(len(start_values)):
@@ -74,6 +91,7 @@ def exontranscriptcoords(df: pl.DataFrame, start_column: str, end_column: str) -
             new_stop_values.append(new_start + stop_coordinate)
         new_column_1.append(new_start_values)
         new_column_2.append(new_stop_values)
+
     # Add new columns to the dataframe
     df = df.with_columns((pl.Series(new_column_1)).alias("tran_coord_start"))
     df = df.with_columns((pl.Series(new_column_2)).alias("tran_coord_stop"))

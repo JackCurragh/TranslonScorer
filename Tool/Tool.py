@@ -7,6 +7,7 @@ import polars as pl
 from readfiles import readbam
 from fileprocessor import dftobed, bedtobigwig
 from getcandidates import gettranscripts, preporfs, orfrelativeposition
+from filewriter import saveorfsandexons
 
 @click.group()
 def function():
@@ -68,9 +69,12 @@ def orfprep(seq, ann, tran, starts, stops, minlen, maxlen):
         transcript = tran
     else: raise Exception("Must provide genomic sequence and annotation or transcript sequences")
 
-    orfdf = preporfs(transcript, starts.split(","), stops.split(","), minlen, maxlen)
     
-    orfrelativeposition(ann, orfdf)
+    orfdf = preporfs(transcript, starts.split(", "), stops.split(", "), minlen, maxlen)
+
+    orf_ann_df, exondf =orfrelativeposition(ann, orfdf)
+    saveorfsandexons(orf_ann_df, exondf)
+    
     
 if __name__ == "__main__":
     function()

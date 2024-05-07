@@ -26,7 +26,7 @@ def orfrelativeposition(annotation, df):
     '''
 
     cds_df, exon_coords = getexons_and_cds(annotation, list(df["tran_id"].unique()))
-    filtered_df = cds_df.select(pl.all().exclude("cds_start", "cds_stop"))
+    filtered_df = cds_df.select(pl.all().exclude("start", "stop"))
     
    
     orftype = []
@@ -35,9 +35,9 @@ def orfrelativeposition(annotation, df):
         orfregion = df.filter(pl.col("tran_id") == orfid).select(pl.all())
         orfpair = list(zip(orfregion['pos'], orfregion['end']))
         if not cdsregion.is_empty():
-            if cdsregion['cds_tran_start'][0] > cdsregion['cds_tran_stop'][0]:
-                cdspair = [cdsregion['cds_tran_stop'][0], cdsregion['cds_tran_start'][0]]
-            else : cdspair = [cdsregion['cds_tran_start'][0], cdsregion['cds_tran_stop'][0]]
+            if cdsregion['tran_start'][0] > cdsregion['tran_stop'][0]:
+                cdspair = [cdsregion['tran_stop'][0], cdsregion['tran_start'][0]]
+            else : cdspair = [cdsregion['tran_start'][0], cdsregion['tran_stop'][0]]
             for orf in orfpair:
                 if orf[0] < cdspair[0] and orf[1] < cdspair[0]:
                     orftype.append("uORF")
@@ -70,14 +70,17 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
     docstring
     '''
     df = pl.DataFrame()
-    
+    #COUNTER!!!!!!!!!!
+    counter = 0
     with open(transcript) as handle:
-        for record in SeqIO.parse(handle, "fasta"): 
+        for record in SeqIO.parse(handle, "fasta"):
+            if counter < 500:
                 orfs = find_orfs(record.seq, starts, stops, minlength, maxlength)
                 tran_id = str(record.id).split("|")[0]          
                 if orfs:
                     for start, stop, length, orf in orfs:
                         df_toadd = pl.DataFrame({"tran_id": [tran_id],"pos": [start], "end": [stop], "length": [length], "startorf": [str(orf[:3])], "stoporf": [str(orf[-3:])]})
                         df = pl.concat([df, df_toadd])
+            counter = counter + 1
         df = df.sort("tran_id")
         return df

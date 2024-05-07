@@ -3,11 +3,13 @@
 import os
 import click
 import polars as pl
+import pyBigWig as bw
 
 from readfiles import readbam
 from fileprocessor import dftobed, bedtobigwig
 from getcandidates import gettranscripts, preporfs, orfrelativeposition
 from filewriter import saveorfsandexons
+from bigwigtodf import bigwigtodf
 
 @click.group()
 def function():
@@ -17,6 +19,9 @@ def function():
 @click.argument("input")
 @click.option("--chromsize", "-c", help="Provide a file containing the chromosome sizes")
 def cli(input, chromsize):
+    '''
+    docstring
+    '''
     location = os.getcwd() + '/' + input
     #if file is provided
     if  os.path.isfile(location):
@@ -25,10 +30,11 @@ def cli(input, chromsize):
         #calculate asite + converting to BedGraph
         beddf = dftobed(df)
         
-        bedfile = beddf.write_csv("file.bedGraph", separator="\t")
+        if not os.path.exists("data/file.bedGraph"):
+            bedfile = beddf.write_csv("file.bedGraph", separator="\t")
 
-        #Converting Bedgrapgh to Bigwig format
-        bedtobigwig(bedfile, chromsize)
+            #Converting Bedgrapgh to Bigwig format
+            bedtobigwig(bedfile, chromsize)
     
     #if folder with BAM files is provided
     elif os.path.isdir(location):
@@ -47,8 +53,7 @@ def cli(input, chromsize):
             else: click.echo("No .bam files found in folder")
         df_merged = pl.concat(y)
         df_merged.write_csv(f"{filename}.bedGraph", separator="\t")
-
-
+        bedtobigwig(bedfile, chromsize)
 
 @function.command()
 @click.option("--seq", "-s", help="Provide a file containing the genomic sequence (.fa)")
@@ -72,9 +77,19 @@ def orfprep(seq, ann, tran, starts, stops, minlen, maxlen):
     
     orfdf = preporfs(transcript, starts.split(", "), stops.split(", "), minlen, maxlen)
 
-    orf_ann_df, exondf =orfrelativeposition(ann, orfdf)
+    orf_ann_df, exondf = orfrelativeposition(ann, orfdf)
     saveorfsandexons(orf_ann_df, exondf)
-    
-    
+
+@function.command()
+@click.option("--bigwig", "-bw", help="Provide a Bigwig file to convert")
+@click.option("--exon", "-ex", help="Provide a file containing exon positions")
+
+
+def bigwigconverter(bigwig, exon):
+    '''
+    docstring
+    '''
+    bigwigtodf(bigwig, exon)
+
 if __name__ == "__main__":
     function()

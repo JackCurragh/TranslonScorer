@@ -61,36 +61,43 @@ def bigwigtodf(bigwig, exon):
     counts = []
     if bwfile.isBigWig():
         exon_df = pl.read_csv(exon, has_header=True, separator=",")
-        exon_not = exon_df.get_column("chr").to_list()[0]
-        checkchromnot(int(chromcheck), exon_not)
+        #Function commented since it doesn't work
+        #exon_not = exon_df.get_column("chr").to_list()[0]
+        #checkchromnot(int(chromcheck), exon_not)
         exon_df = exon_df.with_columns(
             pl.col("start", "stop", "tran_start", "tran_stop").apply(
                 lambda x: x.split(",")
             )
         )
         for i in range(len(exon_df)):
-            exon_pairs = zip(exon_df["start"][i], exon_df["stop"][i])
-            transcript_pairs = list(
-                zip(exon_df["tran_start"][i], exon_df["tran_stop"][i])
-            )
-            for idx, exon in enumerate(exon_pairs):
-                intervals = bwfile.intervals(
-                    str(exon_df["chr"][i]), int(exon[0]), int(exon[1])
+            if exon_df["chr"][i] == "M":
+                print("M chrom")
+            else: 
+                exon_pairs = zip(exon_df["start"][i], exon_df["stop"][i])
+                transcript_pairs = list(
+                    zip(exon_df["tran_start"][i], exon_df["tran_stop"][i])
                 )
-                # Filter out "None" type intervals
-                if intervals is not None:
-                    for interval in intervals:
-                        tran_id.append(exon_df["tran_id"][0])
-                        # Tran start coordinate
-                        diff_start = interval[0] - int(exon[0])
-                        transtart = int(transcript_pairs[idx][0]) + diff_start
-                        tran_start.append(transtart)
-                        # Tran stop coordinate
-                        diff_stop = int(exon[1]) - interval[1]
-                        transtop = int(transcript_pairs[idx][1]) - diff_stop
-                        tran_stop.append(transtop)
-                        # Counts
-                        counts.append(interval[2])
+                for idx, exon in enumerate(exon_pairs):
+                    if int(exon[0]) == int(exon[1]):
+                        print("skipped")
+                    else:
+                        intervals = bwfile.intervals(
+                            str(exon_df["chr"][i]), int(exon[0]), int(exon[1])
+                        )
+                    # Filter out "None" type intervals
+                        if intervals is not None:
+                            for interval in intervals:
+                                tran_id.append(exon_df["tran_id"][i])
+                                # Tran start coordinate
+                                diff_start = interval[0] - int(exon[0])
+                                transtart = int(transcript_pairs[idx][0]) + diff_start
+                                tran_start.append(transtart)
+                                # Tran stop coordinate
+                                diff_stop = int(exon[1]) - interval[1]
+                                transtop = int(transcript_pairs[idx][1]) - diff_stop
+                                tran_stop.append(transtop)
+                                # Counts
+                                counts.append(interval[2])
         df_tran = pl.DataFrame(tran_start).rename({"column_0": "tran_start"})
         df_tran = df_tran.with_columns(
             (pl.Series(tran_stop)).alias("tran_stop"),
@@ -98,7 +105,6 @@ def bigwigtodf(bigwig, exon):
             (pl.Series(tran_id)).alias("tran_id"),
         )
         df_tran = df_tran.select(["tran_id", "tran_start", "tran_stop", "counts"])
-        print(df_tran)
         return df_tran
     else:
         raise Exception("Must provide a bigwig file to convert")

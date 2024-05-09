@@ -89,6 +89,11 @@ def orfrelativeposition(annotation, df):
                     and orf[1] > cdspair[1]
                 ):
                     orftype.append("doORF")
+                elif (
+                    orf[0] < cdspair[0]
+                    and orf[1] <= cdspair[0]
+                ):
+                    orftype.append("uoORF")
                 elif orf[0] >= cdspair[0] and orf[1] <= cdspair[1]:
                     orftype.append("iORF")
                 elif orf[0] < cdspair[0] and orf[1] > cdspair[1]:
@@ -134,22 +139,24 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
     counter = 0
     with open(transcript) as handle:
         for record in SeqIO.parse(handle, "fasta"):
-            if counter < 500:
-                orfs = find_orfs(record.seq, starts, stops, minlength, maxlength)
-                tran_id = str(record.id).split("|")[0]
-                if orfs:
-                    for start, stop, length, orf in orfs:
-                        df_toadd = pl.DataFrame(
-                            {
-                                "tran_id": [tran_id],
-                                "pos": [start],
-                                "end": [stop],
-                                "length": [length],
-                                "startorf": [str(orf[:3])],
-                                "stoporf": [str(orf[-3:])],
-                            }
-                        )
-                        df = pl.concat([df, df_toadd])
-            counter = counter + 1
+            if counter % 1000 == 0:
+                print(f"read {counter} Transcripts")
+            orfs = find_orfs(record.seq, starts, stops, minlength, maxlength)
+            tran_id = str(record.id).split("|")[0]
+            if orfs:
+                for start, stop, length, orf in orfs:
+                    df_toadd = pl.DataFrame(
+                        {
+                            "tran_id": [tran_id],
+                            "pos": [start],
+                            "end": [stop],
+                            "length": [length],
+                            "startorf": [str(orf[:3])],
+                            "stoporf": [str(orf[-3:])],
+                        }
+                    )
+                df = pl.concat([df, df_toadd])
+            counter = counter + 1 
         df = df.sort("tran_id")
+
         return df

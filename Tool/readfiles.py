@@ -19,7 +19,6 @@ def readbam(bampath):
     pysam.index(bampath)
     bamfile = ox.read_bam(bampath)
     df = pl.read_ipc(bamfile)
-
     return df
 
 

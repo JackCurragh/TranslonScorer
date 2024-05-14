@@ -44,7 +44,7 @@ def find_orfs(
                     orfs.append(
                         (
                             current_orf_start,
-                            index - 1,
+                            index,
                             current_orf_length,
                             sequence[current_orf_start : index + 3],
                         )

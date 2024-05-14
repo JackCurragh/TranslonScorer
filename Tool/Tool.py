@@ -25,10 +25,10 @@ def function():
 @click.option("--stops", "-stp", default="TAA, TAG, TGA", help="Provide a list of stop codons")
 @click.option("--minlen", "-min", default=0, help="Provide the minimum length")
 @click.option("--maxlen", "-max", default=1000000, help="Provide the maximum length")
-@click.option("--bigwig", "-bw", default="file.bw" , help="Provide a Bigwig file to convert")
-@click.option("--exon", "-ex", default="exons.csv", help="Provide a file containing exon positions")
+@click.option("--bigwig", "-bw", help="Provide a Bigwig file to convert")
+@click.option("--exon", "-ex", help="Provide a file containing exon positions")
 @click.option("--bedfile", "-bw", help="Provide a Bigwig file to convert")
-@click.option("--orfs", "-of", default="annotated_orfs.csv", help="Provide a file containing annotated orfs")
+@click.option("--orfs", "-of", help="Provide a file containing annotated orfs")
 @click.option("--range_param", "-rp",
              help="Provide an integer that indicates the range in which a plot will be constructed \
                  around the relative start position")
@@ -62,7 +62,7 @@ def Tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
         bedtobigwig(bedfile, chromsize)
     
     elif bigwig:
-        continue
+        print("bigwig")
     else: raise Exception(
         "Must provide valuable input. The options are the following:\n \
             1. Bam file (.bam) + file containing chromosome information\n \
@@ -80,7 +80,7 @@ def Tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
         orf_ann_df, exondf = orfrelativeposition(ann, orfdf)
         saveorfsandexons(orf_ann_df, exondf)
     elif orfs and exon:
-        continue
+        print("orfs and exon")
     else:
         raise Exception(
                 "Must provide valuable for ORFS. The options are the following:\n \

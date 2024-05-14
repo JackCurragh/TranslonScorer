@@ -41,6 +41,9 @@ def scoreandplot(orfs, bwfile, range_param, sru_range=12):
         
         bigwig_tran = bigwig_df.filter(pl.col("tran_id") == transcript)
         if not bigwig_tran.is_empty():
+            print(bigwig_tran)
+            print(relstart)
+            print(end)
             #passing 0,1 to choose invert of sru score for step down score
             sru1 = sru_score(relstart, bigwig_tran, sru_range, 0)
             sru2 = sru_score(end, bigwig_tran, sru_range, 1)

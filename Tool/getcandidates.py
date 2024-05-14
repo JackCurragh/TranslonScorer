@@ -1,5 +1,4 @@
-import pybedtools as pybed
-import shutil
+import pyrange as pr
 from Bio import SeqIO
 import polars as pl
 
@@ -28,13 +27,13 @@ def gettranscripts(seq, annotation, outfile="transcripts.fa"):
     Example:
         output_file = gettranscripts("genome.fa", "annotation.gff", outfile="transcripts.fa")
     """
-    annot = pybed.BedTool(annotation)
-
-    fasta = pybed.BedTool(seq)
-    transcripts = annot.filter(lambda feature: feature[2] == "transcript")
-    annot = transcripts.sequence(fi=fasta, name=True, s=True)
-
-    shutil.copyfile(annot.seqfn, outfile)
+    ann = pr.read_gtf(annotation)
+    transcripts = ann[ann.Feature == 'transcript']
+    tran_seq = transcripts.get_transcript_sequence(transcript_id='transcript_id', path=seq)
+    with open(outfile, 'w') as fw:
+        for index, id, seq in tran_seq.itertuples():
+            fw.write(f'>{id}\n{seq}\n')
+            
     return outfile
 
 def orfrelativeposition(annotation, df):

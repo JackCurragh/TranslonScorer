@@ -88,7 +88,7 @@ def getexons_and_cds(annotation_file, tran=[]):
         pl.col("attributes")
         .apply(lambda attributes: extract_transcript_id(attributes))
         .alias("tran_id")
-    ).select(pl.all())
+    ).select(pl.all().exclude("attributes"))
     if tran:
         df = df.filter((pl.col("tran_id").is_in(tran)))
 
@@ -98,7 +98,7 @@ def getexons_and_cds(annotation_file, tran=[]):
     groupedcds = (
         coding_regions.group_by("tran_id")
         .agg(
-            pl.col("start").alias("start"), pl.col("stop").alias("stop"), pl.col("chr")
+            pl.col("start"), pl.col("stop"), pl.col("chr")
         )
         .select(["chr", "tran_id", "start", "stop"])
     )
@@ -243,7 +243,7 @@ def gettranscriptcoords(cds_df, exon_df):
         transcript_id = cds_df["tran_id"][i]
 
         # Find the corresponding row in the exon DataFrame with the same transcript_id
-        exon_row = exon_df.filter(pl.col("tran_id") == transcript_id).select(pl.all())
+        exon_row = exon_df.filter(pl.col("tran_id") == transcript_id)
 
         if exon_row is not None:
             # Get start and stop values from cds DataFrame for the current row

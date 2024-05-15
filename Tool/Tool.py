@@ -61,8 +61,8 @@ def Tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
     elif bedfile and chromsize:
         bedtobigwig(bedfile, chromsize)
     
-    elif bigwig:
-        print("bigwig")
+    elif bigwig
+
     else: raise Exception(
         "Must provide valuable input. The options are the following:\n \
             1. Bam file (.bam) + file containing chromosome information\n \
@@ -79,14 +79,14 @@ def Tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
         orfdf = preporfs(transcript, starts.split(", "), stops.split(", "), minlen, maxlen)
         orf_ann_df, exondf = orfrelativeposition(ann, orfdf)
         saveorfsandexons(orf_ann_df, exondf)
-    elif orfs and exon:
-        print("orfs and exon")
+    elif orfs and exon
+    
     else:
         raise Exception(
-                "Must provide valuable for ORFS. The options are the following:\n \
-                    1. A file containing FASTA sequences (.fa) + annotation file (.gtf)\n \
-                    2. A file containing transcript sequences (.fa) + annotation file (.gtf)\n \
-                    3. A file containing annotated ORFS (.csv) + file containg exon information (.csv)"
+            "Must provide valuable for ORFS. The options are the following:\n \
+                1. A file containing FASTA sequences (.fa) + annotation file (.gtf)\n \
+                2. A file containing transcript sequences (.fa) + annotation file (.gtf)\n \
+                3. A file containing annotated ORFS (.csv) + file containg exon information (.csv)"
         )
     #BIGWIGCONVERTER
     bwtrancoords = bigwigtodf(bigwig, exon)

@@ -59,6 +59,7 @@ def bigwigtodf(bigwig, exon):
     tran_start = []
     tran_stop = []
     counts = []
+    frame = []
     if bwfile.isBigWig():
         exon_df = pl.read_csv(exon, has_header=True, separator=",")
         #Function commented since it doesn't work
@@ -92,6 +93,13 @@ def bigwigtodf(bigwig, exon):
                                 diff_start = interval[0] - int(exon[0])
                                 transtart = int(transcript_pairs[idx][0]) + diff_start
                                 tran_start.append(transtart)
+                                #Frame
+                                if exon_df['tran_start'][i] % 3 == 0:
+                                    frame.append(0)
+                                elif exon_df['tran_start'][i] % 3 == 1:
+                                    frame.append(1)
+                                elif exon_df['tran_start'][i] % 3 == 2:
+                                    frame.append(2)
                                 # Tran stop coordinate
                                 diff_stop = int(exon[1]) - interval[1]
                                 transtop = int(transcript_pairs[idx][1]) - diff_stop
@@ -103,8 +111,9 @@ def bigwigtodf(bigwig, exon):
             (pl.Series(tran_stop)).alias("tran_stop"),
             (pl.Series(counts)).alias("counts"),
             (pl.Series(tran_id)).alias("tran_id"),
+            (pl.Series(frame)).alias("frame")
         )
-        df_tran = df_tran.select(["tran_id", "tran_start", "tran_stop", "counts"])
+        df_tran = df_tran.select(["tran_id", "tran_start", "tran_stop", "counts", "frame"])
         return df_tran
     else:
         raise Exception("Must provide a bigwig file to convert")

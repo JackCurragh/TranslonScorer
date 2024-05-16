@@ -63,8 +63,8 @@ def orfrelativeposition(annotation, df):
     filtered_df = cds_df.select(pl.all().exclude("start", "stop"))
     orftype = []
     for orfid in sorted(df["tran_id"].unique()):
-        cdsregion = filtered_df.filter(pl.col("tran_id") == orfid).select(pl.all())
-        orfregion = df.filter(pl.col("tran_id") == orfid).select(pl.all())
+        cdsregion = filtered_df.filter(pl.col("tran_id") == orfid)
+        orfregion = df.filter(pl.col("tran_id") == orfid)
         orfpair = list(zip(orfregion["pos"], orfregion["end"]))
         if not cdsregion.is_empty():
             if cdsregion["tran_start"][0] > cdsregion["tran_stop"][0]:
@@ -144,6 +144,12 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
             tran_id = str(record.id).split("|")[0]
             if orfs:
                 for start, stop, length, orf in orfs:
+                    if start % 3 == 0:
+                        frame = 0
+                    elif start % 3 == 1:
+                        frame = 1
+                    elif start % 3 == 2:
+                        frame = 2
                     df_toadd = pl.DataFrame(
                         {
                             "tran_id": [tran_id],
@@ -152,6 +158,7 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
                             "length": [length],
                             "startorf": [str(orf[:3])],
                             "stoporf": [str(orf[-3:])],
+                            "frame": [frame]
                         }
                     )
                 df = pl.concat([df, df_toadd])

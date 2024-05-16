@@ -28,31 +28,31 @@ def find_orfs(
     current_orf_start = None
     current_orf_length = 0
 
-    for index in range(0, len(sequence), 3):
+    for index in range(0, len(sequence)):
         codon = sequence[index : index + 3]
-
         if codon in start_codons:
-            if not in_orf:
-                in_orf = True
-                current_orf_start = index
-                current_orf_length = 3
-            else:
-                current_orf_length += 3
-        elif codon in stop_codons:
-            if in_orf:
-                if current_orf_length > minlength and current_orf_length < maxlength:
-                    orfs.append(
-                        (
-                            current_orf_start,
-                            index,
-                            current_orf_length,
-                            sequence[current_orf_start : index + 3],
+            in_orf = True
+            current_orf_start = index
+            current_orf_length = 3
+        if in_orf:
+            for orf in range(index+3, len(sequence), 3):
+                codon = sequence[orf : orf + 3]
+                if codon in stop_codons:
+                    current_orf_length += 3
+                    if current_orf_length > minlength and current_orf_length < maxlength:
+                        orfs.append(
+                            (
+                                current_orf_start+1,
+                                orf+3,
+                                current_orf_length,
+                                sequence[current_orf_start : orf + 3],
+                            )
                         )
-                    )
-                in_orf = False
-                current_orf_start = None
-                current_orf_length = 0
-        elif in_orf:
-            current_orf_length += 3
-
+                    index = current_orf_start + 1
+                    in_orf = False
+                    current_orf_start = None
+                    current_orf_length = 0
+                    break
+                elif in_orf:
+                    current_orf_length += 3
     return orfs

@@ -1,5 +1,5 @@
-import pyrange as pr
 from Bio import SeqIO
+import pyranges as pr
 import polars as pl
 
 
@@ -133,36 +133,19 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
     Example:
         orf_df = preporfs("transcripts.fasta", ['ATG'], ['TAA', 'TAG', 'TGA'], 50, 500)
     """
-    df = pl.DataFrame()
+    dict_list=[]
     # COUNTER!!!!!!!!!!
     counter = 0
     with open(transcript) as handle:
         for record in SeqIO.parse(handle, "fasta"):
             if counter % 1000 == 0:
                 print(f"read {counter} Transcripts")
-            orfs = find_orfs(record.seq, starts, stops, minlength, maxlength)
             tran_id = str(record.id).split("|")[0]
-            if orfs:
-                for start, stop, length, orf in orfs:
-                    if start % 3 == 0:
-                        frame = 0
-                    elif start % 3 == 1:
-                        frame = 1
-                    elif start % 3 == 2:
-                        frame = 2
-                    df_toadd = pl.DataFrame(
-                        {
-                            "tran_id": [tran_id],
-                            "pos": [start],
-                            "end": [stop],
-                            "length": [length],
-                            "startorf": [str(orf[:3])],
-                            "stoporf": [str(orf[-3:])],
-                            "frame": [frame]
-                        }
-                    )
-                df = pl.concat([df, df_toadd])
-            counter = counter + 1 
-        df = df.sort("tran_id")
+        
+            append_list = find_orfs(record.seq, tran_id)
+            dict_list.extend(append_list)
+            counter = counter + 1
 
+        df = pl.from_dict(dict_list)
+        df = df.sort("tran_id")
         return df

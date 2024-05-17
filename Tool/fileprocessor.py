@@ -95,3 +95,5 @@ def bedtobigwig(bedfile, chromsize):
         bedtobigwig("input.bedGraph", "chromsizes.txt")
     """
     os.system(f"bedGraphToBigWig {bedfile} {chromsize} file.bw")
+
+    return 'data/file.bw'

@@ -1,9 +1,5 @@
 """Script to plot file"""
 
-orfs = "data/files/annotated_orfs.csv"
-bwfile = "data/files/bw_tran.csv"
-range_param = 30
-
 import polars as pl
 import plotly.express as px
 from plotly.subplots import make_subplots
@@ -11,7 +7,37 @@ import plotly.graph_objects as go
 
 from scoring import sru_score, calculate_scores
 
-def scoreandplot(orfs, bwfile, range_param, sru_range=12):
+def plottop10(top10_df, bigwig_df, range_param):
+    '''
+    docstring
+    '''
+    #getting counts for top 10 transcripts 
+    range_list = list(range(-range_param, range_param + 1))
+    relative_df = pl.DataFrame()
+    normal_df = pl.DataFrame()
+
+    for row in range(len(top10_df)):
+        transcript = top10_df["tran_id"][row]
+        relstart = top10_df["pos"][row]
+        orftype = top10_df["type"][row]
+        frame = top10_df["frame"][row]
+
+        bigwig_tran2 = bigwig_df.filter((pl.col("tran_id") == transcript))
+        
+        normalcounts = bigwig_tran2.group_by("tran_id", "frame","tran_start").agg(pl.col("counts").sum())
+        normal_df = pl.concat([normal_df, normalcounts])
+
+        relativecounts = normalcounts.with_columns((pl.col("tran_start") - relstart).alias("relativeloc"))
+        relative_df = pl.concat([relative_df, relativecounts])
+    
+    
+    relative_df = relative_df.filter(pl.col("relativeloc").is_in(range_list))
+    relative_df = relative_df.group_by("relativeloc").agg(pl.col("counts").sum())
+
+    return normal_df, relative_df
+
+
+def scoreandplot(orfs, bwfile, range_param=30, sru_range=12):
     """
     Preprocesses data and generates bar plots for each transcript based on input ORFs and BigWig files.
     
@@ -39,9 +65,9 @@ def scoreandplot(orfs, bwfile, range_param, sru_range=12):
         transcript = orf_df["tran_id"][row]
         relstart = orf_df["pos"][row]
         end = orf_df["end"][row]
-        frame = orf_df["frame"][row]
+        type = orf_df["type"][row]
         
-        bigwig_tran = bigwig_df.filter((pl.col("tran_id") == transcript) &(pl.col("frame") == frame))
+        bigwig_tran = bigwig_df.filter((pl.col("tran_id") == transcript))
         
         if not bigwig_tran.is_empty():
             #passing 0,1 to choose invert of sru score for step down score
@@ -72,35 +98,5 @@ def scoreandplot(orfs, bwfile, range_param, sru_range=12):
     fig_combined.update_xaxes(title_text='Relative coordinates around the start coordinate')
     fig_combined.update_yaxes(title_text='Counts')
     fig_combined.show()
+    
     return
-
-scoreandplot(orfs, bwfile, range_param)
-
-def plottop10(top10_df, bigwig_df range_param=30):
-    '''
-    docstring
-    '''
-    fig_separate = make_subplots(rows = 5, cols=2)
-    #getting counts for top 10 transcripts 
-    range_list = list(range(-range_param, range_param + 1))
-    relative_df = pl.DataFrame()
-    normal_df = pl.DataFrame()
-
-    for row in range(len(top10_df)):
-        transcript = top10_df["tran_id"][row]
-        relstart = top10_df["pos"][row]
-        orftype = top10_df["type"][row]
-        frame = top10_df["frame"][row]
-
-        bigwig_tran2 = bigwig_df.filter((pl.col("tran_id") == transcript) &(pl.col("frame") == frame))
-        
-        normalcounts = bigwig_tran2.group_by("tran_id", "frame","tran_start").agg(pl.col("counts").sum())
-        normal_df = pl.concat([normal_df, normalcounts])
-
-        relativecounts = normalcounts.with_columns((pl.col("tran_start") - relstart).alias("relativeloc"))
-        relative_df = pl.concat([relative_df, relativecounts])
-    
-    
-    relative_df = relative_df.filter(pl.col("relativeloc").is_in(range_list))
-    relative_df = relative_df.group_by("relativeloc").agg(pl.col("counts").sum())
-    return normal_df, relative_df

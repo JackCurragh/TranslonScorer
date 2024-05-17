@@ -37,12 +37,13 @@ def function():
              the stop codon will regarded when calculating")
 
 
-def Tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen, maxlen,
+def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen, maxlen,
          exon, orfs, range_param, sru_range):
     """
     docstring
     """
     if bam and chromsize:
+        print('bam+chromsize')
         #READ IN BAM START
         location = os.getcwd() + "/" + bam
         # if file is provided
@@ -56,13 +57,14 @@ def Tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
                 bedfile = beddf.write_csv("file.bedGraph", separator="\t")
 
                 # Converting Bedgrapgh to Bigwig format
-                bedtobigwig(bedfile, chromsize)
+                bigwig = bedtobigwig(bedfile, chromsize)
 
     elif bedfile and chromsize:
-        bedtobigwig(bedfile, chromsize)
+        print('bedfile, chromsize')
+        bigwig = bedtobigwig(bedfile, chromsize)
     
-    elif bigwig
-
+    elif bigwig:
+        print('bigwig')
     else: raise Exception(
         "Must provide valuable input. The options are the following:\n \
             1. Bam file (.bam) + file containing chromosome information\n \
@@ -73,13 +75,31 @@ def Tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
     #ORFPREP START
     if ann:
         if seq and ann:
+            print('getting transcript')
             transcript = gettranscripts(seq, ann)
         elif tran and ann:
+            print('transcript set')
             transcript = tran
+        print('getting orfs')
         orfdf = preporfs(transcript, starts.split(", "), stops.split(", "), minlen, maxlen)
         orf_ann_df, exondf = orfrelativeposition(ann, orfdf)
-        saveorfsandexons(orf_ann_df, exondf)
-    elif orfs and exon
+        orfs, exon = saveorfsandexons(orf_ann_df, exondf)
+        
+        print('bigwigtodf')
+        bwtrancoords = bigwigtodf(bigwig, exon)
+        bwtrancoords.write_csv("data/files/bw_tran.csv")
+    
+        print('scoring and plotting')
+        scoreandplot(orfs, "data/files/bw_tran.csv" ,range_param, sru_range)
+
+    elif orfs and exon:
+        print('orfs and exon')
+        print('bigwigtodf')
+        bwtrancoords = bigwigtodf(bigwig, exon)
+        bwtrancoords.write_csv("data/files/bw_tran.csv")
+        
+        print('scoring and plotting')
+        scoreandplot(orfs, "data/files/bw_tran.csv" ,range_param, sru_range)
     
     else:
         raise Exception(
@@ -88,12 +108,6 @@ def Tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
                 2. A file containing transcript sequences (.fa) + annotation file (.gtf)\n \
                 3. A file containing annotated ORFS (.csv) + file containg exon information (.csv)"
         )
-    #BIGWIGCONVERTER
-    bwtrancoords = bigwigtodf(bigwig, exon)
-    bwtrancoords.write_csv("data/files/bw_tran.csv")
-
-    #Scoring and plotting
-    scoreandplot(orfs, bwtrancoords ,range_param, sru_range)
 
 
 

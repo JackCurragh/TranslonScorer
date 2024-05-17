@@ -1,6 +1,5 @@
 import polars as pl
 import numpy as np
-import pyrange as pr
 
 def extract_transcript_id(attr_str):
     """

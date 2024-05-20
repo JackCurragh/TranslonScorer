@@ -20,7 +20,7 @@ def plottop10(top10_df, bigwig_df, range_param):
         transcript = top10_df["tran_id"][row]
         relstart = top10_df["pos"][row]
         orftype = top10_df["type"][row]
-        frame = top10_df["frame"][row]
+        frame = top10_df["pos"][row] % 3
 
         bigwig_tran2 = bigwig_df.filter((pl.col("tran_id") == transcript))
         

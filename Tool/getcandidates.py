@@ -1,7 +1,7 @@
 from Bio import SeqIO
 import pyranges as pr
 import polars as pl
-
+import ahocorasick
 
 from orffinder import find_orfs
 from findexonscds import getexons_and_cds
@@ -109,6 +109,14 @@ def orfrelativeposition(annotation, df):
     return df, exon_coords
 
 
+def create_automaton(codons):
+    automaton = ahocorasick.Automaton()
+
+    for idx, key in enumerate(codons):
+        automaton.add_word(key, (idx, key))
+    automaton.make_automaton()
+    return automaton
+
 def preporfs(transcript, starts, stops, minlength, maxlength):
     """
     Extracts potential ORFs (Open Reading Frames) from transcript sequences.
@@ -133,19 +141,19 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
     Example:
         orf_df = preporfs("transcripts.fasta", ['ATG'], ['TAA', 'TAG', 'TGA'], 50, 500)
     """
+    startautomaton = create_automaton(starts)
+    stopautomaton = create_automaton(stops)
     dict_list=[]
     # COUNTER!!!!!!!!!!
     counter = 0
     with open(transcript) as handle:
         for record in SeqIO.parse(handle, "fasta"):
-            if counter % 1000 == 0:
+            if counter % 20000 == 0:
                 print(f"read {counter} Transcripts")
             tran_id = str(record.id).split("|")[0]
-        
-            append_list = find_orfs(record.seq, tran_id)
+            append_list = find_orfs(str(record.seq), tran_id, startautomaton, stopautomaton, minlength, maxlength)
             dict_list.extend(append_list)
             counter = counter + 1
-
-        df = pl.from_dict(dict_list)
+        df = pl.from_dicts(dict_list)
         df = df.sort("tran_id")
         return df

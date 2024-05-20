@@ -55,11 +55,7 @@ def bigwigtodf(bigwig, exon):
     """
     bwfile = bw.open(bigwig)
     chromcheck = list(bwfile.chroms().keys())[0]
-    tran_id = []
-    tran_start = []
-    tran_stop = []
-    counts = []
-    frame = []
+    dataframe_list=[]
     if bwfile.isBigWig():
         exon_df = pl.read_csv(exon, has_header=True, separator=",")
         #Function commented since it doesn't work
@@ -88,32 +84,29 @@ def bigwigtodf(bigwig, exon):
                     # Filter out "None" type intervals
                         if intervals is not None:
                             for interval in intervals:
-                                tran_id.append(exon_df["tran_id"][i])
+                                tran_id = exon_df["tran_id"][i]
                                 # Tran start coordinate
                                 diff_start = interval[0] - int(exon[0])
                                 transtart = int(transcript_pairs[idx][0]) + diff_start
-                                tran_start.append(transtart)
                                 #Frame
-                                if exon_df['tran_start'][i] % 3 == 0:
-                                    frame.append(0)
-                                elif exon_df['tran_start'][i] % 3 == 1:
-                                    frame.append(1)
-                                elif exon_df['tran_start'][i] % 3 == 2:
-                                    frame.append(2)
+                                frame = exon_df['tran_start'][i] % 3
                                 # Tran stop coordinate
                                 diff_stop = int(exon[1]) - interval[1]
                                 transtop = int(transcript_pairs[idx][1]) - diff_stop
-                                tran_stop.append(transtop)
                                 # Counts
-                                counts.append(interval[2])
-        df_tran = pl.DataFrame(tran_start).rename({"column_0": "tran_start"})
-        df_tran = df_tran.with_columns(
-            (pl.Series(tran_stop)).alias("tran_stop"),
-            (pl.Series(counts)).alias("counts"),
-            (pl.Series(tran_id)).alias("tran_id"),
-            (pl.Series(frame)).alias("frame")
-        )
-        df_tran = df_tran.select(["tran_id", "tran_start", "tran_stop", "counts", "frame"])
+                                counts = interval[2]
+                                #Add info to list
+                                dataframe_dict={
+                                    'tran_id':tran_id,
+                                    'tran_start':transtart,
+                                    'tran_stop':transtop,
+                                    'counts':counts,
+                                    'frame':frame
+                                }
+                                if dataframe_dict:
+                                    dataframe_list.append(dataframe_dict)
+
+        df_tran = pl.from_dicts(dataframe_list)
         return df_tran
     else:
         raise Exception("Must provide a bigwig file to convert")

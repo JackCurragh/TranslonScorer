@@ -1,7 +1,17 @@
 
+def find_all_positions(sequence, automaton):
+    frames = {0:[], 1:[], 2:[]}
+    codons = {}
+    for i, (order, codon) in automaton.iter(sequence):
+        frames[(i-2)%3 ].append(i)
+        codons[i] = codon
+    return frames, codons
+
 def find_orfs(
     sequence,
     tran_id,
+    startautomaton,
+    stopautomaton,
     start_codons=["ATG"],
     stop_codons=["TAA", "TAG", "TGA"],
     minlength=0,
@@ -25,47 +35,28 @@ def find_orfs(
     containing the start position, end position, length, and the corresponding sequence. ORFs that meet the specified
     length constraints are included in the output list.
     """
-    append_list=[]
-    in_orf = False
-    current_orf_length = 0
+    orf_list=[]
+    startpositions, start_codons = find_all_positions(sequence, startautomaton)
+    stoppositions, stop_codons = find_all_positions(sequence, stopautomaton)
 
-    for index in range(1, len(sequence)):
-        codon = sequence[index : index + 3]
-        if codon in start_codons:
-            in_orf = True
-            start = index
-            startcodon = codon
-            current_orf_length = 3
-        if in_orf:
-            for orf in range(index+3, len(sequence), 3):
-                codon = sequence[orf : orf + 3]
-                if codon in stop_codons:
-                    current_orf_length += 3
-                    if current_orf_length > minlength and current_orf_length < maxlength:
-                        #Frames
-                        if start % 3 == 0:
-                            frame = 0
-                        elif start % 3 == 1:
-                            frame = 1
-                        elif start % 3 == 2:
-                            frame = 2
-                        #add values to dict
-                        append_data= {
-                            "tran_id":tran_id,
-                            "start":start,
-                            "end":orf+3,
-                            "length":current_orf_length,
-                            "startorf":str(startcodon),
-                            "stoporf":str(codon),
-                            "frame":frame
-                            }
-                        append_list.append(append_data)
-                    index = index + 1
-                    in_orf = False
-                    start = None
-                    current_orf_length = 0
-                    break
-                elif in_orf:
-                    current_orf_length += 3
-    
-    return append_list
+   
+    for frame, startpositions in startpositions.items():
+        for position in startpositions:
+            valid_stops = [i for i in stoppositions[frame] if i > position]
+            if valid_stops:
+                stopposition = min(valid_stops)
+                stopcodon = stop_codons[stopposition]
+            else:
+                stopposition = len(sequence)
+                stopcodon = sequence[-3:]
+            orf_data= {
+                "tran_id":tran_id,
+                "pos":position-1,
+                "end": stopposition+1,
+                "length":stopposition+1 - position-1,
+                "startorf":start_codons[position],
+                "stoporf": stopcodon,
+                }
+            if orf_data['length'] < maxlength and orf_data['length'] > minlength:
+                orf_list.append(orf_data)
+    return orf_list

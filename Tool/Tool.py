@@ -42,35 +42,36 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
     """
     docstring
     """
-    if bam and chromsize:
-        print('bam+chromsize')
-        #READ IN BAM START
-        location = os.getcwd() + "/" + bam
-        # if file is provided
-        if os.path.isfile(location):
-            # read in bam file
-            df = readbam(location)
-            # calculate asite + converting to BedGraph
-            beddf = dftobed(df)
+    if bam or chromsize or bedfile:
+        if bam and chromsize:
+            print('bam+chromsize')
+            #READ IN BAM START
+            location = os.getcwd() + "/" + bam
+            # if file is provided
+            if os.path.isfile(location):
+                # read in bam file
+                df = readbam(location)
+                # calculate asite + converting to BedGraph
+                beddf = dftobed(df)
 
-            if not os.path.exists("data/file.bedGraph"):
-                bedfile = beddf.write_csv("file.bedGraph", separator="\t")
+                if not os.path.exists("data/file.bedGraph"):
+                    bedfile = beddf.write_csv("file.bedGraph", separator="\t")
 
-                # Converting Bedgrapgh to Bigwig format
-                bigwig = bedtobigwig(bedfile, chromsize)
+                    # Converting Bedgrapgh to Bigwig format
+                    bigwig = bedtobigwig(bedfile, chromsize)
 
-    elif bedfile and chromsize:
-        print('bedfile, chromsize')
-        bigwig = bedtobigwig(bedfile, chromsize)
-    
-    elif bigwig:
-        print('bigwig')
-    else: raise Exception(
-        "Must provide valuable input. The options are the following:\n \
-            1. Bam file (.bam) + file containing chromosome information\n \
-            2. BedGraph (.bedGraph) file + file containing chromosome information\n \
-            3. Bigwig (.bw) file"
-        )
+        elif bedfile and chromsize:
+            print('bedfile, chromsize')
+            bigwig = bedtobigwig(bedfile, chromsize)
+
+        elif bigwig:
+            print('bigwig')
+        else: raise Exception(
+            "Must provide valuable input. The options are the following:\n \
+                1. Bam file (.bam) + file containing chromosome information\n \
+                2. BedGraph (.bedGraph) file + file containing chromosome information\n \
+                3. Bigwig (.bw) file"
+            )
         
     #ORFPREP START
     if ann:
@@ -88,9 +89,6 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
         print('bigwigtodf')
         bwtrancoords = bigwigtodf(bigwig, exon)
         bwtrancoords.write_csv("data/files/bw_tran.csv")
-    
-        print('scoring and plotting')
-        scoreandplot(orfs, "data/files/bw_tran.csv" ,range_param, sru_range)
 
     elif orfs and exon:
         print('orfs and exon')

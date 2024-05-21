@@ -43,7 +43,7 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
     docstring
     """
     if bam or chromsize or bedfile:
-        if bam and chromsize:
+        if bam and chromsize and ann:
             print('bam+chromsize')
             #READ IN BAM START
             location = os.getcwd() + "/" + bam
@@ -52,7 +52,7 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
                 # read in bam file
                 df = readbam(location)
                 # calculate asite + converting to BedGraph
-                beddf = dftobed(df)
+                beddf, exondf = dftobed(df, ann)
 
                 if not os.path.exists("data/file.bedGraph"):
                     bedfile = beddf.write_csv("file.bedGraph", separator="\t")
@@ -83,12 +83,16 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
             transcript = tran
         print('getting orfs')
         orfdf = preporfs(transcript, starts.split(", "), stops.split(", "), minlen, maxlen)
-        orf_ann_df, exondf = orfrelativeposition(ann, orfdf)
-        orfs, exon = saveorfsandexons(orf_ann_df, exondf)
+        exondf = 0
+        if exondf == 0:
+            exondf = pl.DataFrame()
+        orf_ann_df, exon_df = orfrelativeposition(ann, orfdf, exondf)   
+        orfs, exon = saveorfsandexons(orf_ann_df, exon_df)
         
         print('bigwigtodf')
         bwtrancoords = bigwigtodf(bigwig, exon)
         bwtrancoords.write_csv("data/files/bw_tran.csv")
+
 
     elif orfs and exon:
         print('orfs and exon')

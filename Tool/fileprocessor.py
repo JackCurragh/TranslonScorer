@@ -3,6 +3,102 @@
 import polars as pl
 import os
 
+from findexonscds import extract_transcript_id, exontranscriptcoords, procesexons
+def getexons(annotation):
+    '''
+    docstring
+    '''
+    df = (
+        pl.read_csv(
+            annotation,
+            separator="\t",
+            ignore_errors=True,
+            has_header=False,
+            truncate_ragged_lines=True,
+            comment_prefix="#",
+        )
+        .select(
+            ["column_1", "column_3", "column_4", "column_5", "column_7", "column_9"]
+        )
+        .rename(
+            {
+                "column_1": "chr",
+                "column_3": "type",
+                "column_4": "start",
+                "column_5": "stop",
+                "column_7": "strand",
+                "column_9": "attributes",
+            }
+        )
+    )
+    df = df.with_columns(
+        pl.col("attributes")
+        .apply(lambda attributes: extract_transcript_id(attributes))
+        .alias("tran_id")
+    ).select(pl.all().exclude("attributes"))
+    
+    exon_regions = df.filter((pl.col("type") == "exon"))
+
+    pos_exons, neg_exons = procesexons(exon_regions)
+
+    exon_coords_plus = exontranscriptcoords(pos_exons, posstrand=True)
+    # column names switched to calculate inverse of positions for negative strands
+    exon_coords_neg = exontranscriptcoords(neg_exons, posstrand=False)
+
+    exon_coords = pl.concat([exon_coords_plus, exon_coords_neg]).select(
+        pl.all().exclude("strand")
+    )
+    return exon_coords
+
+def bamtranscript(bam_df, exon_df):
+    '''
+    docstring
+    '''
+    exon_flattened = exon_df.explode(['tran_start', 'tran_stop', 'start', 'stop'])
+
+    # Define an empty DataFrame to collect results
+    results = []
+
+    # Iterate over each row in bam_df
+    for i in range(len(bam_df)):
+        bam_start = bam_df["start"][i]
+        bam_stop = bam_df["stop"][i]
+
+        # Filter exons that overlap with the current bam range
+        overlapping_exons = exon_flattened.filter(
+            (exon_flattened["start"] <= bam_start) & (exon_flattened["stop"] >= bam_start) |
+            (exon_flattened["start"] <= bam_stop) & (exon_flattened["stop"] >= bam_stop)
+        )
+
+        if not overlapping_exons.is_empty():
+            # Compute tran_start and tran_stop for the overlapping exons
+            for j in range(len(overlapping_exons)):
+                exon_start = overlapping_exons["start"][j]
+                exon_stop = overlapping_exons["stop"][j]
+                tran_start_val = overlapping_exons["tran_start"][j]
+                tran_stop_val = overlapping_exons["tran_stop"][j]
+
+                if bam_start >= exon_start and bam_start <= exon_stop:
+                    diff_start = bam_start - exon_start
+                    transtart = tran_start_val + diff_start
+                else:
+                    transtart = None
+
+                if bam_stop >= exon_start and bam_stop <= exon_stop:
+                    diff_stop = exon_stop - bam_stop
+                    transtop = tran_stop_val - diff_stop
+                else:
+                    transtop = None
+
+                if transtart is not None and transtop is not None:
+                    results.append((bam_start, bam_stop, transtart, transtop))
+
+    # Create a DataFrame from the results
+    result_df = pl.DataFrame(results, schema=["start", "stop", "tran_start", "tran_stop"])
+    print(result_df)
+    return result_df
+
+
 
 def asitecalc(df, offsets):
     """
@@ -28,20 +124,19 @@ def asitecalc(df, offsets):
     y = []
     for value, data in df.group_by("length"):
         x = df.filter(pl.col("length") == value).with_columns(
-            (pl.col("pos") + offsets[value]).alias("A-site")
+            (pl.col("start") + offsets[value]).alias("A-site")
         )
         y.append(x)
     df_asite = pl.concat(y)
 
     # GROUP ON A-SITE
     df_final = df_asite.group_by("chr", "A-site").agg(pl.col("count").sum())
-    df_tobed = df_final.with_columns((pl.col("A-site") + 1).alias("end"))
-    df_bed = df_tobed.sort(["chr", "A-site"]).select(["chr", "A-site", "end", "count"])
+    df_tobed = df_final.with_columns((pl.col("A-site") + 1).alias("stop"))
+    df_bed = df_tobed.sort(["chr", "A-site"]).select(["chr", "A-site", "stop", "count"])
 
     return df_bed
 
-
-def dftobed(df):
+def dftobed(df, annotation):
     """
     Converts a DataFrame to BED format with A-site calculation and offset values.
 
@@ -60,13 +155,18 @@ def dftobed(df):
     """
     df_filtered = df.with_columns(
         (pl.col("end") - pl.col("pos")).alias("length")
-    ).select(pl.all().exclude("end"))
+    ).select(pl.all().exclude('flag', 'qual', 'tags','mapq','tlen','seq','pnext','rnext','cigar'))
 
     # split specifically on _x -> implement more!!!
     split_func = lambda s: int(s.split("_x")[1])
     df_namesplit = df_filtered.with_columns(pl.col("qname").apply(split_func)).rename(
-        {"qname": "count", "rname": "chr"}
+        {"qname": "count", "rname": "chr", 'pos':'start', 'end':'stop'}
     )
+
+    exon_df = getexons(annotation)
+    #calculate transcriptomic coordinates
+    bam_tran = bamtranscript(df_namesplit, exon_df)
+    print(bam_tran)
 
     # OFFSETS -> DIFFERENT FUNCTION!!
     length_values = df_namesplit.get_column("length")
@@ -74,7 +174,7 @@ def dftobed(df):
 
     bed = asitecalc(df_namesplit, offsets)
 
-    return bed
+    return bed, exon_df
 
 def bedtobigwig(bedfile, chromsize):
     """

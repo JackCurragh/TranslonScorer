@@ -18,9 +18,9 @@ def plottop10(top10_df, bigwig_df, range_param):
 
     for row in range(len(top10_df)):
         transcript = top10_df["tran_id"][row]
-        relstart = top10_df["pos"][row]
+        relstart = top10_df["start"][row]
         orftype = top10_df["type"][row]
-        frame = top10_df["pos"][row] % 3
+        frame = top10_df["start"][row] % 3
 
         bigwig_tran2 = bigwig_df.filter((pl.col("tran_id") == transcript))
         
@@ -63,8 +63,8 @@ def scoreandplot(orfs, bwfile, range_param=30, sru_range=12):
     score_col = []
     for row in range(len(orf_df)):
         transcript = orf_df["tran_id"][row]
-        relstart = orf_df["pos"][row]
-        end = orf_df["end"][row]
+        relstart = orf_df["start"][row]
+        end = orf_df["stop"][row]
         type = orf_df["type"][row]
         
         bigwig_tran = bigwig_df.filter((pl.col("tran_id") == transcript))

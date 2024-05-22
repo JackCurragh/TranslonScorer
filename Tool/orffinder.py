@@ -1,9 +1,21 @@
+
+def find_all_positions(sequence, automaton):
+    frames = {0:[], 1:[], 2:[]}
+    codons = {}
+    for i, (order, codon) in automaton.iter(sequence):
+        frames[(i-2)%3].append(i)
+        codons[i] = codon
+    return frames, codons
+
 def find_orfs(
     sequence,
+    tran_id,
+    startautomaton,
+    stopautomaton,
     start_codons=["ATG"],
     stop_codons=["TAA", "TAG", "TGA"],
     minlength=0,
-    maxlength=1000000,
+    maxlength=1000000
 ):
     """
     Finds Open Reading Frames (ORFs) within a given sequence based on specified start and stop codons.
@@ -23,36 +35,28 @@ def find_orfs(
     containing the start position, end position, length, and the corresponding sequence. ORFs that meet the specified
     length constraints are included in the output list.
     """
-    orfs = []
-    in_orf = False
-    current_orf_start = None
-    current_orf_length = 0
+    orf_list=[]
+    startpositions, start_codons = find_all_positions(sequence, startautomaton)
+    stoppositions, stop_codons = find_all_positions(sequence, stopautomaton)
 
-    for index in range(0, len(sequence), 3):
-        codon = sequence[index : index + 3]
-
-        if codon in start_codons:
-            if not in_orf:
-                in_orf = True
-                current_orf_start = index
-                current_orf_length = 3
+   
+    for frame, startpositions in startpositions.items():
+        for position in startpositions:
+            valid_stops = [i for i in stoppositions[frame] if i > position]
+            if valid_stops:
+                stopposition = min(valid_stops)
+                stopcodon = stop_codons[stopposition]
             else:
-                current_orf_length += 3
-        elif codon in stop_codons:
-            if in_orf:
-                if current_orf_length > minlength and current_orf_length < maxlength:
-                    orfs.append(
-                        (
-                            current_orf_start,
-                            index - 1,
-                            current_orf_length,
-                            sequence[current_orf_start : index + 3],
-                        )
-                    )
-                in_orf = False
-                current_orf_start = None
-                current_orf_length = 0
-        elif in_orf:
-            current_orf_length += 3
-
-    return orfs
+                stopposition = len(sequence)
+                stopcodon = sequence[-3:]
+            orf_data= {
+                "tran_id":tran_id,
+                "start":position-1,
+                "stop": stopposition+1,
+                "length":stopposition+1 - position-1,
+                "startorf":start_codons[position],
+                "stoporf": stopcodon,
+                }
+            if orf_data['length'] < maxlength and orf_data['length'] > minlength:
+                orf_list.append(orf_data)
+    return orf_list

@@ -49,54 +49,61 @@ def getexons(annotation):
         pl.all().exclude("strand")
     )
     return exon_coords
+    
+def get_bam_tran(bam_df, exon_df):
+    exon_df = exon_df.rename({'start': 'start_left', 'stop': 'stop_left'})
+
+    df_joined = bam_df.join(exon_df, on='chr')
+
+    df_filtered = df_joined.filter(
+        (pl.col('start') >= pl.col('start_left')) &
+        (pl.col('stop') <= pl.col('stop_left'))
+    )
+    df_filtered = df_filtered.with_columns(
+        (pl.col('tran_start')+(pl.col('start')-pl.col('start_left'))).alias('tran_start_bam'),
+        (pl.col('tran_stop')-(pl.col('stop_left')-pl.col('stop'))).alias('tran_stop_bam'))\
+        .select(pl.all().exclude('stop_left', 'start_left', 'tran_start','tran_stop'))
+
+    bam_tran_dict = df_filtered.to_dict(as_series=False)
+
+    return bam_tran_dict
+
 
 def bamtranscript(bam_df, exon_df):
     '''
     docstring
     '''
-    exon_flattened = exon_df.explode(['tran_start', 'tran_stop', 'start', 'stop'])
+    exon_flattened = exon_df.with_columns(pl.col('chr').apply(lambda x: x[0].split('r')[1]))
+    
+    uniquechr_bam = list(bam_df['chr'].unique())
+    uniquechr_exon = list(exon_flattened['chr'].unique())
 
-    # Define an empty DataFrame to collect results
+    bam_df = bam_df.with_columns(shared=pl.col('chr').is_in(uniquechr_exon))\
+            .filter(pl.col('shared') == True)\
+            .select(pl.all().exclude('shared'))
+    exon_flattened = exon_flattened.with_columns(shared=pl.col('chr').is_in(uniquechr_bam))\
+                .filter(pl.col('shared') == True)\
+                .select(pl.all().exclude('shared'))\
+                .explode(['start', 'stop', 'tran_start', 'tran_stop'])
+    
     results = []
-
-    # Iterate over each row in bam_df
-    for i in range(len(bam_df)):
-        bam_start = bam_df["start"][i]
-        bam_stop = bam_df["stop"][i]
-
+    for chr in bam_df['chr'].unique():
         # Filter exons that overlap with the current bam range
-        overlapping_exons = exon_flattened.filter(
-            (exon_flattened["start"] <= bam_start) & (exon_flattened["stop"] >= bam_start) |
-            (exon_flattened["start"] <= bam_stop) & (exon_flattened["stop"] >= bam_stop)
-        )
+        bam_chr = bam_df.filter(pl.col('chr') == chr)
+        exon_flattened = exon_flattened.filter(pl.col('chr') == chr)
+        min_val = min(exon_flattened['start'])
+        max_val = max(exon_flattened['stop'])
+        print(min_val, max_val)
+        for i in range(min_val, max_val, 20000000):
+            rng = i + 20000000
+            exon_chr = exon_flattened.filter((pl.col('start') >= i) & (pl.col('stop') <= rng))
 
-        if not overlapping_exons.is_empty():
-            # Compute tran_start and tran_stop for the overlapping exons
-            for j in range(len(overlapping_exons)):
-                exon_start = overlapping_exons["start"][j]
-                exon_stop = overlapping_exons["stop"][j]
-                tran_start_val = overlapping_exons["tran_start"][j]
-                tran_stop_val = overlapping_exons["tran_stop"][j]
-
-                if bam_start >= exon_start and bam_start <= exon_stop:
-                    diff_start = bam_start - exon_start
-                    transtart = tran_start_val + diff_start
-                else:
-                    transtart = None
-
-                if bam_stop >= exon_start and bam_stop <= exon_stop:
-                    diff_stop = exon_stop - bam_stop
-                    transtop = tran_stop_val - diff_stop
-                else:
-                    transtop = None
-
-                if transtart is not None and transtop is not None:
-                    results.append((bam_start, bam_stop, transtart, transtop))
-
-    # Create a DataFrame from the results
-    result_df = pl.DataFrame(results, schema=["start", "stop", "tran_start", "tran_stop"])
-    print(result_df)
-    return result_df
+            result_dict = get_bam_tran(bam_chr, exon_chr)
+            results.append(result_dict)
+    
+    bam_df = pl.from_dicts(results)
+    print(bam_df)
+    return bam_df
 
 
 
@@ -161,7 +168,7 @@ def dftobed(df, annotation):
     split_func = lambda s: int(s.split("_x")[1])
     df_namesplit = df_filtered.with_columns(pl.col("qname").apply(split_func)).rename(
         {"qname": "count", "rname": "chr", 'pos':'start', 'end':'stop'}
-    )
+    ).cast({'chr':pl.String})
 
     exon_df = getexons(annotation)
     #calculate transcriptomic coordinates

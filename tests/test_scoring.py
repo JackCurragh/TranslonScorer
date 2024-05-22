@@ -1,4 +1,3 @@
-'''Script to score the ORF's'''
 import polars as pl
 from numpy import log as ln
 
@@ -33,7 +32,16 @@ def sru_score(start, bigwig_df, rng, invert):
 
     return float(sru)
 
+sru_data = {
+"tran_start":[24,25,26,27,29,31,32,33,36,37,39,41,42,46,47,50,2300,2301,2303,2304,2305,2307,2310,2311,2312,2316,2317],
+"counts":[1.0,1.0,1.0,2.0,1.0,1.0,1.0,1.0,1.0,1.0,2.0,1.0,1.0,1.0,1.0,1.0,1.0,2.0,1.0,1.0,1.0,1.0,1.0,1.0,2.0,1.0,1.0]}
 
+sru_df = pl.DataFrame(sru_data)
+sru_score(36, sru_df, 12, 0)
+
+def test_sru():
+    assert sru_score(36, sru_df, 12, 0) == -0.2231435513142097
+    assert sru_score(2307, sru_df, 12, 1) == 0.28768207245178085
 
 def calculate_scores(start, stop, bigwig_df):
     '''
@@ -82,3 +90,15 @@ def calculate_scores(start, stop, bigwig_df):
     nzc = codons_f0 / total_codons if total_codons > 0 else 0
     
     return float(hrf), float(avg), float(nzc)
+
+
+data = {"tran_id":["ENST00000222271.7", "ENST00000222271.7", "ENST00000222271.7","ENST00000222271.7","ENST00000222271.7",
+"ENST00000222271.7","ENST00000222271.7"],
+"tran_start":[222, 965, 1008, 1130, 1463, 1567, 1598],
+"tran_stop":[223,966,1009,1131,1464,1568,1599],
+"counts":[1.0,1.0,1.0,2.0,1.0,1.0,1.0]}
+
+df = pl.DataFrame(data)
+
+def test_scores():
+    assert calculate_scores(36, 2307, df) == (0.4, 0.002640845070422535, 0.2857142857142857)

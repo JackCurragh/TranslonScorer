@@ -1,7 +1,6 @@
 import polars as pl
 import numpy as np
 
-
 def extract_transcript_id(attr_str):
     """
     Extracts transcript ID from a GTF/GFF attribute string.
@@ -30,7 +29,7 @@ def extract_transcript_id(attr_str):
     return ""
 
 
-def getexons_and_cds(annotation_file, tran=[]):
+def getexons_and_cds(annotation_file, exondf, tran=[]):
     """
     Extracts CDS and exon coordinates from an annotation file.
 
@@ -88,7 +87,7 @@ def getexons_and_cds(annotation_file, tran=[]):
         pl.col("attributes")
         .apply(lambda attributes: extract_transcript_id(attributes))
         .alias("tran_id")
-    ).select(pl.all())
+    ).select(pl.all().exclude("attributes"))
     if tran:
         df = df.filter((pl.col("tran_id").is_in(tran)))
 
@@ -98,26 +97,27 @@ def getexons_and_cds(annotation_file, tran=[]):
     groupedcds = (
         coding_regions.group_by("tran_id")
         .agg(
-            pl.col("start").alias("start"), pl.col("stop").alias("stop"), pl.col("chr")
+            pl.col("start"), pl.col("stop"), pl.col("chr")
         )
         .select(["chr", "tran_id", "start", "stop"])
     )
 
     # Getting exons
-    exon_regions = df.filter((pl.col("type") == "exon"))
+    if exondf.is_empty():
+        exon_regions = df.filter((pl.col("type") == "exon"))
 
-    pos_exons, neg_exons = procesexons(exon_regions)
+        pos_exons, neg_exons = procesexons(exon_regions)
 
-    exon_coords_plus = exontranscriptcoords(pos_exons, posstrand=True)
-    # column names switched to calculate inverse of positions for negative strands
-    exon_coords_neg = exontranscriptcoords(neg_exons, posstrand=False)
+        exon_coords_plus = exontranscriptcoords(pos_exons, posstrand=True)
+        # column names switched to calculate inverse of positions for negative strands
+        exon_coords_neg = exontranscriptcoords(neg_exons, posstrand=False)
 
-    exon_coords = pl.concat([exon_coords_plus, exon_coords_neg]).select(
-        pl.all().exclude("strand")
-    )
-    cds_coords = gettranscriptcoords(groupedcds, exon_coords)
-
-    return cds_coords, exon_coords
+        exondf = pl.concat([exon_coords_plus, exon_coords_neg]).select(
+            pl.all().exclude("strand")
+        )
+    
+    cds_coords = gettranscriptcoords(groupedcds, exondf)
+    return cds_coords, exondf
 
 
 def procesexons(df):
@@ -234,39 +234,30 @@ def gettranscriptcoords(cds_df, exon_df):
     Example:
         transcript_cds_coords = gettranscriptcoords(cds_df, exon_df)
     """
-    # Iterate over each row in the cds DataFrame
-    tran_start = []
-    tran_stop = []
-
-    for i in range(len(cds_df)):
-        # Get the transcript present in the current row of the cds DataFrame
-        transcript_id = cds_df["tran_id"][i]
-
-        # Find the corresponding row in the exon DataFrame with the same transcript_id
-        exon_row = exon_df.filter(pl.col("tran_id") == transcript_id).select(pl.all())
-
-        if exon_row is not None:
-            # Get start and stop values from cds DataFrame for the current row
-            cds_start = min(cds_df["start"].gather(i)[0])
-            cds_stop = max(cds_df["stop"].gather(i)[0])
-            # Get corresponding exon start and stop values from exon DataFrame
-            transcript_pairs = list(
-                zip(exon_row["tran_start"][0], exon_row["tran_stop"][0])
-            )
-            exon_pairs = zip(exon_row["start"][0], exon_row["stop"][0])
-
-            for idx, exon in enumerate(exon_pairs):
-                if cds_start >= exon[0] and cds_start <= exon[1]:
-                    diff_start = abs(exon[0] - cds_start)
-                    transtart = transcript_pairs[idx][0] + diff_start
-                    tran_start.append(transtart)
-
-                if cds_stop >= exon[0] and cds_stop <= exon[1]:
-                    diff_stop = exon[1] - cds_stop
-                    transtop = transcript_pairs[idx][1] - diff_stop
-                    tran_stop.append(transtop)
-
-    df = cds_df.with_columns((pl.Series(tran_start)).alias("tran_start"))
-    df_tran = df.with_columns((pl.Series(tran_stop)).alias("tran_stop"))
-
-    return df_tran
+    # Explode exon start and stop lists to individual rows
+    exploded_exon_df = exon_df.explode(["start", "stop", "tran_start", "tran_stop"])
+    exploded_cds_df = cds_df.explode(['start', 'stop'])
+    # Join the DataFrames on the transcript ID
+    combined_df = exploded_cds_df.join(exploded_exon_df, on="tran_id", how="inner")
+    # Calculate transcript-level start and stop coordinates
+    combined_df = combined_df.with_columns([
+        (pl.when((pl.col("start") >= pl.col("start_right")) & (pl.col("start") <= pl.col("stop_right")))
+         .then(pl.col("tran_start") + (pl.col("start") - pl.col("start_right")))
+         .otherwise(None)).alias("tran_start_cd"),
+        
+        (pl.when((pl.col("stop") >= pl.col("start_right")) & (pl.col("stop") <= pl.col("stop_right")))
+         .then(pl.col("tran_stop") - (pl.col("stop_right") - pl.col("stop")))
+         .otherwise(None)).alias("tran_stop_cd")
+    ])
+    # Drop rows with None values in calculated columns
+    combined_df = combined_df.drop_nulls(["tran_start_cd", "tran_stop_cd"])
+    
+    # Select and rename relevant columns
+    result_df = combined_df.select([
+        pl.col("tran_id"),
+        pl.col("start"),
+        pl.col("stop"),
+        pl.col("tran_start_cd").alias("tran_start"),
+        pl.col("tran_stop_cd").alias("tran_stop")
+    ])
+    return result_df

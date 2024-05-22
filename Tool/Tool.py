@@ -25,10 +25,10 @@ def function():
 @click.option("--stops", "-stp", default="TAA, TAG, TGA", help="Provide a list of stop codons")
 @click.option("--minlen", "-min", default=0, help="Provide the minimum length")
 @click.option("--maxlen", "-max", default=1000000, help="Provide the maximum length")
-@click.option("--bigwig", "-bw", default="file.bw" , help="Provide a Bigwig file to convert")
-@click.option("--exon", "-ex", default="exons.csv", help="Provide a file containing exon positions")
+@click.option("--bigwig", "-bw", help="Provide a Bigwig file to convert")
+@click.option("--exon", "-ex", help="Provide a file containing exon positions")
 @click.option("--bedfile", "-bw", help="Provide a Bigwig file to convert")
-@click.option("--orfs", "-of", default="annotated_orfs.csv", help="Provide a file containing annotated orfs")
+@click.option("--orfs", "-of", help="Provide a file containing annotated orfs")
 @click.option("--range_param", "-rp",
              help="Provide an integer that indicates the range in which a plot will be constructed \
                  around the relative start position")
@@ -37,63 +37,79 @@ def function():
              the stop codon will regarded when calculating")
 
 
-def Tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen, maxlen,
+def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen, maxlen,
          exon, orfs, range_param, sru_range):
     """
     docstring
     """
-    if bam and chromsize:
-        #READ IN BAM START
-        location = os.getcwd() + "/" + bam
-        # if file is provided
-        if os.path.isfile(location):
-            # read in bam file
-            df = readbam(location)
-            # calculate asite + converting to BedGraph
-            beddf = dftobed(df)
+    if bam or chromsize or bedfile:
+        if bam and chromsize and ann:
+            print('bam+chromsize')
+            #READ IN BAM START
+            location = os.getcwd() + "/" + bam
+            # if file is provided
+            if os.path.isfile(location):
+                # read in bam file
+                df = readbam(location)
+                # calculate asite + converting to BedGraph
+                beddf, exondf = dftobed(df, ann)
 
-            if not os.path.exists("data/file.bedGraph"):
-                bedfile = beddf.write_csv("file.bedGraph", separator="\t")
+                if not os.path.exists("data/file.bedGraph"):
+                    bedfile = beddf.write_csv("file.bedGraph", separator="\t")
 
-                # Converting Bedgrapgh to Bigwig format
-                bedtobigwig(bedfile, chromsize)
+                    # Converting Bedgrapgh to Bigwig format
+                    bigwig = bedtobigwig(bedfile, chromsize)
 
-    elif bedfile and chromsize:
-        bedtobigwig(bedfile, chromsize)
-    
-    elif bigwig:
-        continue
-    else: raise Exception(
-        "Must provide valuable input. The options are the following:\n \
-            1. Bam file (.bam) + file containing chromosome information\n \
-            2. BedGraph (.bedGraph) file + file containing chromosome information\n \
-            3. Bigwig (.bw) file"
-        )
+        elif bedfile and chromsize:
+            print('bedfile, chromsize')
+            bigwig = bedtobigwig(bedfile, chromsize)
+
+        elif bigwig:
+            print('bigwig')
+        else: raise Exception(
+            "Must provide valuable input. The options are the following:\n \
+                1. Bam file (.bam) + file containing chromosome information\n \
+                2. BedGraph (.bedGraph) file + file containing chromosome information\n \
+                3. Bigwig (.bw) file"
+            )
         
     #ORFPREP START
     if ann:
         if seq and ann:
+            print('getting transcript')
             transcript = gettranscripts(seq, ann)
         elif tran and ann:
+            print('transcript set')
             transcript = tran
+        print('getting orfs')
         orfdf = preporfs(transcript, starts.split(", "), stops.split(", "), minlen, maxlen)
-        orf_ann_df, exondf = orfrelativeposition(ann, orfdf)
-        saveorfsandexons(orf_ann_df, exondf)
+        exondf = 0
+        if exondf == 0:
+            exondf = pl.DataFrame()
+        orf_ann_df, exon_df = orfrelativeposition(ann, orfdf, exondf)   
+        orfs, exon = saveorfsandexons(orf_ann_df, exon_df)
+        
+        print('bigwigtodf')
+        bwtrancoords = bigwigtodf(bigwig, exon)
+        bwtrancoords.write_csv("data/files/bw_tran.csv")
+
+
     elif orfs and exon:
-        continue
+        print('orfs and exon')
+        print('bigwigtodf')
+        bwtrancoords = bigwigtodf(bigwig, exon)
+        bwtrancoords.write_csv("data/files/bw_tran.csv")
+        
+        print('scoring and plotting')
+        scoreandplot(orfs, "data/files/bw_tran.csv" ,range_param, sru_range)
+    
     else:
         raise Exception(
-                "Must provide valuable for ORFS. The options are the following:\n \
-                    1. A file containing FASTA sequences (.fa) + annotation file (.gtf)\n \
-                    2. A file containing transcript sequences (.fa) + annotation file (.gtf)\n \
-                    3. A file containing annotated ORFS (.csv) + file containg exon information (.csv)"
+            "Must provide valuable for ORFS. The options are the following:\n \
+                1. A file containing FASTA sequences (.fa) + annotation file (.gtf)\n \
+                2. A file containing transcript sequences (.fa) + annotation file (.gtf)\n \
+                3. A file containing annotated ORFS (.csv) + file containg exon information (.csv)"
         )
-    #BIGWIGCONVERTER
-    bwtrancoords = bigwigtodf(bigwig, exon)
-    bwtrancoords.write_csv("data/files/bw_tran.csv")
-
-    #Scoring and plotting
-    scoreandplot(orfs, bwtrancoords ,range_param, sru_range)
 
 
 

@@ -40,3 +40,4 @@ def saveorfsandexons(orf_df, exon_df):
         )
     )
     exon_df.write_csv("data/files/exons.csv")
+    return "data/files/annotated_orfs.csv", "data/files/exons.csv"

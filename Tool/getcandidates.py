@@ -1,8 +1,7 @@
-import pybedtools as pybed
-import shutil
 from Bio import SeqIO
+import pyranges as pr
 import polars as pl
-
+import ahocorasick
 
 from orffinder import find_orfs
 from findexonscds import getexons_and_cds
@@ -28,16 +27,16 @@ def gettranscripts(seq, annotation, outfile="transcripts.fa"):
     Example:
         output_file = gettranscripts("genome.fa", "annotation.gff", outfile="transcripts.fa")
     """
-    annot = pybed.BedTool(annotation)
-
-    fasta = pybed.BedTool(seq)
-    transcripts = annot.filter(lambda feature: feature[2] == "transcript")
-    annot = transcripts.sequence(fi=fasta, name=True, s=True)
-
-    shutil.copyfile(annot.seqfn, outfile)
+    ann = pr.read_gtf(annotation)
+    transcripts = ann[ann.Feature == 'transcript']
+    tran_seq = transcripts.get_transcript_sequence(transcript_id='transcript_id', path=seq)
+    with open(outfile, 'w') as fw:
+        for index, id, seq in tran_seq.itertuples():
+            fw.write(f'>{id}\n{seq}\n')
+            
     return outfile
 
-def orfrelativeposition(annotation, df):
+def orfrelativeposition(annotation, df, exondf):
     '''
     Determines the relative position of ORFs to coding sequences (CDS).
 
@@ -60,55 +59,69 @@ def orfrelativeposition(annotation, df):
     Example:
         orf_df, exon_coords = orfrelativeposition("annotation.gff", orf_df)
     '''
-    cds_df, exon_coords = getexons_and_cds(annotation, list(df["tran_id"].unique()))
+    cds_df, exon_coords = getexons_and_cds(annotation, exondf, list(df["tran_id"].unique()))
+    print('typing ORFS')
+    # Select all columns except "start" and "stop"
     filtered_df = cds_df.select(pl.all().exclude("start", "stop"))
-    orftype = []
+
+    # Dictionary to hold orf types for each orfid
+    orf_types = {}
+
+    # Iterate over unique transcript IDs
     for orfid in sorted(df["tran_id"].unique()):
-        cdsregion = filtered_df.filter(pl.col("tran_id") == orfid).select(pl.all())
-        orfregion = df.filter(pl.col("tran_id") == orfid).select(pl.all())
-        orfpair = list(zip(orfregion["pos"], orfregion["end"]))
+        cdsregion = filtered_df.filter(pl.col("tran_id") == orfid)
+        orfregion = df.filter(pl.col("tran_id") == orfid)
+        orfpair = list(zip(orfregion["start"], orfregion["stop"]))
+
+        # Initialize orftype list for this orfid
+        orftype_list = []
+
         if not cdsregion.is_empty():
-            if cdsregion["tran_start"][0] > cdsregion["tran_stop"][0]:
-                cdspair = [cdsregion["tran_stop"][0], cdsregion["tran_start"][0]]
-            else:
-                cdspair = [cdsregion["tran_start"][0], cdsregion["tran_stop"][0]]
+            cdspair = sorted([cdsregion["tran_start"][0], cdsregion["tran_stop"][0]])
+
             for orf in orfpair:
-                if orf[0] < cdspair[0] and orf[1] < cdspair[0]:
-                    orftype.append("uORF")
-                elif orf[0] == cdspair[0] and orf[1] == cdspair[1]:
-                    orftype.append("CDS")
-                elif orf[0] > cdspair[1] and orf[1] > cdspair[1]:
-                    orftype.append("dORF")
-                elif (
-                    orf[0] < cdspair[0] and orf[1] < cdspair[1] and orf[1] > cdspair[0]
-                ):
-                    orftype.append("uoORF")
-                elif (
-                    orf[0] <= cdspair[1]
-                    and orf[0] >= cdspair[0]
-                    and orf[1] > cdspair[1]
-                ):
-                    orftype.append("doORF")
-                elif (
-                    orf[0] < cdspair[0]
-                    and orf[1] <= cdspair[0]
-                ):
-                    orftype.append("uoORF")
+                if orf[1] < cdspair[0]:
+                    orftype_list.append("uORF")
+                elif orf == (cdspair[0], cdspair[1]):
+                    orftype_list.append("CDS")
+                elif orf[0] > cdspair[1]:
+                    orftype_list.append("dORF")
+                elif orf[0] < cdspair[0] and orf[1] >= cdspair[0]:
+                    orftype_list.append("uoORF")
+                elif orf[0] <= cdspair[1] and orf[1] > cdspair[1]:
+                    orftype_list.append("doORF")
                 elif orf[0] >= cdspair[0] and orf[1] <= cdspair[1]:
-                    orftype.append("iORF")
+                    orftype_list.append("iORF")
                 elif orf[0] < cdspair[0] and orf[1] > cdspair[1]:
-                    orftype.append("eoORF")
+                    orftype_list.append("eoORF")
                 elif orf[0] < cdspair[0] and orf[1] == cdspair[1]:
-                    orftype.append("extORF")
+                    orftype_list.append("extORF")
                 else:
                     print("unexpected", orf, cdspair)
-                    orftype.append("Unexpected")
+                    orftype_list.append("Unexpected")
         else:
-            for orf in orfpair:
-                orftype.append("Non Coding")
-    df = df.with_columns((pl.Series(orftype)).alias("type"))
+            orftype_list.extend(["Non Coding"] * len(orfpair))
+
+        orf_types[orfid] = orftype_list
+
+    # Flatten orf_types dictionary into a list matching the original DataFrame's order
+    orftype_column = []
+    for orfid in df["tran_id"]:
+        orftype_column.append(orf_types[orfid].pop(0))
+
+    # Add the new 'type' column to the DataFrame
+    df = df.with_columns(pl.Series("type", orftype_column))
+    print('done typing')
     return df, exon_coords
 
+
+def create_automaton(codons):
+    automaton = ahocorasick.Automaton()
+
+    for idx, key in enumerate(codons):
+        automaton.add_word(key, (idx, key))
+    automaton.make_automaton()
+    return automaton
 
 def preporfs(transcript, starts, stops, minlength, maxlength):
     """
@@ -134,29 +147,19 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
     Example:
         orf_df = preporfs("transcripts.fasta", ['ATG'], ['TAA', 'TAG', 'TGA'], 50, 500)
     """
-    df = pl.DataFrame()
+    startautomaton = create_automaton(starts)
+    stopautomaton = create_automaton(stops)
+    dict_list=[]
     # COUNTER!!!!!!!!!!
     counter = 0
     with open(transcript) as handle:
         for record in SeqIO.parse(handle, "fasta"):
-            if counter % 1000 == 0:
+            if counter % 20000 == 0:
                 print(f"read {counter} Transcripts")
-            orfs = find_orfs(record.seq, starts, stops, minlength, maxlength)
             tran_id = str(record.id).split("|")[0]
-            if orfs:
-                for start, stop, length, orf in orfs:
-                    df_toadd = pl.DataFrame(
-                        {
-                            "tran_id": [tran_id],
-                            "pos": [start],
-                            "end": [stop],
-                            "length": [length],
-                            "startorf": [str(orf[:3])],
-                            "stoporf": [str(orf[-3:])],
-                        }
-                    )
-                df = pl.concat([df, df_toadd])
-            counter = counter + 1 
+            append_list = find_orfs(str(record.seq), tran_id, startautomaton, stopautomaton, minlength, maxlength)
+            dict_list.extend(append_list)
+            counter = counter + 1
+        df = pl.from_dicts(dict_list)
         df = df.sort("tran_id")
-
         return df

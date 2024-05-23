@@ -3,67 +3,20 @@
 import polars as pl
 import os
 
-from findexonscds import extract_transcript_id, exontranscriptcoords, procesexons
-def getexons(annotation):
-    '''
-    docstring
-    '''
-    df = (
-        pl.read_csv(
-            annotation,
-            separator="\t",
-            ignore_errors=True,
-            has_header=False,
-            truncate_ragged_lines=True,
-            comment_prefix="#",
-        )
-        .select(
-            ["column_1", "column_3", "column_4", "column_5", "column_7", "column_9"]
-        )
-        .rename(
-            {
-                "column_1": "chr",
-                "column_3": "type",
-                "column_4": "start",
-                "column_5": "stop",
-                "column_7": "strand",
-                "column_9": "attributes",
-            }
-        )
-    )
-    df = df.with_columns(
-        pl.col("attributes")
-        .apply(lambda attributes: extract_transcript_id(attributes))
-        .alias("tran_id")
-    ).select(pl.all().exclude("attributes"))
-    
-    exon_regions = df.filter((pl.col("type") == "exon"))
-
-    pos_exons, neg_exons = procesexons(exon_regions)
-
-    exon_coords_plus = exontranscriptcoords(pos_exons, posstrand=True)
-    # column names switched to calculate inverse of positions for negative strands
-    exon_coords_neg = exontranscriptcoords(neg_exons, posstrand=False)
-
-    exon_coords = pl.concat([exon_coords_plus, exon_coords_neg]).select(
-        pl.all().exclude("strand")
-    )
-    return exon_coords
-    
+from findexonscds import getexons_and_cds
+ 
 def get_bam_tran(bam_df, exon_df):
-    exon_df = exon_df.rename({'start': 'start_left', 'stop': 'stop_left'})
-
     df_joined = bam_df.join(exon_df, on='chr')
-
     df_filtered = df_joined.filter(
-        (pl.col('start') >= pl.col('start_left')) &
-        (pl.col('stop') <= pl.col('stop_left'))
+        (pl.col('start') >= pl.col('start_right')) &
+        (pl.col('stop') <= pl.col('stop_right'))
     )
     df_filtered = df_filtered.with_columns(
-        (pl.col('tran_start')+(pl.col('start')-pl.col('start_left'))).alias('tran_start_bam'),
-        (pl.col('tran_stop')-(pl.col('stop_left')-pl.col('stop'))).alias('tran_stop_bam'))\
-        .select(pl.all().exclude('stop_left', 'start_left', 'tran_start','tran_stop'))
+        (pl.col('tran_start')+(pl.col('start')-pl.col('start_right'))).alias('tran_start_bam'))
 
+    df_filtered = df_filtered.with_columns(
+        (pl.col('tran_stop')-(pl.col('stop_right')-pl.col('stop'))).alias('tran_stop_bam'))\
+        .select(pl.all().exclude('stop_right', 'start_right', 'tran_start','tran_stop'))
     bam_tran_dict = df_filtered.to_dict(as_series=False)
 
     return bam_tran_dict
@@ -89,22 +42,21 @@ def bamtranscript(bam_df, exon_df):
     results = []
     for chr in bam_df['chr'].unique():
         # Filter exons that overlap with the current bam range
-        bam_chr = bam_df.filter(pl.col('chr') == chr)
-        exon_flattened = exon_flattened.filter(pl.col('chr') == chr)
-        min_val = min(exon_flattened['start'])
-        max_val = max(exon_flattened['stop'])
-        print(min_val, max_val)
-        for i in range(min_val, max_val, 20000000):
-            rng = i + 20000000
-            exon_chr = exon_flattened.filter((pl.col('start') >= i) & (pl.col('stop') <= rng))
-
-            result_dict = get_bam_tran(bam_chr, exon_chr)
-            results.append(result_dict)
+        bam_with_chr = bam_df.filter(pl.col('chr') == chr)
+        exon_with_chr = exon_flattened.filter(pl.col('chr') == chr)
+        min_val = min(exon_with_chr['start'])
+        max_val = max(exon_with_chr['stop'])
+        for i in range(min_val, max_val, 225000):
+            rng = i + 225000
+            exon_chr = exon_with_chr.filter((pl.col('start') >= i) & (pl.col('stop') <= rng))
+            bam_chr = bam_with_chr.filter((pl.col('start') >= i) & (pl.col('stop') <= rng))
+            if not exon_chr.is_empty() and not bam_chr.is_empty():
+                result_dict = get_bam_tran(bam_chr, exon_chr)
+                results.append(result_dict)
     
     bam_df = pl.from_dicts(results)
-    print(bam_df)
+    bam_df = bam_df.explode(['count', 'chr', 'start', 'stop', 'length', 'tran_id', 'tran_start_bam', 'tran_stop_bam'])
     return bam_df
-
 
 
 def asitecalc(df, offsets):
@@ -143,6 +95,78 @@ def asitecalc(df, offsets):
 
     return df_bed
 
+def calculate_differences(start, start_dict):
+    start_diff = start - start_dict
+    
+    return start_diff
+
+def bamrelativetocds(bamdf, cdsdf):
+    uniquetran_bam = list(bamdf['tran_id'].unique())
+    uniquetran_cds = list(cdsdf['tran_id'].unique())
+
+    bam_df = bamdf.with_columns(shared=pl.col('tran_id').is_in(uniquetran_cds))\
+            .filter(pl.col('shared') == True)\
+            .select(pl.all().exclude('shared'))
+    cds_df = cdsdf.with_columns(shared=pl.col('tran_id').is_in(uniquetran_bam))\
+                .filter(pl.col('shared') == True)\
+                .select(pl.all().exclude('shared'))
+    
+    tran_dict = cds_df.to_dict(as_series=False)
+    start_dict = dict(zip(tran_dict['tran_id'], tran_dict['tran_start']))
+    
+    bam_df2 = bam_df.with_columns([
+        pl.struct(['tran_id', 'tran_start_bam'])\
+        .apply(lambda x: calculate_differences(x['tran_start_bam'], start_dict[x['tran_id']]))\
+        .alias('bamcds_start')
+        ])
+   
+    bam_df2 = bam_df2.select(pl.all().exclude('tran_start_bam','tran_stop_bam'))
+    return bam_df2
+
+def change_point_analysis(
+        offset_df
+        ):
+    """
+    Calculate the change point for the metagene profile
+    This should reflect where the cds starts and as a result the
+    offset to apply to get a-site
+
+    Inputs:
+        read_counts: Dictionary containing the read counts for each position
+        surrounding_range: tuple of start and stop for change point analysis
+
+    Outputs:
+        max_shift_position: The position of the change point
+    """
+    max_shift = 0
+    max_shift_position = None
+    for length in offset_df['length'].unique():
+        offset_df_len = offset_df.filter(pl.col('length') == length).sort('bamcds_start')
+        for i in range(-30, 10):
+            left = []
+            for i in range(i-3, i+1):
+                if i in offset_df_len['bamcds_start']:
+                    left.append(offset_df_len['count'].filter(pl.col('bamcds_start') == i))
+                else:
+                    left.append(0)
+            right = []
+            for i in range(i+1, i+5):
+                if i in offset_df_len['bamcds_start']:
+                    right.append(offset_df_len['count'].filter(pl.col('bamcds_start') == i))
+                else:
+                    right.append(0)
+
+        mean_left = sum(left) / 4
+        mean_right = sum(right) / 4
+        shift = abs(mean_right - mean_left)
+        if shift > max_shift:
+            max_shift = shift
+            max_shift_position = i
+    if not max_shift_position:
+        return 15
+    return 15 - max_shift_position
+
+
 def dftobed(df, annotation):
     """
     Converts a DataFrame to BED format with A-site calculation and offset values.
@@ -170,18 +194,23 @@ def dftobed(df, annotation):
         {"qname": "count", "rname": "chr", 'pos':'start', 'end':'stop'}
     ).cast({'chr':pl.String})
 
-    exon_df = getexons(annotation)
+    cds_df, exon_df = getexons_and_cds(annotation)
     #calculate transcriptomic coordinates
     bam_tran = bamtranscript(df_namesplit, exon_df)
-    print(bam_tran)
+    #Calculate position relative to cds
+    bam_to_cds = bamrelativetocds(bam_tran, cds_df)
 
+    bam_offsets = bam_to_cds.group_by('bamcds_start', 'length').agg(pl.col('count').sum())\
+        .filter((pl.col('bamcds_start') <= 10) & (pl.col('bamcds_start') >= -30))
+
+    
     # OFFSETS -> DIFFERENT FUNCTION!!
-    length_values = df_namesplit.get_column("length")
+    length_values = bam_to_cds.get_column("length")
     offsets = {i: 15 for i in length_values}
 
     bed = asitecalc(df_namesplit, offsets)
 
-    return bed, exon_df
+    return bed, exon_df, cds_df
 
 def bedtobigwig(bedfile, chromsize):
     """
@@ -204,3 +233,5 @@ def bedtobigwig(bedfile, chromsize):
     os.system(f"bedGraphToBigWig {bedfile} {chromsize} file.bw")
 
     return 'data/file.bw'
+
+# %%

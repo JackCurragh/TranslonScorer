@@ -29,7 +29,7 @@ def extract_transcript_id(attr_str):
     return ""
 
 
-def getexons_and_cds(annotation_file, exondf, tran=[]):
+def getexons_and_cds(annotation_file, tran=[]):
     """
     Extracts CDS and exon coordinates from an annotation file.
 
@@ -103,18 +103,18 @@ def getexons_and_cds(annotation_file, exondf, tran=[]):
     )
 
     # Getting exons
-    if exondf.is_empty():
-        exon_regions = df.filter((pl.col("type") == "exon"))
 
-        pos_exons, neg_exons = procesexons(exon_regions)
+    exon_regions = df.filter((pl.col("type") == "exon"))
 
-        exon_coords_plus = exontranscriptcoords(pos_exons, posstrand=True)
-        # column names switched to calculate inverse of positions for negative strands
-        exon_coords_neg = exontranscriptcoords(neg_exons, posstrand=False)
+    pos_exons, neg_exons = procesexons(exon_regions)
+    exon_coords_plus = exontranscriptcoords(pos_exons, posstrand=True)
 
-        exondf = pl.concat([exon_coords_plus, exon_coords_neg]).select(
-            pl.all().exclude("strand")
-        )
+    # column names switched to calculate inverse of positions for negative strands
+    exon_coords_neg = exontranscriptcoords(neg_exons, posstrand=False)
+    
+    exondf = pl.concat([exon_coords_plus, exon_coords_neg]).select(
+        pl.all().exclude("strand")
+    )
     
     cds_coords = gettranscriptcoords(groupedcds, exondf)
     return cds_coords, exondf
@@ -252,11 +252,10 @@ def gettranscriptcoords(cds_df, exon_df):
     # Drop rows with None values in calculated columns
     combined_df = combined_df.drop_nulls(["tran_start_cd", "tran_stop_cd"])
     
+    combined_df = combined_df.group_by('tran_id').agg(pl.min('tran_start_cd'), pl.max('tran_stop_cd'))
     # Select and rename relevant columns
     result_df = combined_df.select([
         pl.col("tran_id"),
-        pl.col("start"),
-        pl.col("stop"),
         pl.col("tran_start_cd").alias("tran_start"),
         pl.col("tran_stop_cd").alias("tran_stop")
     ])

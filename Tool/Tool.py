@@ -35,10 +35,11 @@ def function():
 @click.option("--sru_range", "-sru", help="Provide an integer that indicates the range for \
              the Start Rise Up score. This sets the amount of nucleotides before and after \
              the stop codon will regarded when calculating")
+@click.option("--offsets", "-ofs", help="Provide a file containing offset parameters")
 
 
 def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen, maxlen,
-         exon, orfs, range_param, sru_range):
+         exon, orfs, range_param, sru_range, offsets):
     """
     docstring
     """
@@ -52,7 +53,7 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
                 # read in bam file
                 df = readbam(location)
                 # calculate asite + converting to BedGraph
-                beddf, exondf = dftobed(df, ann)
+                beddf, exondf, cds_df = dftobed(df, ann)
 
                 if not os.path.exists("data/file.bedGraph"):
                     bedfile = beddf.write_csv("file.bedGraph", separator="\t")
@@ -74,7 +75,7 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
             )
         
     #ORFPREP START
-    if ann:
+    if seq or tran:
         if seq and ann:
             print('getting transcript')
             transcript = gettranscripts(seq, ann)

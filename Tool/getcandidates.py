@@ -7,7 +7,7 @@ from orffinder import find_orfs
 from findexonscds import getexons_and_cds
 
 
-def gettranscripts(seq, annotation, outfile="transcripts.fa"):
+def gettranscripts(seq, annotation, outfile="data/transcripts.fa"):
     """
     Extracts transcript sequences from a genome annotation file.
 
@@ -28,7 +28,7 @@ def gettranscripts(seq, annotation, outfile="transcripts.fa"):
         output_file = gettranscripts("genome.fa", "annotation.gff", outfile="transcripts.fa")
     """
     ann = pr.read_gtf(annotation)
-    transcripts = ann[ann.Feature == 'transcript']
+    transcripts = ann[ann.Feature == 'exon']
     tran_seq = transcripts.get_transcript_sequence(transcript_id='transcript_id', path=seq)
     with open(outfile, 'w') as fw:
         for index, id, seq in tran_seq.itertuples():
@@ -36,7 +36,29 @@ def gettranscripts(seq, annotation, outfile="transcripts.fa"):
             
     return outfile
 
-def orfrelativeposition(annotation, df, exondf):
+def classify_orf(row):
+    
+    if row['stop'] < row['tran_start']:
+        return "uORF"
+    elif row['start'] == row['tran_start'] and row['stop'] == row['tran_stop']:
+        return "CDS"
+    elif row['start'] > row['tran_stop']:
+        return "dORF"
+    elif row['start'] < row['tran_start'] and row['stop'] >= row['tran_start']:
+        return "uoORF"
+    elif row['start'] <= row['tran_stop'] and row['stop'] > row['tran_stop']:
+        return "doORF"
+    elif row['start'] >= row['tran_start'] and row['stop'] <= row['tran_stop']:
+        return "iORF"
+    elif row['start'] < row['tran_start'] and row['stop'] > row['tran_stop']:
+        return "eoORF"
+    elif row['start'] < row['tran_start'] and row['stop'] == row['tran_stop']:
+        return "extORF"
+    else:
+        print("unexpected", row['start'], row['stop'], row['tran_start'], row['tran_stop'])
+        return "Unexpected"
+
+def orfrelativeposition(annotation, df, exon_df):
     '''
     Determines the relative position of ORFs to coding sequences (CDS).
 
@@ -59,58 +81,32 @@ def orfrelativeposition(annotation, df, exondf):
     Example:
         orf_df, exon_coords = orfrelativeposition("annotation.gff", orf_df)
     '''
-    cds_df, exon_coords = getexons_and_cds(annotation, exondf, list(df["tran_id"].unique()))
+    orflist=[]
+    cds_df, exon_coords = getexons_and_cds(annotation, list(df["tran_id"].unique()))
     print('typing ORFS')
-    # Select all columns except "start" and "stop"
-    filtered_df = cds_df.select(pl.all().exclude("start", "stop"))
 
-    # Dictionary to hold orf types for each orfid
-    orf_types = {}
-
-    # Iterate over unique transcript IDs
-    for orfid in sorted(df["tran_id"].unique()):
-        cdsregion = filtered_df.filter(pl.col("tran_id") == orfid)
-        orfregion = df.filter(pl.col("tran_id") == orfid)
-        orfpair = list(zip(orfregion["start"], orfregion["stop"]))
-
-        # Initialize orftype list for this orfid
-        orftype_list = []
-
-        if not cdsregion.is_empty():
-            cdspair = sorted([cdsregion["tran_start"][0], cdsregion["tran_stop"][0]])
-
-            for orf in orfpair:
-                if orf[1] < cdspair[0]:
-                    orftype_list.append("uORF")
-                elif orf == (cdspair[0], cdspair[1]):
-                    orftype_list.append("CDS")
-                elif orf[0] > cdspair[1]:
-                    orftype_list.append("dORF")
-                elif orf[0] < cdspair[0] and orf[1] >= cdspair[0]:
-                    orftype_list.append("uoORF")
-                elif orf[0] <= cdspair[1] and orf[1] > cdspair[1]:
-                    orftype_list.append("doORF")
-                elif orf[0] >= cdspair[0] and orf[1] <= cdspair[1]:
-                    orftype_list.append("iORF")
-                elif orf[0] < cdspair[0] and orf[1] > cdspair[1]:
-                    orftype_list.append("eoORF")
-                elif orf[0] < cdspair[0] and orf[1] == cdspair[1]:
-                    orftype_list.append("extORF")
-                else:
-                    print("unexpected", orf, cdspair)
-                    orftype_list.append("Unexpected")
-        else:
-            orftype_list.extend(["Non Coding"] * len(orfpair))
-
-        orf_types[orfid] = orftype_list
-
-    # Flatten orf_types dictionary into a list matching the original DataFrame's order
-    orftype_column = []
-    for orfid in df["tran_id"]:
-        orftype_column.append(orf_types[orfid].pop(0))
-
-    # Add the new 'type' column to the DataFrame
-    df = df.with_columns(pl.Series("type", orftype_column))
+    tranids = list(cds_df['tran_id'].unique())
+    #TYPING ORFS
+    codingorfs = df.with_columns(shared=pl.col('tran_id').is_in(tranids))\
+                .filter(pl.col('shared') == True)\
+                .select(pl.all().exclude('shared'))
+    codingorfs = codingorfs.join(cds_df, on='tran_id')
+    codingorfs = codingorfs.with_columns(
+                pl.struct(['start', 'stop', 'tran_start', 'tran_stop'])
+                .apply(lambda row: classify_orf(row))
+                .alias('type'))\
+                .select(pl.all().exclude('tran_start', 'tran_stop'))\
+                .to_dict(as_series=False)
+    orflist.append(codingorfs)
+    #NON CODING ORFS
+    noncodingorfs = df.with_columns(shared=pl.col('tran_id').is_in(tranids))\
+                .filter(pl.col('shared') == False)\
+                .select(pl.all().exclude('shared'))
+    noncodingorfs = noncodingorfs.with_columns(type=pl.lit('Non Coding')).to_dict(as_series=False)
+    orflist.append(noncodingorfs)
+    #MAKE ONE DF
+    df = pl.from_dicts(orflist).explode('tran_id', 'start', 'stop', 'length', 'startorf', 'stoporf', 'type')
+    print(df)
     print('done typing')
     return df, exon_coords
 

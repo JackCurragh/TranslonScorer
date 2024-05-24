@@ -56,10 +56,10 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
                 beddf, exondf, cds_df = dftobed(df, ann)
 
                 if not os.path.exists("data/file.bedGraph"):
-                    bedfile = beddf.write_csv("file.bedGraph", separator="\t")
+                    beddf.write_csv("data/file.bedGraph", separator="\t", has_header=True)
 
                     # Converting Bedgrapgh to Bigwig format
-                    bigwig = bedtobigwig(bedfile, chromsize)
+                bigwig = bedtobigwig('data/file.bedGraph', chromsize)
 
         elif bedfile and chromsize:
             print('bedfile, chromsize')

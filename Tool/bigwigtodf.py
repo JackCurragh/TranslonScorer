@@ -3,6 +3,7 @@
 import polars as pl
 import pyBigWig as bw
 
+from scoring import sru_score, calculate_scores
 def checkchromnot(bigwig, annot):
     """
     Checks if the chromosome notation in a BigWig file is identical to the notation in an annotation file.
@@ -28,7 +29,7 @@ def checkchromnot(bigwig, annot):
         )
 
 
-def bigwigtodf(bigwig, exon):
+def transcriptreads(bwfile, exon_df):
     """
     Converts a BigWig file to a DataFrame based on provided exon annotation.
 
@@ -51,62 +52,95 @@ def bigwigtodf(bigwig, exon):
     Then, it iterates over each exon in the annotation file and retrieves intervals from the BigWig file that correspond to the exon
     coordinates. It calculates the transcript start and stop coordinates for each interval and stores the information in corresponding lists.
     Finally, it constructs the `df_tran` DataFrame using the extracted transcript information and returns it.
-
     """
+    read_list=[]
+    if exon_df["chr"][0] == "M":
+        return ''
+    exon_pairs = zip(exon_df["start"][0], exon_df["stop"][0])
+    transcript_pairs = list(
+        zip(exon_df["tran_start"][0], exon_df["tran_stop"][0])
+    )
+    for idx, exon in enumerate(exon_pairs):
+        if int(exon[0]) == int(exon[1]):
+            continue
+        intervals = bwfile.intervals(
+            str(exon_df["chr"][0]), int(exon[0]), int(exon[1])
+        )
+        # Filter out "None" type intervals
+        if intervals is not None:
+            for interval in intervals:
+                # Tran start coordinate
+                diff_start = interval[0] - int(exon[0])
+                transtart = int(transcript_pairs[idx][0]) + diff_start
+                # Tran stop coordinate
+                diff_stop = int(exon[1]) - interval[1]
+                transtop = int(transcript_pairs[idx][1]) - diff_stop
+                # Counts
+                counts = interval[2]
+                #Add info to list
+                dataframe_dict={
+                    'tran_start':transtart,
+                    'tran_stop':transtop,
+                    'counts':counts
+                }
+                if dataframe_dict:
+                    read_list.append(dataframe_dict)
+    if read_list:
+        read_df = pl.from_dicts(read_list)
+        return read_df
+    else:
+        return pl.DataFrame()
+
+def scoring(bigwig, exon, orfs, sru_range=15):
+    '''
+    docstring
+    '''
     bwfile = bw.open(bigwig)
-    chromcheck = list(bwfile.chroms().keys())[0]
-    dataframe_list=[]
     if bwfile.isBigWig():
         exon_df = pl.read_csv(exon, has_header=True, separator=",")
-        #Function commented since it doesn't work
-        #exon_not = exon_df.get_column("chr").to_list()[0]
-        #checkchromnot(int(chromcheck), exon_not)
         exon_df = exon_df.with_columns(
-            pl.col("start", "stop", "tran_start", "tran_stop").apply(
-                lambda x: x.split(",")
-            )
-        )
-        for i in range(len(exon_df)):
-            if exon_df["chr"][i] == "M":
-                print("M chrom")
-            else: 
-                exon_pairs = zip(exon_df["start"][i], exon_df["stop"][i])
-                transcript_pairs = list(
-                    zip(exon_df["tran_start"][i], exon_df["tran_stop"][i])
-                )
-                for idx, exon in enumerate(exon_pairs):
-                    if int(exon[0]) == int(exon[1]):
-                        print("skipped")
-                    else:
-                        intervals = bwfile.intervals(
-                            str(exon_df["chr"][i]), int(exon[0]), int(exon[1])
-                        )
-                    # Filter out "None" type intervals
-                        if intervals is not None:
-                            for interval in intervals:
-                                tran_id = exon_df["tran_id"][i]
-                                # Tran start coordinate
-                                diff_start = interval[0] - int(exon[0])
-                                transtart = int(transcript_pairs[idx][0]) + diff_start
-                                #Frame
-                                frame = exon_df['tran_start'][i] % 3
-                                # Tran stop coordinate
-                                diff_stop = int(exon[1]) - interval[1]
-                                transtop = int(transcript_pairs[idx][1]) - diff_stop
-                                # Counts
-                                counts = interval[2]
-                                #Add info to list
-                                dataframe_dict={
-                                    'tran_id':tran_id,
-                                    'tran_start':transtart,
-                                    'tran_stop':transtop,
-                                    'counts':counts,
-                                    'frame':frame
-                                }
-                                if dataframe_dict:
-                                    dataframe_list.append(dataframe_dict)
+            pl.col("start", "stop", "tran_start", "tran_stop").apply(lambda x: x.split(",")),
+            pl.col('chr').apply(lambda x: x.split('r')[1]))
 
-        df_tran = pl.from_dicts(dataframe_list)
-        return df_tran
+        orf_df = pl.read_csv(orfs, has_header=True, separator=',')
+        counter=0
+        for tran in orf_df['tran_id'].unique():
+            if counter % 1000 == 0:
+                print(f'{counter} transcripts done')
+            exons = exon_df.filter(pl.col('tran_id') == tran)
+            orfs = orf_df.filter(pl.col('tran_id') == tran)
+            tran_reads = transcriptreads(bwfile, exons)
+            orfscores = []
+            if not tran_reads.is_empty():
+                orfs = orfs.with_columns([
+                    pl.struct(['start'])\
+                    .apply(lambda x: sru_score(x['start'], tran_reads, sru_range,0))\
+                    .alias('rise_up')
+                    ])
+                orfs = orfs.with_columns([
+                    pl.struct(['stop'])\
+                    .apply(lambda x: sru_score(x['stop'], tran_reads, sru_range,1))\
+                    .alias('step_down')
+                    ])
+                orfs = orfs.with_columns([
+                    pl.struct(['start', 'stop'])\
+                    .apply(lambda x: calculate_scores(x['start'], x['stop'],tran_reads))\
+                    .alias('list_scores')
+                    ])
+                orfs = orfs.with_columns(
+                    (pl.col('list_scores').apply(lambda x: x[0]).alias('hrf')),
+                    (pl.col('list_scores').apply(lambda x: x[1]).alias('avg')),
+                    (pl.col('list_scores').apply(lambda x: x[2]).alias('nzc')))
+                orfs = orfs.with_columns(
+                    score=pl.sum_horizontal('rise_up','step_down','hrf','avg','nzc'))\
+                    .select(pl.all().exclude('list_scores')).to_dict(as_series=False)
+                orfscores.append(orfs)
+                counter+=1
+        
+        orfscores_df = pl.from_dicts(orfscores).explode('tran_id','start','stop','type',
+            'length','startorf','stoporf','rise_up',
+            'step_down','hrf','avg','nzc','score')
+        print(orfscores_df)
+        return
     else:
         raise Exception("Must provide a bigwig file to convert")

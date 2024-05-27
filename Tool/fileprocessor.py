@@ -229,8 +229,7 @@ def bedtobigwig(bedfile, chromsize):
     Example:
         bedtobigwig("input.bedGraph", "chromsizes.txt")
     """
-    os.system(f"bedGraphToBigWig {bedfile} {chromsize} file.bw")
+    os.system(f"bedGraphToBigWig {bedfile} {chromsize} data/file.bw")
 
-    return 'data/file.bw'
+    return ''
 
-# %%

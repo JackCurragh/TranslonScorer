@@ -106,7 +106,6 @@ def orfrelativeposition(annotation, df, exon_df):
     orflist.append(noncodingorfs)
     #MAKE ONE DF
     df = pl.from_dicts(orflist).explode('tran_id', 'start', 'stop', 'length', 'startorf', 'stoporf', 'type')
-    print(df)
     print('done typing')
     return df, exon_coords
 

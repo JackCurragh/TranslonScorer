@@ -3,13 +3,17 @@
 import os
 import click
 import polars as pl
+import warnings
+
 
 from readfiles import readbam
 from fileprocessor import dftobed, bedtobigwig
 from getcandidates import gettranscripts, preporfs, orfrelativeposition
 from filewriter import saveorfsandexons
-from bigwigtodf import bigwigtodf
+from bigwigtodf import scoring
 from plotting import scoreandplot
+
+warnings.filterwarnings('ignore')
 
 @click.group()
 def function():
@@ -56,7 +60,7 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
                 beddf, exondf, cds_df = dftobed(df, ann)
 
                 if not os.path.exists("data/file.bedGraph"):
-                    beddf.write_csv("data/file.bedGraph", separator="\t", has_header=True)
+                    beddf.write_csv("data/file.bedGraph", separator="\t", include_header=False)
 
                     # Converting Bedgrapgh to Bigwig format
                 bigwig = bedtobigwig('data/file.bedGraph', chromsize)
@@ -87,18 +91,18 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
         exondf = 0
         if exondf == 0:
             exondf = pl.DataFrame()
-        orf_ann_df, exon_df = orfrelativeposition(ann, orfdf, exondf)   
+        orf_ann_df, exon_df = orfrelativeposition(ann, orfdf, exondf)
         orfs, exon = saveorfsandexons(orf_ann_df, exon_df)
         
         print('bigwigtodf')
-        bwtrancoords = bigwigtodf(bigwig, exon)
+        bwtrancoords = scoring(bigwig, exon, orfs)
         bwtrancoords.write_csv("data/files/bw_tran.csv")
 
 
-    elif orfs and exon:
+    elif orfs and exon and bigwig:
         print('orfs and exon')
         print('bigwigtodf')
-        bwtrancoords = bigwigtodf(bigwig, exon)
+        bwtrancoords = scoring(bigwig, exon, orfs)
         bwtrancoords.write_csv("data/files/bw_tran.csv")
         
         print('scoring and plotting')

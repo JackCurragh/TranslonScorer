@@ -157,4 +157,5 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
             counter = counter + 1
         df = pl.from_dicts(dict_list)
         df = df.sort("tran_id")
+        print(df.filter(pl.col('tran_id') == 'ENST00000379265.5'))
         return df

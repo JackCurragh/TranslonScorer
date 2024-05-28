@@ -12,8 +12,6 @@ def find_orfs(
     tran_id,
     startautomaton,
     stopautomaton,
-    start_codons=["ATG"],
-    stop_codons=["TAA", "TAG", "TGA"],
     minlength=0,
     maxlength=1000000
 ):
@@ -38,7 +36,6 @@ def find_orfs(
     orf_list=[]
     startpositions, start_codons = find_all_positions(sequence, startautomaton)
     stoppositions, stop_codons = find_all_positions(sequence, stopautomaton)
-
    
     for frame, startpositions in startpositions.items():
         for position in startpositions:
@@ -51,11 +48,11 @@ def find_orfs(
                 stopcodon = sequence[-3:]
             orf_data= {
                 "tran_id":tran_id,
-                "start":position-1,
-                "stop": stopposition+1,
-                "length":stopposition+1 - position-1,
+                "start":position,
+                "stop": stopposition-1,
+                "length":stopposition - position,
                 "startorf":start_codons[position],
-                "stoporf": stopcodon,
+                "stoporf": stopcodon
                 }
             if orf_data['length'] < maxlength and orf_data['length'] > minlength:
                 orf_list.append(orf_data)

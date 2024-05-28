@@ -251,7 +251,7 @@ def gettranscriptcoords(cds_df, exon_df):
     ])
     # Drop rows with None values in calculated columns
     combined_df = combined_df.drop_nulls(["tran_start_cd", "tran_stop_cd"])
-    
+    print(combined_df.filter(pl.col('tran_id') == 'ENST00000379265.5'))
     combined_df = combined_df.group_by('tran_id').agg(pl.min('tran_start_cd'), pl.max('tran_stop_cd'))
     # Select and rename relevant columns
     result_df = combined_df.select([
@@ -259,4 +259,5 @@ def gettranscriptcoords(cds_df, exon_df):
         pl.col("tran_start_cd").alias("tran_start"),
         pl.col("tran_stop_cd").alias("tran_stop")
     ])
+    
     return result_df

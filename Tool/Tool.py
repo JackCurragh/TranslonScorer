@@ -26,7 +26,7 @@ def function():
 @click.option("--tran", "-t", help="Provide a file containing the transcript sequences (.fa)")
 @click.option("--ann", "-a", help="Provide a file containing the annotation (.gtf)")
 @click.option("--starts", "-sta", default="ATG", help="Provide a list of start codons")
-@click.option("--stops", "-stp", default="TAA, TAG, TGA", help="Provide a list of stop codons")
+@click.option("--stops", "-stp", default="TAA,TAG,TGA", help="Provide a list of stop codons")
 @click.option("--minlen", "-min", default=0, help="Provide the minimum length")
 @click.option("--maxlen", "-max", default=1000000, help="Provide the maximum length")
 @click.option("--bigwig", "-bw", help="Provide a Bigwig file to convert")
@@ -87,7 +87,7 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
             print('transcript set')
             transcript = tran
         print('getting orfs')
-        orfdf = preporfs(transcript, starts.split(", "), stops.split(", "), minlen, maxlen)
+        orfdf = preporfs(transcript, starts.split(","), stops.split(","), minlen, maxlen)
         exondf = 0
         if exondf == 0:
             exondf = pl.DataFrame()

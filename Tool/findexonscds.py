@@ -28,7 +28,6 @@ def extract_transcript_id(attr_str):
             return attr.split(" ")[2].replace('"', "")
     return ""
 
-
 def getexons_and_cds(annotation_file, tran=[]):
     """
     Extracts CDS and exon coordinates from an annotation file.
@@ -88,8 +87,11 @@ def getexons_and_cds(annotation_file, tran=[]):
         .apply(lambda attributes: extract_transcript_id(attributes))
         .alias("tran_id")
     ).select(pl.all().exclude("attributes"))
+    
+
     if tran:
         df = df.filter((pl.col("tran_id").is_in(tran)))
+
 
     # Getting CDS
     coding_regions = df.filter((pl.col("type") == "CDS"))
@@ -117,6 +119,7 @@ def getexons_and_cds(annotation_file, tran=[]):
     )
     
     cds_coords = gettranscriptcoords(groupedcds, exondf)
+    print(cds_coords.filter(pl.col('tran_id') == 'ENST00000564982.6'))
     return cds_coords, exondf
 
 
@@ -153,7 +156,6 @@ def procesexons(df):
         .agg(pl.col("start"), pl.col("stop"), pl.col("strand"), pl.col("chr"))
         .select(["chr", "tran_id", "start", "stop", "strand"])
     )
-
     return groupedexonspos, groupedexonsneg
 
 
@@ -235,8 +237,8 @@ def gettranscriptcoords(cds_df, exon_df):
         transcript_cds_coords = gettranscriptcoords(cds_df, exon_df)
     """
     # Explode exon start and stop lists to individual rows
-    exploded_exon_df = exon_df.explode(["start", "stop", "tran_start", "tran_stop"])
-    exploded_cds_df = cds_df.explode(['start', 'stop'])
+    exploded_exon_df = exon_df.explode(["start", "stop", "tran_start", "tran_stop"]).sort('start', descending=True)
+    exploded_cds_df = cds_df.explode(['start', 'stop']).sort('start', descending=True)
     # Join the DataFrames on the transcript ID
     combined_df = exploded_cds_df.join(exploded_exon_df, on="tran_id", how="inner")
     # Calculate transcript-level start and stop coordinates
@@ -251,7 +253,6 @@ def gettranscriptcoords(cds_df, exon_df):
     ])
     # Drop rows with None values in calculated columns
     combined_df = combined_df.drop_nulls(["tran_start_cd", "tran_stop_cd"])
-    print(combined_df.filter(pl.col('tran_id') == 'ENST00000379265.5'))
     combined_df = combined_df.group_by('tran_id').agg(pl.min('tran_start_cd'), pl.max('tran_stop_cd'))
     # Select and rename relevant columns
     result_df = combined_df.select([

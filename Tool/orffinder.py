@@ -3,6 +3,7 @@ def find_all_positions(sequence, automaton):
     frames = {0:[], 1:[], 2:[]}
     codons = {}
     for i, (order, codon) in automaton.iter(sequence):
+        #position of last nucleotide of codon returned  
         frames[(i-2)%3].append(i)
         codons[i] = codon
     return frames, codons
@@ -48,8 +49,8 @@ def find_orfs(
                 stopcodon = sequence[-3:]
             orf_data= {
                 "tran_id":tran_id,
-                "start":position,
-                "stop": stopposition-1,
+                "start":position-2,
+                "stop": stopposition-3,
                 "length":stopposition - position,
                 "startorf":start_codons[position],
                 "stoporf": stopcodon

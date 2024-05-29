@@ -95,17 +95,18 @@ def scoredf(df, tran_reads, sru_range, typeorf):
     '''
     docstring
     '''
-    
-    df = df.with_columns([
-        pl.struct(['start'])\
-        .apply(lambda x: sru_score(x['start'], tran_reads, sru_range,0))\
-        .alias('rise_up')
-        ])
-    df = df.with_columns([
-        pl.struct(['stop'])\
-        .apply(lambda x: sru_score(x['stop'], tran_reads, sru_range,1))\
-        .alias('step_down')
-        ])
+    if not typeorf == 'doORF':
+        df = df.with_columns([
+            pl.struct(['start'])\
+            .apply(lambda x: sru_score(x['start'], tran_reads, sru_range,0))\
+            .alias('rise_up')
+            ])
+    elif not typeorf == 'uoORF':
+        df = df.with_columns([
+            pl.struct(['stop'])\
+            .apply(lambda x: sru_score(x['stop'], tran_reads, sru_range,1))\
+            .alias('step_down')
+            ])
     df = df.with_columns([
         pl.struct(['start', 'stop'])\
         .apply(lambda x: calculate_scores(x['start'], x['stop'], tran_reads))\

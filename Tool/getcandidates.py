@@ -90,6 +90,7 @@ def orfrelativeposition(annotation, df, exon_df):
     codingorfs = df.with_columns(shared=pl.col('tran_id').is_in(tranids))\
                 .filter(pl.col('shared') == True)\
                 .select(pl.all().exclude('shared'))
+    
     codingorfs = codingorfs.join(cds_df, on='tran_id')
     codingorfs = codingorfs.with_columns(
                 pl.struct(['start', 'stop', 'tran_start', 'tran_stop'])
@@ -102,6 +103,7 @@ def orfrelativeposition(annotation, df, exon_df):
     noncodingorfs = df.with_columns(shared=pl.col('tran_id').is_in(tranids))\
                 .filter(pl.col('shared') == False)\
                 .select(pl.all().exclude('shared'))
+
     noncodingorfs = noncodingorfs.with_columns(type=pl.lit('Non Coding')).to_dict(as_series=False)
     orflist.append(noncodingorfs)
     #MAKE ONE DF
@@ -142,20 +144,20 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
     Example:
         orf_df = preporfs("transcripts.fasta", ['ATG'], ['TAA', 'TAG', 'TGA'], 50, 500)
     """
-    startautomaton = create_automaton(starts)
-    stopautomaton = create_automaton(stops)
+    
     dict_list=[]
     # COUNTER!!!!!!!!!!
     counter = 0
     with open(transcript) as handle:
         for record in SeqIO.parse(handle, "fasta"):
+            startautomaton = create_automaton(starts)
+            stopautomaton = create_automaton(stops)
             if counter % 20000 == 0:
-                print(f"read {counter} Transcripts")
+                print(f"read {counter} Transcripts", sep='\r')
             tran_id = str(record.id).split("|")[0]
             append_list = find_orfs(str(record.seq), tran_id, startautomaton, stopautomaton, minlength, maxlength)
             dict_list.extend(append_list)
             counter = counter + 1
         df = pl.from_dicts(dict_list)
         df = df.sort("tran_id")
-        print(df.filter(pl.col('tran_id') == 'ENST00000379265.5'))
         return df

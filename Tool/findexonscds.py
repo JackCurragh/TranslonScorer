@@ -103,23 +103,20 @@ def getexons_and_cds(annotation_file, tran=[]):
         )
         .select(["chr", "tran_id", "start", "stop"])
     )
-
     # Getting exons
-
     exon_regions = df.filter((pl.col("type") == "exon"))
-
     pos_exons, neg_exons = procesexons(exon_regions)
-    exon_coords_plus = exontranscriptcoords(pos_exons, posstrand=True)
-
+    
     # column names switched to calculate inverse of positions for negative strands
+    exon_coords_pos = exontranscriptcoords(pos_exons, posstrand=True)
     exon_coords_neg = exontranscriptcoords(neg_exons, posstrand=False)
     
-    exondf = pl.concat([exon_coords_plus, exon_coords_neg]).select(
-        pl.all().exclude("strand")
-    )
+    cds_coords_pos = gettranscriptcoords(groupedcds, exon_coords_pos, posstrand=True)
+    cds_coords_neg = gettranscriptcoords(groupedcds, exon_coords_neg, posstrand=False)
     
-    cds_coords = gettranscriptcoords(groupedcds, exondf)
-    print(cds_coords.filter(pl.col('tran_id') == 'ENST00000564982.6'))
+    cds_coords = pl.concat([cds_coords_pos, cds_coords_neg])
+    exondf = pl.concat([exon_coords_pos, exon_coords_neg]).select(pl.all().exclude('strand'))
+    print(cds_coords.filter(pl.col('tran_id') == 'ENST00000158526.9'))
     return cds_coords, exondf
 
 
@@ -218,7 +215,7 @@ def exontranscriptcoords(df: pl.DataFrame, posstrand=True) -> pl.DataFrame:
     return df
 
 
-def gettranscriptcoords(cds_df, exon_df):
+def gettranscriptcoords(cds_df, exon_df, posstrand=True):
     """
     Calculates transcript-level coordinates for coding sequences (CDS).
 
@@ -237,20 +234,31 @@ def gettranscriptcoords(cds_df, exon_df):
         transcript_cds_coords = gettranscriptcoords(cds_df, exon_df)
     """
     # Explode exon start and stop lists to individual rows
-    exploded_exon_df = exon_df.explode(["start", "stop", "tran_start", "tran_stop"]).sort('start', descending=True)
-    exploded_cds_df = cds_df.explode(['start', 'stop']).sort('start', descending=True)
+    exploded_exon_df = exon_df.explode(["start", "stop", "tran_start", "tran_stop"])
+    exploded_cds_df = cds_df.explode(['start', 'stop'])
     # Join the DataFrames on the transcript ID
     combined_df = exploded_cds_df.join(exploded_exon_df, on="tran_id", how="inner")
     # Calculate transcript-level start and stop coordinates
-    combined_df = combined_df.with_columns([
-        (pl.when((pl.col("start") >= pl.col("start_right")) & (pl.col("start") <= pl.col("stop_right")))
-         .then(pl.col("tran_start") + (pl.col("start") - pl.col("start_right")))
-         .otherwise(None)).alias("tran_start_cd"),
-        
-        (pl.when((pl.col("stop") >= pl.col("start_right")) & (pl.col("stop") <= pl.col("stop_right")))
-         .then(pl.col("tran_stop") - (pl.col("stop_right") - pl.col("stop")))
-         .otherwise(None)).alias("tran_stop_cd")
-    ])
+    if posstrand:
+        combined_df = combined_df.with_columns([
+            (pl.when((pl.col("start") >= pl.col("start_right")) & (pl.col("start") <= pl.col("stop_right")))
+             .then(pl.col("tran_start") + (pl.col("start") - pl.col("start_right")))
+             .otherwise(None)).alias("tran_start_cd"),
+
+            (pl.when((pl.col("stop") >= pl.col("start_right")) & (pl.col("stop") <= pl.col("stop_right")))
+             .then(pl.col("tran_stop") - (pl.col("stop_right") - pl.col("stop")))
+             .otherwise(None)).alias("tran_stop_cd")
+        ])
+    else:
+        combined_df = combined_df.with_columns([
+            (pl.when((pl.col("start") >= pl.col("start_right")) & (pl.col("start") <= pl.col("stop_right")))
+             .then(pl.col("tran_stop") - (pl.col("start") - pl.col("start_right")))
+             .otherwise(None)).alias("tran_stop_cd"),
+
+            (pl.when((pl.col("stop") >= pl.col("start_right")) & (pl.col("stop") <= pl.col("stop_right")))
+             .then(pl.col("tran_start") + (pl.col("stop_right") - pl.col("stop")))
+             .otherwise(None)).alias("tran_start_cd")
+        ])
     # Drop rows with None values in calculated columns
     combined_df = combined_df.drop_nulls(["tran_start_cd", "tran_stop_cd"])
     combined_df = combined_df.group_by('tran_id').agg(pl.min('tran_start_cd'), pl.max('tran_stop_cd'))

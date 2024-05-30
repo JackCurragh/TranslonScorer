@@ -99,6 +99,7 @@ def orfrelativeposition(annotation, df, exon_df):
                 .select(pl.all().exclude('tran_start', 'tran_stop'))\
                 .to_dict(as_series=False)
     orflist.append(codingorfs)
+    
     #NON CODING ORFS
     noncodingorfs = df.with_columns(shared=pl.col('tran_id').is_in(tranids))\
                 .filter(pl.col('shared') == False)\
@@ -108,7 +109,12 @@ def orfrelativeposition(annotation, df, exon_df):
     orflist.append(noncodingorfs)
     #MAKE ONE DF
     df = pl.from_dicts(orflist).explode('tran_id', 'start', 'stop', 'length', 'startorf', 'stoporf', 'type')
+    
+    cdslist = df.filter(pl.col('type') == 'CDS')
+    cdslist = list(cdslist['tran_id'].unique())
+    
     print('done typing')
+
     return df, exon_coords
 
 
@@ -153,7 +159,7 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
             startautomaton = create_automaton(starts)
             stopautomaton = create_automaton(stops)
             if counter % 20000 == 0:
-                print(f"read {counter} Transcripts", sep='\r')
+                print("\r" + f"read {counter} Transcripts", end='')
             tran_id = str(record.id).split("|")[0]
             append_list = find_orfs(str(record.seq), tran_id, startautomaton, stopautomaton, minlength, maxlength)
             dict_list.extend(append_list)

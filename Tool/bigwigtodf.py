@@ -91,7 +91,7 @@ def transcriptreads(bwfile, exon_df):
     else:
         return pl.DataFrame()
 
-def scoredf(df, tran_reads, sru_range, typeorf):
+def oldscoring(df, tran_reads, sru_range, typeorf):
     '''
     docstring
     '''
@@ -122,6 +122,24 @@ def scoredf(df, tran_reads, sru_range, typeorf):
         .select(pl.all().exclude('list_scores')).to_dict(as_series=False)
     return df_dict
 
+def newscoring(df, tran_reads, sru_range, typeorf, scoredict):
+    if not typeorf == 'doORF':
+        startvalues = df.get_column('start')\
+                        .unique()
+        startscore = startvalues\
+                    .map_elements(lambda x: sru_score(x, tran_reads, sru_range,0))\
+                    .to_list()
+        for i in len(startscore):
+            scoredict['rise_up'].append({startvalues[i]:startscore[i]})
+
+    elif not typeorf == 'uoORF':
+        stopvalues = df.get_column('stop')\
+                        .unique()
+        stopscore = stopvalues\
+                    .map_elements(lambda x: sru_score(x, tran_reads, sru_range,1))\
+                    .to_list()
+        for i in len(stopscore):
+            scoredict['rise_up'].append({stopvalues[i]:stopscore[i]})
 
 def scoring(bigwig, exon, orfs, sru_range=15):
     '''
@@ -148,7 +166,7 @@ def scoring(bigwig, exon, orfs, sru_range=15):
                 for typeorf in orfs['type'].unique():
                     orfs_filtered = orfs.filter(pl.col('type') == typeorf)
                     #score orfs based on type
-                    orf_dict = scoredf(orfs_filtered, tran_reads, sru_range, typeorf)
+                    orf_dict = oldscoring(orfs_filtered, tran_reads, sru_range, typeorf)
                     orfscores.append(orf_dict)
             counter+=1
         orfscores_df = pl.from_dicts(orfscores).explode('tran_id','start','stop','type',

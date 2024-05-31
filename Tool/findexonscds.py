@@ -116,7 +116,7 @@ def getexons_and_cds(annotation_file, tran=[]):
     
     cds_coords = pl.concat([cds_coords_pos, cds_coords_neg])
     exondf = pl.concat([exon_coords_pos, exon_coords_neg]).select(pl.all().exclude('strand'))
-    print(cds_coords.filter(pl.col('tran_id') == 'ENST00000158526.9'))
+    print(cds_coords.filter(pl.col('tran_id') == 'ENST00000269361.11'))
     return cds_coords, exondf
 
 

@@ -27,7 +27,7 @@ def gettranscripts(seq, annotation, outfile="data/transcripts.fa"):
     Example:
         output_file = gettranscripts("genome.fa", "annotation.gff", outfile="transcripts.fa")
     """
-    ann = pr.read_gtf(annotation)
+    ann = pr.read_gtf(annotation, ignore_bad=True)
     transcripts = ann[ann.Feature == 'exon']
     tran_seq = transcripts.get_transcript_sequence(transcript_id='transcript_id', path=seq)
     with open(outfile, 'w') as fw:

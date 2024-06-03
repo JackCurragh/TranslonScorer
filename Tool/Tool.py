@@ -36,14 +36,15 @@ def function():
 @click.option("--range_param", "-rp",
              help="Provide an integer that indicates the range in which a plot will be constructed \
                  around the relative start position")
-@click.option("--sru_range", "-sru", help="Provide an integer that indicates the range for \
+@click.option("--sru_range", "-sru",default=15, help="Provide an integer that indicates the range for \
              the Start Rise Up score. This sets the amount of nucleotides before and after \
              the stop codon will regarded when calculating")
 @click.option("--offsets", "-ofs", help="Provide a file containing offset parameters")
+@click.option("--score", "-s",default=False, help="Select the scoring algorithm, Default = False (old scoring algorithm)")
 
 
 def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen, maxlen,
-         exon, orfs, range_param, sru_range, offsets):
+         exon, orfs, range_param, sru_range, offsets, score):
     """
     docstring
     """
@@ -57,7 +58,7 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
                 # read in bam file
                 df = readbam(location)
                 # calculate asite + converting to BedGraph
-                beddf, exondf, cds_df = dftobed(df, ann)
+                beddf, exondf, cds_df = dftobed(df, ann, offsets)
 
                 if not os.path.exists("data/file.bedGraph"):
                     beddf.write_csv("data/file.bedGraph", separator="\t", include_header=False)
@@ -102,11 +103,11 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
     elif orfs and exon and bigwig:
         print('orfs and exon')
         print('bigwigtodf')
-        bwtrancoords = scoring(bigwig, exon, orfs)
+        bwtrancoords = scoring(bigwig, exon, orfs, score, sru_range)
         bwtrancoords.write_csv("data/files/bw_tran.csv")
         
         print('scoring and plotting')
-        scoreandplot(orfs, "data/files/bw_tran.csv" ,range_param, sru_range)
+        scoreandplot(orfs, "data/files/bw_tran.csv" ,range_param)
     
     else:
         raise Exception(

@@ -170,7 +170,7 @@ def change_point_analysis(
     return offset_dict
 
 
-def dftobed(df, annotation):
+def dftobed(df, annotation, offsets):
     """
     Converts a DataFrame to BED format with A-site calculation and offset values.
 
@@ -202,10 +202,10 @@ def dftobed(df, annotation):
     bam_tran = bamtranscript(df_namesplit, exon_df)
     #Calculate position relative to cds
     bam_to_cds = bamrelativetocds(bam_tran, cds_df)
-
-    bam_offsets = bam_to_cds.group_by('bamcds_start', 'length').agg(pl.col('count').sum())
-    #offset dictionary
-    offsets = change_point_analysis(bam_offsets)
+    if not offsets:
+        bam_offsets = bam_to_cds.group_by('bamcds_start', 'length').agg(pl.col('count').sum())
+        #offset dictionary
+        offsets = change_point_analysis(bam_offsets)
     #A site calculation
     bed = asitecalc(bam_to_cds, offsets)
 

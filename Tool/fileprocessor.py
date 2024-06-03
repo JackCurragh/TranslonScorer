@@ -84,15 +84,14 @@ def asitecalc(df, offsets):
     for value, data in df.group_by("length"):
         x = df.filter(pl.col("length") == value).with_columns(
             (pl.col("start") + offsets[value]).alias("A-site")
-        )
+        ).select(pl.all().exclude('start','stop','length','tran_id','bamcds_start')).to_dict(as_series=False)
         y.append(x)
-    df_asite = pl.concat(y)
-
+    df_asite = pl.from_dicts(y)
+    df_asite = df_asite.explode([ 'chr', 'count', 'A-site'])
     # GROUP ON A-SITE
-    df_final = df_asite.group_by("chr", "A-site").agg(pl.col("count").sum())
-    df_tobed = df_final.with_columns((pl.col("A-site") + 1).alias("stop"))
-    df_bed = df_tobed.sort(["chr", "A-site"]).select(["chr", "A-site", "stop", "count"])
-
+    df_asite = df_asite.group_by("chr", "A-site").agg(pl.col("count").sum())
+    df_asite = df_asite.with_columns((pl.col("A-site") + 1).alias("stop"))
+    df_bed = df_asite.sort(["chr", "A-site"]).select(["chr", "A-site", "stop", "count"])
     return df_bed
 
 def calculate_differences(start, start_dict):
@@ -140,19 +139,22 @@ def change_point_analysis(
     """
     max_shift = 0
     max_shift_position = None
+    offset_dict = {}
     for length in offset_df['length'].unique():
         offset_df_len = offset_df.filter(pl.col('length') == length).sort('bamcds_start')
-        for i in range(-30, 10):
+        for i in range(-30, 11):
             left = []
-            for i in range(i-3, i+1):
-                if i in offset_df_len['bamcds_start']:
-                    left.append(offset_df_len['count'].filter(pl.col('bamcds_start') == i))
+            for j in range(i-3, i+1):
+                left_df = offset_df_len.filter(pl.col('bamcds_start') == j)
+                if not left_df.is_empty():
+                    left.append(left_df['count'][0])
                 else:
                     left.append(0)
             right = []
-            for i in range(i+1, i+5):
-                if i in offset_df_len['bamcds_start']:
-                    right.append(offset_df_len['count'].filter(pl.col('bamcds_start') == i))
+            for j in range(i+1, i+5):
+                right_df = offset_df_len.filter(pl.col('bamcds_start') == j)
+                if not right_df.is_empty():
+                    right.append(right_df['count'][0])
                 else:
                     right.append(0)
 
@@ -162,12 +164,13 @@ def change_point_analysis(
         if shift > max_shift:
             max_shift = shift
             max_shift_position = i
-    if not max_shift_position:
-        return 15
-    return 15 - max_shift_position
+        if max_shift_position == None:
+            offset_dict[length] = 15
+        else: offset_dict[length] = max_shift_position
+    return offset_dict
 
 
-def dftobed(df, annotation):
+def dftobed(df, annotation, offsets):
     """
     Converts a DataFrame to BED format with A-site calculation and offset values.
 
@@ -199,16 +202,12 @@ def dftobed(df, annotation):
     bam_tran = bamtranscript(df_namesplit, exon_df)
     #Calculate position relative to cds
     bam_to_cds = bamrelativetocds(bam_tran, cds_df)
-
-    bam_offsets = bam_to_cds.group_by('bamcds_start', 'length').agg(pl.col('count').sum())\
-        .filter((pl.col('bamcds_start') <= 10) & (pl.col('bamcds_start') >= -30))
-
-    
-    # OFFSETS -> DIFFERENT FUNCTION!!
-    length_values = bam_to_cds.get_column("length")
-    offsets = {i: 15 for i in length_values}
-
-    bed = asitecalc(df_namesplit, offsets)
+    if not offsets:
+        bam_offsets = bam_to_cds.group_by('bamcds_start', 'length').agg(pl.col('count').sum())
+        #offset dictionary
+        offsets = change_point_analysis(bam_offsets)
+    #A site calculation
+    bed = asitecalc(bam_to_cds, offsets)
 
     return bed, exon_df, cds_df
 
@@ -230,8 +229,7 @@ def bedtobigwig(bedfile, chromsize):
     Example:
         bedtobigwig("input.bedGraph", "chromsizes.txt")
     """
-    os.system(f"bedGraphToBigWig {bedfile} {chromsize} file.bw")
+    os.system(f"bedGraphToBigWig {bedfile} {chromsize} data/file.bw")
 
-    return 'data/file.bw'
+    return ''
 
-# %%

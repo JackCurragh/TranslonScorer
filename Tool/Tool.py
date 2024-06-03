@@ -3,13 +3,17 @@
 import os
 import click
 import polars as pl
+import warnings
+
 
 from readfiles import readbam
 from fileprocessor import dftobed, bedtobigwig
 from getcandidates import gettranscripts, preporfs, orfrelativeposition
 from filewriter import saveorfsandexons
-from bigwigtodf import bigwigtodf
+from bigwigtodf import scoring
 from plotting import scoreandplot
+
+warnings.filterwarnings('ignore')
 
 @click.group()
 def function():
@@ -22,7 +26,7 @@ def function():
 @click.option("--tran", "-t", help="Provide a file containing the transcript sequences (.fa)")
 @click.option("--ann", "-a", help="Provide a file containing the annotation (.gtf)")
 @click.option("--starts", "-sta", default="ATG", help="Provide a list of start codons")
-@click.option("--stops", "-stp", default="TAA, TAG, TGA", help="Provide a list of stop codons")
+@click.option("--stops", "-stp", default="TAA,TAG,TGA", help="Provide a list of stop codons")
 @click.option("--minlen", "-min", default=0, help="Provide the minimum length")
 @click.option("--maxlen", "-max", default=1000000, help="Provide the maximum length")
 @click.option("--bigwig", "-bw", help="Provide a Bigwig file to convert")
@@ -32,14 +36,15 @@ def function():
 @click.option("--range_param", "-rp",
              help="Provide an integer that indicates the range in which a plot will be constructed \
                  around the relative start position")
-@click.option("--sru_range", "-sru", help="Provide an integer that indicates the range for \
+@click.option("--sru_range", "-sru",default=15, help="Provide an integer that indicates the range for \
              the Start Rise Up score. This sets the amount of nucleotides before and after \
              the stop codon will regarded when calculating")
 @click.option("--offsets", "-ofs", help="Provide a file containing offset parameters")
+@click.option("--score", "-s",default=False, help="Select the scoring algorithm, Default = False (old scoring algorithm)")
 
 
 def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen, maxlen,
-         exon, orfs, range_param, sru_range, offsets):
+         exon, orfs, range_param, sru_range, offsets, score):
     """
     docstring
     """
@@ -53,13 +58,13 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
                 # read in bam file
                 df = readbam(location)
                 # calculate asite + converting to BedGraph
-                beddf, exondf, cds_df = dftobed(df, ann)
+                beddf, exondf, cds_df = dftobed(df, ann, offsets)
 
                 if not os.path.exists("data/file.bedGraph"):
-                    bedfile = beddf.write_csv("file.bedGraph", separator="\t")
+                    beddf.write_csv("data/file.bedGraph", separator="\t", include_header=False)
 
                     # Converting Bedgrapgh to Bigwig format
-                    bigwig = bedtobigwig(bedfile, chromsize)
+                bigwig = bedtobigwig('data/file.bedGraph', chromsize)
 
         elif bedfile and chromsize:
             print('bedfile, chromsize')
@@ -83,26 +88,26 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
             print('transcript set')
             transcript = tran
         print('getting orfs')
-        orfdf = preporfs(transcript, starts.split(", "), stops.split(", "), minlen, maxlen)
+        orfdf = preporfs(transcript, starts.split(","), stops.split(","), minlen, maxlen)
         exondf = 0
         if exondf == 0:
             exondf = pl.DataFrame()
-        orf_ann_df, exon_df = orfrelativeposition(ann, orfdf, exondf)   
+        orf_ann_df, exon_df = orfrelativeposition(ann, orfdf, exondf)
         orfs, exon = saveorfsandexons(orf_ann_df, exon_df)
         
         print('bigwigtodf')
-        bwtrancoords = bigwigtodf(bigwig, exon)
+        bwtrancoords = scoring(bigwig, exon, orfs)
         bwtrancoords.write_csv("data/files/bw_tran.csv")
 
 
-    elif orfs and exon:
+    elif orfs and exon and bigwig:
         print('orfs and exon')
         print('bigwigtodf')
-        bwtrancoords = bigwigtodf(bigwig, exon)
+        bwtrancoords = scoring(bigwig, exon, orfs, score, sru_range)
         bwtrancoords.write_csv("data/files/bw_tran.csv")
         
         print('scoring and plotting')
-        scoreandplot(orfs, "data/files/bw_tran.csv" ,range_param, sru_range)
+        scoreandplot(orfs, "data/files/bw_tran.csv" ,range_param)
     
     else:
         raise Exception(

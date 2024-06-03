@@ -59,7 +59,7 @@ def scoreandplot(orfs, bwfile, range_param=30, sru_range=12):
     # orf df
     orf_df = pl.read_csv(orfs)
     # bw df
-    bigwig_df = pl.read_csv(bwfile).sort(pl.col("tran_start"))
+    bigwig_df = pl.read_csv(bwfile).sort(pl.col("start"))
     score_col = []
     for row in range(len(orf_df)):
         transcript = orf_df["tran_id"][row]

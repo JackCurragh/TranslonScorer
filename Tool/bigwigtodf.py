@@ -4,30 +4,6 @@ import polars as pl
 import pyBigWig as bw
 
 from scoring import sru_score, calculate_scores
-def checkchromnot(bigwig, annot):
-    """
-    Checks if the chromosome notation in a BigWig file is identical to the notation in an annotation file.
-
-    Parameters:
-    - bigwig (str): Path to the BigWig file.
-    - annot (str): Path to the annotation file.
-
-    Returns:
-    - True if the chromosome notation is identical.
-    
-    Raises:
-    - Exception: if the chromosome notation in the BigWig file is not identical to the notation in the annotation file.
-
-    This function compares the chromosome notation in the BigWig file with the notation in the annotation file.
-    If the notations are identical, it returns True. Otherwise, it raises an exception with an informative error message.
-    """
-    if bigwig == annot:
-        return True
-    else:
-        raise Exception(
-            "Chromosome notation in Bigwig file has to be identical to the notation in the annotation file!"
-        )
-
 
 def transcriptreads(bwfile, exon_df):
     """
@@ -63,6 +39,9 @@ def transcriptreads(bwfile, exon_df):
     for idx, exon in enumerate(exon_pairs):
         if int(exon[0]) == int(exon[1]):
             continue
+        
+        if str(exon_df["chr"][0]) not in bwfile.chroms().keys():
+            continue
         intervals = bwfile.intervals(
             str(exon_df["chr"][0]), int(exon[0]), int(exon[1])
         )
@@ -95,19 +74,20 @@ def oldscoring(df, tran_reads, sru_range, typeorf):
     '''
     docstring
     '''
-    if not typeorf == 'doORF':
+    if typeorf == 'uoORF':
         df = df.with_columns([
             pl.struct(['start'])\
             .apply(lambda x: sru_score(x['start'], tran_reads, sru_range,0))\
             .alias('rise_up')
             ])
-    elif not typeorf == 'uoORF':
+    elif typeorf == 'doORF':
         df = df.with_columns([
             pl.struct(['stop'])\
             .apply(lambda x: sru_score(x['stop'], tran_reads, sru_range,1))\
             .alias('step_down')
             ])
-    df = df.with_columns((
+    else:
+        df = df.with_columns((
         pl.struct(['start', 'stop'])\
         .apply(lambda x: calculate_scores(x['start'], x['stop'], tran_reads))\
         .alias('list_scores')
@@ -127,25 +107,29 @@ def newscoring(df, tran_reads, sru_range, typeorf, scoredict):
     docstring
     '''
     if not typeorf == 'doORF':
-        startvalues = df.get_column('start')\
-                        .unique()
+        if type(df) != type(pl.Series()):
+            startvalues = df.get_column('start')\
+                            .unique()
+        else: startvalues = df
         startscore = startvalues\
                     .map_elements(lambda x: sru_score(x, tran_reads, sru_range,0))\
                     .to_list()
         for i, value in enumerate(startscore):
             scoredict['rise_up'].update({startvalues[i]:startscore[i]})
 
-    elif not typeorf == 'uoORF':
-        stopvalues = df.get_column('stop')\
-                        .unique()
+    if not typeorf == 'uoORF':
+        if type(df) != type(pl.Series()):
+            stopvalues = df.get_column('stop')\
+                           .unique()
+        else: stopvalues = df
         stopscore = stopvalues\
                     .map_elements(lambda x: sru_score(x, tran_reads, sru_range,1))\
                     .to_list()
         for i,value in enumerate(stopscore):
             scoredict['step_down'].update({stopvalues[i]:stopscore[i]})
-    return
+    return scoredict
 
-def globalscores(df, tran_reads):
+def globalscores(df, tran_reads, typeorf):
     '''
     docstring
     '''
@@ -157,23 +141,72 @@ def globalscores(df, tran_reads):
     df = df.with_columns(
         (pl.col('list_scores').apply(lambda x: x[0]).alias('hrf')),
         (pl.col('list_scores').apply(lambda x: x[1]).alias('avg')),
-        (pl.col('list_scores').apply(lambda x: x[2]).alias('nzc')))
+        (pl.col('list_scores').apply(lambda x: x[2]).alias('nzc')))\
+        .select(pl.all().exclude('list_scores'))
+    
+    if typeorf == 'doORF':
+        df = df.with_columns(
+            score=pl.sum_horizontal('step_down','hrf','avg','nzc')
+            ).to_dict(as_series=False)
+    elif typeorf == 'uoORF':
+        df = df.with_columns(
+            score=pl.sum_horizontal('rise_up','hrf','avg','nzc')
+            ).to_dict(as_series=False)
+    else:
+        df = df.with_columns(
+            score=pl.sum_horizontal('rise_up','step_down','hrf','avg','nzc')
+            ).to_dict(as_series=False)
     return df
 
 def existingscore(df, typeorf, scoredict):
     '''
     docstring
     '''
-    start_col = df['start']
-    stop_col = df['stop']
+    if typeorf == 'uoORF':
+        df = df['start'].map_elements(lambda x: x if not x in scoredict['rise_up'] else None).drop_nulls()
+        return df
+    elif typeorf == 'doORF':
+        df = df['stop'].map_elements(lambda x: x if not x in scoredict['step_down'] else None).drop_nulls()
+        return df
+    else:
+        df = df.select(['start', 'stop']).with_columns(
+            (pl.col('start')
+             .apply(lambda x: x if not x in scoredict['rise_up'] else None)
+             .alias('in_ru')),
+            (pl.col('stop')
+             .apply(lambda x: x if not x in scoredict['step_down'] else None)
+             .alias('in_sd'))
+        )
+        df = df.filter((pl.col("in_ru").is_not_null()) | (pl.col("in_sd").is_not_null()))\
+               .select(['start','stop'])
+        return df
+
+def assigningscore(df, scoredict, typeorf):
+    '''
+    docstring
+    '''
+    if typeorf == 'uoORF':
+        df = df.with_columns(
+                (pl.col('start')
+                .apply(lambda x: scoredict['rise_up'][x])
+                .alias('rise_up')))
     
-    # Check if values are in the dictionary
-    start_in_dict = start_col.map_elements(lambda x: x if not x in scoredict['rise_up'])
-    print(start_in_dict)
-    stop_in_dict = stop_col.map_elements(lambda x: x if not x in scoredict['step_down'])
-    print(stop_in_dict)
-    
-    return 
+    elif typeorf == 'doORF':
+        df = df.with_columns(
+                (pl.col('stop')
+                .apply(lambda x: scoredict['step_down'][x])
+                .alias('step_down'))
+                )
+    else:
+        df = df.with_columns(
+                (pl.col('start')
+                .apply(lambda x: scoredict['rise_up'][x])
+                .alias('rise_up')),
+                (pl.col('stop')
+                .apply(lambda x: scoredict['step_down'][x])
+                .alias('step_down'))
+                )
+    return df
 
 def scoring(bigwig, exon, orfs, old_scoring, sru_range):
     '''
@@ -187,7 +220,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
             pl.col('chr').apply(lambda x: x.split('r')[1]))
 
         orf_df = pl.read_csv(orfs, has_header=True, separator=',')
-        
+
         counter=0
         orfscores = []
         for tran in orf_df['tran_id'].unique():
@@ -198,8 +231,11 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
             
             exons = exon_df.filter(pl.col('tran_id') == tran)
             orfs = orf_df.filter(pl.col('tran_id') == tran)
-            tran_reads = transcriptreads(bwfile, exons)
             
+            if exons.is_empty():
+                continue
+            
+            tran_reads = transcriptreads(bwfile, exons)
             if not tran_reads.is_empty():
                 for typeorf in orfs['type'].unique():
                     orfs_filtered = orfs.filter(pl.col('type') == typeorf)
@@ -209,22 +245,15 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
                         orfscores.append(orfs_filtered)
                     else:
                         emptyscore_df = existingscore(orfs_filtered, typeorf, scoredict)
-                        newscoring(emptyscore_df, tran_reads, sru_range, typeorf, scoredict)
+                        if not emptyscore_df.is_empty():
+                            scoredict = newscoring(emptyscore_df, tran_reads, sru_range, typeorf, scoredict)
                         #run one apply to get rise up and step down scores from updated dictionary
-                        orfs_filtered = orfs_filtered.with_columns(
-                            (pl.col('start')
-                             .apply(lambda x: scoredict['rise_up'][x])
-                             .alias('rise_up')),
-                             (pl.col('stop')
-                             .apply(lambda x: scoredict['step_down'][x])
-                             .alias('step_down'))
-                            )
-                        orfs_filtered = globalscores(orfs_filtered, tran_reads)
-                        
+                        orfs_filtered = assigningscore(orfs_filtered, scoredict, typeorf)
+                        orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
+                        orfscores.append(orfs_filtered)
             counter+=1
-        orfscores_df = pl.from_dicts(orfscores).explode('tran_id','start','stop','type',
-            'length','startorf','stoporf','rise_up',
-            'step_down','hrf','avg','nzc','score')
+        orfscores_df = pl.from_dicts(orfscores).explode(pl.all())
         return orfscores_df
+    
     else:
         raise Exception("Must provide a bigwig file to convert")

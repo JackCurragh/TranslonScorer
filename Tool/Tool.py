@@ -11,7 +11,7 @@ from fileprocessor import dftobed, bedtobigwig
 from getcandidates import gettranscripts, preporfs, orfrelativeposition
 from filewriter import saveorfsandexons
 from bigwigtodf import scoring
-from plotting import scoreandplot
+from plotting import plottop10
 
 warnings.filterwarnings('ignore')
 
@@ -33,18 +33,19 @@ def function():
 @click.option("--exon", "-ex", help="Provide a file containing exon positions")
 @click.option("--bedfile", "-bw", help="Provide a Bigwig file to convert")
 @click.option("--orfs", "-of", help="Provide a file containing annotated orfs")
-@click.option("--range_param", "-rp",
+@click.option("--range_param", "-rp", default=30,
              help="Provide an integer that indicates the range in which a plot will be constructed \
                  around the relative start position")
 @click.option("--sru_range", "-sru",default=15, help="Provide an integer that indicates the range for \
              the Start Rise Up score. This sets the amount of nucleotides before and after \
              the stop codon will regarded when calculating")
 @click.option("--offsets", "-ofs", help="Provide a file containing offset parameters")
-@click.option("--score", "-s",default=False, help="Select the scoring algorithm, Default = False (old scoring algorithm)")
+@click.option("--scoretype", "-s",default=False, help="Select the scoring algorithm, Default = False (old scoring algorithm)")
+@click.option("--plotfile", "-pf", help="Provide a '.csv' file containing scored ORFs to use for plotting")
 
 
 def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen, maxlen,
-         exon, orfs, range_param, sru_range, offsets, score):
+         exon, orfs, range_param, sru_range, offsets, scoretype, plotfile):
     """
     docstring
     """
@@ -96,18 +97,28 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
         orfs, exon = saveorfsandexons(orf_ann_df, exon_df)
         
         print('bigwigtodf')
-        bwtrancoords = scoring(bigwig, exon, orfs)
-        bwtrancoords.write_csv("data/files/bw_tran.csv")
+        scoredorfs = scoring(bigwig, exon, orfs, scoretype, sru_range)
+        scoredorfs.write_csv("data/files/orfs_scored.csv")
+        
+        plotfile = "data/files/orfs_scored.csv"
+        print('scoring and plotting')
+        plottop10(plotfile, bigwig, exon, range_param)
 
 
     elif orfs and exon and bigwig:
-        print('orfs and exon')
+        print('Scoring orfs')
         print('bigwigtodf')
-        bwtrancoords = scoring(bigwig, exon, orfs, score, sru_range)
-        bwtrancoords.write_csv("data/files/bw_tran.csv")
+        scoredorfs = scoring(bigwig, exon, orfs, scoretype, sru_range)
+        scoredorfs.write_csv("data/files/orfs_scored.csv")
         
-        print('scoring and plotting')
-        scoreandplot(orfs, "data/files/bw_tran.csv" ,range_param)
+        plotfile = "data/files/orfs_scored.csv"
+
+        print('Start plotting')
+        plottop10(plotfile, bigwig, exon, range_param)
+    
+    elif plotfile and bigwig and exon:
+        print('Start plotting')
+        plottop10(plotfile, bigwig, exon, range_param)
     
     else:
         raise Exception(
@@ -116,29 +127,6 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
                 2. A file containing transcript sequences (.fa) + annotation file (.gtf)\n \
                 3. A file containing annotated ORFS (.csv) + file containg exon information (.csv)"
         )
-
-
-
-############################################################################################################
-    # if folder with BAM files is provided
-    '''elif os.path.isdir(location):
-        list_dir = os.listdir(location)
-        y = []
-        filename = os.path.basename(location)
-        for file in list_dir:
-            bamcheck = file.split(".", 1)
-            if bamcheck[1] == "bam":
-                location = location + "/" + file
-                # read in bam file
-                df = readbam(location)
-                # calculate asite and converting dataframe to BEDGRAPH format
-                asitedf = dftobed(df)
-                y.append(asitedf)
-            else:
-                click.echo("No .bam files found in folder")
-        df_merged = pl.concat(y)
-        df_merged.write_csv(f"{filename}.bedGraph", separator="\t")
-        bedtobigwig(bedfile, chromsize)'''
 
 if __name__ == "__main__":
     function()

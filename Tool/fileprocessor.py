@@ -211,7 +211,7 @@ def dftobed(df, annotation, offsets):
 
     return bed, exon_df, cds_df
 
-def bedtobigwig(bedfile, chromsize):
+def bedtobigwig(bedfile, chromsize, filename):
     """
     Converts a bedGraph file to a bigWig file using the bedGraphToBigWig utility.
 
@@ -229,7 +229,7 @@ def bedtobigwig(bedfile, chromsize):
     Example:
         bedtobigwig("input.bedGraph", "chromsizes.txt")
     """
-    os.system(f"bedGraphToBigWig {bedfile} {chromsize} data/file.bw")
+    os.system(f"bedGraphToBigWig {bedfile} {chromsize} data/{filename}.bw")
 
     return ''
 

@@ -166,4 +166,5 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
             counter = counter + 1
         df = pl.from_dicts(dict_list)
         df = df.sort("tran_id")
+        print('\n')
         return df

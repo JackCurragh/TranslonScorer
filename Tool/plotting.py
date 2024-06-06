@@ -30,31 +30,25 @@ def summaryplot(df, df2):
         ])
 
     figure1 = px.bar(df, x="tran_start", y="counts", color='tran_id')
-    figure2 = px.bar(df2, y='frame', x='start', orientation='h', color='frame')
-    
-    # For as many traces that exist per Express figure, get the traces from each plot and store them in an array.
-    # This is essentially breaking down the Express fig into its traces
-    figure1_traces = []
-    figure2_traces = []
-    for trace in range(len(figure1["data"])):
-        figure1_traces.append(figure1["data"][trace])
-    for trace in range(len(figure2["data"])):
-        ############ The major modification. Manually set 'showlegend' attribute to False. ############
-        figure2["data"][trace]['showlegend'] = False             
-        figure2_traces.append(figure2["data"][trace])
+    figure1.update_xaxes(title_text='Transcript coordinates')
+    figure1.update_yaxes(title_text='Counts')
 
-    # Create a 1x2 subplot
-    this_figure = sp.make_subplots(rows = 2, cols = 1)
-    this_figure.update_layout(height = 1000,
-                              coloraxis_showscale=False)
+    return figure1, fig
 
-    # Get the Express fig broken down as traces and add the traces to the proper plot within the subplot
-    for traces in figure1_traces:
-        this_figure.append_trace(traces, row = 1, col = 1)
-    for traces in figure2_traces:
-        this_figure.append_trace(traces, row = 2, col = 1)
+def pertranscriptplot(df):
+    '''
+    docstring
+    '''
+    pertranlist=[]
+    for tran in df['tran_id'].unique():
+        transcriptdf = df.filter(pl.col('tran_id') == tran)
+        fig = px.bar(transcriptdf.to_pandas(), x="tran_start", y="counts", title=tran)
+        fig.update_xaxes(title_text='Transcript coordinates')
+        fig.update_yaxes(title_text='Counts')
+        fig = fig.to_html(full_html=False)
+        pertranlist.append(fig)
 
-    return this_figure, fig
+    return pertranlist
 
 def metageneplot(df, bwfile, exon_df, range_list):
     '''
@@ -142,15 +136,17 @@ def metageneplot(df, bwfile, exon_df, range_list):
                                       (pl.col('score').round(2)))
     #One plot containing all transcripts present
     transcriptplotdf = pl.from_dicts(tranlist).explode(pl.all())
+    pertranscript = pertranscriptplot(transcriptplotdf)
 
     #barplot for frame
     summary_plot, table = summaryplot(transcriptplotdf, df_type_filtered)
     table = table.to_html(full_html=False)
     summary_plot = summary_plot.to_html(full_html=False)
 
-    return plotlist, summary_plot, table
+    return plotlist, summary_plot, table, pertranscript
 
-def plottop10(df, bigwig, exon, range_param):
+
+def plottop10(df, bigwig, exon, range_param, filename, parameters):
     '''
     docstring
     '''
@@ -162,9 +158,9 @@ def plottop10(df, bigwig, exon, range_param):
             pl.col("start", "stop", "tran_start", "tran_stop").apply(lambda x: x.split(",")),
             pl.col('chr').apply(lambda x: x.split('r')[1]))
     
-    plotlist, tranplot, table = metageneplot(df, bwfile, exon_df, range_list)
+    plotlist, tranplot, table, pertranscript = metageneplot(df, bwfile, exon_df, range_list)
     
-    generate_report(plotlist, tranplot, table)
+    generate_report(plotlist, tranplot, parameters, table, filename, pertranscript)
 
     return
 

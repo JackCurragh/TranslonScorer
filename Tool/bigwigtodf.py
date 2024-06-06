@@ -227,7 +227,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
             scoredict = {'rise_up':{},'step_down':{}}
             
             if counter % 1000 == 0:
-                print(f'{counter} transcripts done', sep='\r')
+                print('\r' + f'{counter} transcripts done', end='')
             
             exons = exon_df.filter(pl.col('tran_id') == tran)
             orfs = orf_df.filter(pl.col('tran_id') == tran)
@@ -252,7 +252,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
                         orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
                         orfscores.append(orfs_filtered)
             counter+=1
-        orfscores_df = pl.from_dicts(orfscores).explode(pl.all())
+        orfscores_df = pl.DataFrame(orfscores)
         return orfscores_df
     
     else:

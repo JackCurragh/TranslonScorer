@@ -5,13 +5,13 @@ import click
 import polars as pl
 import warnings
 
-
 from readfiles import readbam
 from fileprocessor import dftobed, bedtobigwig
 from getcandidates import gettranscripts, preporfs, orfrelativeposition
 from filewriter import saveorfsandexons
 from bigwigtodf import scoring
 from plotting import plottop10
+from report import getparameters
 
 warnings.filterwarnings('ignore')
 
@@ -42,15 +42,18 @@ def function():
 @click.option("--offsets", "-ofs", help="Provide a file containing offset parameters")
 @click.option("--scoretype", "-s",default=False, help="Select the scoring algorithm, Default = False (old scoring algorithm)")
 @click.option("--plotfile", "-pf", help="Provide a '.csv' file containing scored ORFs to use for plotting")
+@click.option("--outfilename", "-ofn", help="Provide a name for the files that are written using this tool")
 
 
 def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen, maxlen,
-         exon, orfs, range_param, sru_range, offsets, scoretype, plotfile):
+         exon, orfs, range_param, sru_range, offsets, scoretype, plotfile, outfilename):
     """
     docstring
     """
+    parameters = getparameters(vars())
+
     if bam or chromsize or bedfile:
-        if bam and chromsize and ann:
+        if bam and chromsize and ann and outfilename:
             print('bam+chromsize')
             #READ IN BAM START
             location = os.getcwd() + "/" + bam
@@ -61,15 +64,15 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
                 # calculate asite + converting to BedGraph
                 beddf, exondf, cds_df = dftobed(df, ann, offsets)
 
-                if not os.path.exists("data/file.bedGraph"):
-                    beddf.write_csv("data/file.bedGraph", separator="\t", include_header=False)
+                if not os.path.exists(f"data/{outfilename}.bedGraph"):
+                    beddf.write_csv(f"data/{outfilename}.bedGraph", separator="\t", include_header=False)
 
                     # Converting Bedgrapgh to Bigwig format
-                bigwig = bedtobigwig('data/file.bedGraph', chromsize)
+                bigwig = bedtobigwig(f'data/{outfilename}.bedGraph', chromsize, outfilename)
 
-        elif bedfile and chromsize:
+        elif bedfile and chromsize and outfilename:
             print('bedfile, chromsize')
-            bigwig = bedtobigwig(bedfile, chromsize)
+            bigwig = bedtobigwig(bedfile, chromsize, outfilename)
 
         elif bigwig:
             print('bigwig')
@@ -77,15 +80,15 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
             "Must provide valuable input. The options are the following:\n \
                 1. Bam file (.bam) + file containing chromosome information\n \
                 2. BedGraph (.bedGraph) file + file containing chromosome information\n \
-                3. Bigwig (.bw) file"
+                3. Bigwig (.bw) file \n" \
+                "Please do not forget to always provide a filename for any files that may be written during the process"
             )
         
-    #ORFPREP START
     if seq or tran:
-        if seq and ann:
+        if seq and ann and outfilename:
             print('getting transcript')
             transcript = gettranscripts(seq, ann)
-        elif tran and ann:
+        elif tran and ann and outfilename:
             print('transcript set')
             transcript = tran
         print('getting orfs')
@@ -94,38 +97,41 @@ def tool(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, stops, minlen,
         if exondf == 0:
             exondf = pl.DataFrame()
         orf_ann_df, exon_df = orfrelativeposition(ann, orfdf, exondf)
-        orfs, exon = saveorfsandexons(orf_ann_df, exon_df)
+        orfs, exon = saveorfsandexons(orf_ann_df, exon_df, outfilename)
         
+        if not bigwig:
+            bigwig = f'data/{outfilename}.bw'
         print('bigwigtodf')
         scoredorfs = scoring(bigwig, exon, orfs, scoretype, sru_range)
-        scoredorfs.write_csv("data/files/orfs_scored.csv")
+        scoredorfs.write_csv(f"data/files/{outfilename}_orfs_scored.csv")
         
-        plotfile = "data/files/orfs_scored.csv"
+        plotfile = f"data/files/{outfilename}_orfs_scored.csv"
         print('scoring and plotting')
-        plottop10(plotfile, bigwig, exon, range_param)
+        plottop10(plotfile, bigwig, exon, range_param, outfilename, parameters)
 
 
-    elif orfs and exon and bigwig:
+    elif orfs and exon and bigwig and outfilename:
         print('Scoring orfs')
         print('bigwigtodf')
         scoredorfs = scoring(bigwig, exon, orfs, scoretype, sru_range)
-        scoredorfs.write_csv("data/files/orfs_scored.csv")
+        scoredorfs.write_csv(f"data/files/{outfilename}_orfs_scored.csv")
         
-        plotfile = "data/files/orfs_scored.csv"
+        plotfile = f"data/files/{outfilename}_orfs_scored.csv"
 
         print('Start plotting')
-        plottop10(plotfile, bigwig, exon, range_param)
+        plottop10(plotfile, bigwig, exon, range_param, outfilename, parameters)
     
-    elif plotfile and bigwig and exon:
+    elif plotfile and bigwig and exon and outfilename:
         print('Start plotting')
-        plottop10(plotfile, bigwig, exon, range_param)
+        plottop10(plotfile, bigwig, exon, range_param, outfilename, parameters)
     
     else:
         raise Exception(
             "Must provide valuable for ORFS. The options are the following:\n \
                 1. A file containing FASTA sequences (.fa) + annotation file (.gtf)\n \
                 2. A file containing transcript sequences (.fa) + annotation file (.gtf)\n \
-                3. A file containing annotated ORFS (.csv) + file containg exon information (.csv)"
+                3. A file containing annotated ORFS (.csv) + file containg exon information (.csv)\n" \
+                "Please do not forget to always provide a filename for any files that may be written during the process"
         )
 
 if __name__ == "__main__":

@@ -4,10 +4,6 @@ body {
 h1, h2, h3 {
     color: #333;
 }
-.plot-container {
-    margin-bottom: 0px;
-
-}
 .footer {
     margin-top: 40px;
     font-size: 0.9em;
@@ -20,17 +16,38 @@ h1{
 h2{
     margin-left: 2em;
 }
-.orftable p#orftable{
+p{
     margin-left: 5em;
     width: 30em;
 }
 .main{
     margin-top: 5em;
 }
+table{
+    font-family: Arial, Helvetica, sans-serif;
+    border-collapse: collapse;
+    border-color: black;
+    border-width: 2px;
+}
+  
+td{
+    border: 1px solid #ddd;
+    padding: 8px;
+}
+  
+tr:nth-child(even){background-color: #f2f2f2;}
+  
+tr:hover {background-color: #ddd;}
+.parameters{
+    margin-left: 4em;
+    margin-bottom: 2em;
+}
+
 .metageneplot{
     width: 45%;
     display: inline-block;
     margin-left: 4em;
+    z-index: 1;
 }
 .header {
     overflow: hidden;
@@ -38,8 +55,13 @@ h2{
     position: fixed; /* Set the navbar to fixed position */
     top: 0; /* Position the navbar at the top of the page */
     width: 100%;
-    margin-left: -5px;
-  }
+    margin-left: -10px;
+    z-index: 1000;
+}
+
+div#summary{
+    z-index: 1;
+}
   /* Style the header links */
 .header a {
     float: left;
@@ -54,9 +76,15 @@ h2{
 }
 .metagene_header{
     display: inline-block;
-    margin-left: 30em;
 }
-
+div#start{
+    position: relative;
+    left: 24%;
+}
+div#stop{
+    position: relative;
+    left: 69%;
+}
   /* Style the logo link (notice that we set the same value of line-height and font-size to prevent the header to increase when the font gets bigger */
 .header img.logo {
     width: 8em;
@@ -87,3 +115,21 @@ h2{
       float: none;
     }
 }
+.tab-pane{
+    margin-top: 2em;
+}
+.tabs{
+    margin-left: 4px;
+}
+.nav-link {
+    transition-duration: 0.4s;
+    color: #666;
+}
+.nav-link:hover {
+    color: black;
+
+}
+.transcript{
+    width: 100%;
+}
+i{margin-left: 4em;}

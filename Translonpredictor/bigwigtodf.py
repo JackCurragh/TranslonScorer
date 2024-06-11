@@ -189,13 +189,17 @@ def assigningscore(df, scoredict, typeorf):
         df = df.with_columns(
                 (pl.col('start')
                 .apply(lambda x: scoredict['rise_up'][x])
-                .alias('rise_up')))
+                .alias('rise_up')),
+                (pl.lit(0.0)
+                 .alias('step_down')))
     
     elif typeorf == 'doORF':
         df = df.with_columns(
                 (pl.col('stop')
                 .apply(lambda x: scoredict['step_down'][x])
-                .alias('step_down'))
+                .alias('step_down')),
+                (pl.lit(0.0)
+                 .alias('rise_up'))
                 )
     else:
         df = df.with_columns(
@@ -252,8 +256,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
                         orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
                         orfscores.append(orfs_filtered)
             counter+=1
-        orfscores_df = pl.DataFrame(orfscores)
-        print(orfscores_df)
+        orfscores_df = pl.from_dicts(orfscores).explode(pl.all())
         return orfscores_df
     
     else:

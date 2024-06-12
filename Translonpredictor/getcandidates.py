@@ -82,9 +82,10 @@ def orfrelativeposition(annotation, df, cds_df):
         orf_df, exon_coords = orfrelativeposition("annotation.gff", orf_df)
     '''
     orflist=[]
-
-    cds_df, exon_coords = getexons_and_cds(annotation, list(df["tran_id"].unique()))
-    print('typing ORFS')
+    if not 'cdsdf' in globals():
+        cds_df, exon_coords = getexons_and_cds(annotation, list(df["tran_id"].unique()))
+    
+    print('Typing ORFS')
     tranids = list(cds_df['tran_id'].unique())
     #TYPING ORFS
     codingorfs = df.with_columns(shared=pl.col('tran_id').is_in(tranids))\
@@ -112,8 +113,6 @@ def orfrelativeposition(annotation, df, cds_df):
     
     cdslist = df.filter(pl.col('type') == 'CDS')
     cdslist = list(cdslist['tran_id'].unique())
-    
-    print('done typing')
     
     return df, exon_coords
 

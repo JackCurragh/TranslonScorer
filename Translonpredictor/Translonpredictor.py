@@ -63,7 +63,7 @@ def translonpredictor(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, s
                 df = readbam(location)
                 # calculate asite + converting to BedGraph
                 print('Calculating and applying offsets')
-                beddf, exondf, cds_df = dftobed(df, ann, offsets)
+                beddf, exondf, cdsdf = dftobed(df, ann, offsets)
                 print('Writing bed file')
                 if not os.path.exists(f"data/{outfilename}.bedGraph"):
                     beddf.write_csv(f"data/{outfilename}.bedGraph", separator="\t", include_header=False)
@@ -94,10 +94,8 @@ def translonpredictor(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, s
             transcript = tran
         print('Getting candidate ORFs')
         orfdf = preporfs(transcript, starts.split(","), stops.split(","), minlen, maxlen)
-        exondf = 0
-        if exondf == 0:
-            exondf = pl.DataFrame()
-        orf_ann_df, exon_df = orfrelativeposition(ann, orfdf, exondf)
+    
+        orf_ann_df, exon_df = orfrelativeposition(ann, orfdf, cdsdf)
         orfs, exon = saveorfsandexons(orf_ann_df, exon_df, outfilename)
         
         if not bigwig:

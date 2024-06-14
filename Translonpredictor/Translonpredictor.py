@@ -64,7 +64,7 @@ def translonpredictor(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, s
                 # calculate asite + converting to BedGraph
                 print('Calculating and applying offsets')
                 beddf, exondf, cdsdf = dftobed(df, ann, offsets)
-                print('Writing bed file')
+                print('Writing bedGraph file')
                 if not os.path.exists(f"data/{outfilename}.bedGraph"):
                     beddf.write_csv(f"data/{outfilename}.bedGraph", separator="\t", include_header=False)
 

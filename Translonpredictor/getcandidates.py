@@ -158,12 +158,11 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
             startautomaton = create_automaton(starts)
             stopautomaton = create_automaton(stops)
             if counter % 20000 == 0:
-                print("\r" + f"read {counter} Transcripts", end='')
+                print("\r" + f"Read {counter} transcripts", end='')
             tran_id = str(record.id).split("|")[0]
             append_list = find_orfs(str(record.seq), tran_id, startautomaton, stopautomaton, minlength, maxlength)
             dict_list.extend(append_list)
             counter = counter + 1
         df = pl.from_dicts(dict_list)
         df = df.sort("tran_id")
-        print('\n')
         return df

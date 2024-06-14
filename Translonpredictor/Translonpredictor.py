@@ -54,7 +54,7 @@ def translonpredictor(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, s
 
     if bam or chromsize or bedfile:
         if bam and chromsize and ann and outfilename:
-            print('bam+chromsize')
+            print('Processing BAM file')
             #READ IN BAM START
             location = os.getcwd() + "/" + bam
             # if file is provided
@@ -62,20 +62,22 @@ def translonpredictor(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, s
                 # read in bam file
                 df = readbam(location)
                 # calculate asite + converting to BedGraph
-                beddf, exondf, cds_df = dftobed(df, ann, offsets)
-
+                print('Calculating and applying offsets')
+                beddf, exondf, cdsdf = dftobed(df, ann, offsets)
+                print('Writing bedGraph file')
                 if not os.path.exists(f"data/{outfilename}.bedGraph"):
                     beddf.write_csv(f"data/{outfilename}.bedGraph", separator="\t", include_header=False)
 
                     # Converting Bedgrapgh to Bigwig format
+                print('Writing bigwig file')
                 bigwig = bedtobigwig(f'data/{outfilename}.bedGraph', chromsize, outfilename)
 
         elif bedfile and chromsize and outfilename:
-            print('bedfile, chromsize')
+            print('Writing bigwig file')
             bigwig = bedtobigwig(bedfile, chromsize, outfilename)
 
         elif bigwig:
-            print('bigwig')
+            pass
         else: raise Exception(
             "Must provide valuable input. The options are the following:\n \
                 1. Bam file (.bam) + file containing chromosome information\n \
@@ -86,43 +88,39 @@ def translonpredictor(bam, bedfile, chromsize, bigwig, seq, tran, ann, starts, s
         
     if seq or tran:
         if seq and ann and outfilename:
-            print('getting transcript')
+            print('Extracting transcripts')
             transcript = gettranscripts(seq, ann, outfilename)
         elif tran and ann and outfilename:
-            print('transcript set')
             transcript = tran
-        print('getting orfs')
+        print('Getting candidate ORFs')
         orfdf = preporfs(transcript, starts.split(","), stops.split(","), minlen, maxlen)
-        exondf = 0
-        if exondf == 0:
-            exondf = pl.DataFrame()
-        orf_ann_df, exon_df = orfrelativeposition(ann, orfdf, exondf)
+    
+        orf_ann_df, exon_df = orfrelativeposition(ann, orfdf, cdsdf)
         orfs, exon = saveorfsandexons(orf_ann_df, exon_df, outfilename)
         
         if not bigwig:
             bigwig = f'data/{outfilename}.bw'
-        print('bigwigtodf')
+        print('Scoring ORFs')
         scoredorfs = scoring(bigwig, exon, orfs, scoretype, sru_range)
         scoredorfs.write_csv(f"data/files/{outfilename}_orfs_scored.csv")
         
         plotfile = f"data/files/{outfilename}_orfs_scored.csv"
-        print('scoring and plotting')
+        print('Generating report')
         plottop10(plotfile, bigwig, exon, range_param, outfilename, parameters)
 
 
     elif orfs and exon and bigwig and outfilename:
         print('Scoring orfs')
-        print('bigwigtodf')
         scoredorfs = scoring(bigwig, exon, orfs, scoretype, sru_range)
         scoredorfs.write_csv(f"data/files/{outfilename}_orfs_scored.csv")
         
         plotfile = f"data/files/{outfilename}_orfs_scored.csv"
 
-        print('Start plotting')
+        print('Generating report')
         plottop10(plotfile, bigwig, exon, range_param, outfilename, parameters)
     
     elif plotfile and bigwig and exon and outfilename:
-        print('Start plotting')
+        print('Generating report')
         plottop10(plotfile, bigwig, exon, range_param, outfilename, parameters)
     
     else:

@@ -13,7 +13,7 @@ def generate_report(plotlist,tranplot, parameters,
     docstring
     '''
 
-    env = Environment(loader=FileSystemLoader('Tool'))
+    env = Environment(loader=FileSystemLoader('Translonpredictor'))
     template = env.get_template('report.html')
     report = template.render(
         plotlist=plotlist,

@@ -216,18 +216,19 @@ def bedtobigwig(bedfile, chromsize, filename):
     Converts a bedGraph file to a bigWig file using the bedGraphToBigWig utility.
 
     Parameters:
-        file (str): The path to the input bedGraph file.
+        bedfile (str): The path to the input bedGraph file.
         chromsize (str): The path to the chromosome sizes file.
+        filename (str): The name for the generated file.
 
     Returns:
         None
 
     Notes:
-        - The output bigWig file will be named 'file.bw' and will be created in the same directory as the input file.
+        - The output bigWig file will be named 'filename.bw' and will be created in the same directory as the input file.
         - Requires the bedGraphToBigWig utility to be installed and accessible in the system path.
 
     Example:
-        bedtobigwig("input.bedGraph", "chromsizes.txt")
+        bedtobigwig("input.bedGraph", "chromsizes.txt", "filename")
     """
     os.system(f"bedGraphToBigWig {bedfile} {chromsize} data/{filename}.bw")
 

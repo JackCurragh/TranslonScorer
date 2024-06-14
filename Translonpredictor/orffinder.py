@@ -47,7 +47,17 @@ def find_orfs(
             else:
                 stopposition = len(sequence)
                 stopcodon = sequence[-3:]
-            orf_data= {
+            if stopcodon != 'TAA' or stopcodon != 'TAG' or stopcodon != 'TGA':
+                orf_data= {
+                "tran_id":tran_id,
+                "start":position-2,
+                "stop": stopposition,
+                "length":stopposition - position,
+                "startorf":start_codons[position],
+                "stoporf": stopcodon
+                }
+            else:
+                orf_data= {
                 "tran_id":tran_id,
                 "start":position-2,
                 "stop": stopposition-3,

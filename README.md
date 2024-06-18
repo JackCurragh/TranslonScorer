@@ -9,7 +9,7 @@
 To use this tool, you need to have Python and the necessary dependencies installed. Install the required packages using `pip`:
 
 ```sh
-pip install Translonpredictor
+pip install Translonpredictor@git+https://github.com/JackCurragh/Translonpredictor#egg=TRANSLONPREDICTOR
 ```
 ## Usage
 The tool is invoked using the `translonpredictor` command. Below are the options and their descriptions:

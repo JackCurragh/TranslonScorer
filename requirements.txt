@@ -29,7 +29,7 @@ mypy-extensions==1.0.0
 natsort==8.4.0
 ncls==0.0.68
 nest-asyncio==1.6.0
-numpy @ file:///home/conda/feedstock_root/build_artifacts/numpy_1707225359967/work/dist/numpy-1.26.4-cp312-cp312-linux_x86_64.whl#sha256=031b7d6b2e5e604d9e21fc21be713ebf28ce133ec872dce6de006742d5e49bab
+numpy==1.26.4
 orfipy==0.0.4
 oxbow==0.3.1
 packaging==24.0

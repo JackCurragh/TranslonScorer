@@ -15,13 +15,7 @@ from .report import getparameters
 
 warnings.filterwarnings("ignore")
 
-
-@click.group()
-def function():
-    pass
-
-
-@function.command()
+@click.command()
 @click.option("--bam", "-b", help="Provide a bam file")
 @click.option(
     "--chromsize", "-c", help="Provide a file containing the chromosome sizes"
@@ -228,4 +222,4 @@ def translonpredictor(
 
 
 if __name__ == "__main__":
-    function()
+    translonpredictor()

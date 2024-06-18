@@ -1,5 +1,31 @@
 
 def find_all_positions(sequence, automaton):
+    '''
+    Find positions of all occurrences of patterns from an Aho-Corasick automaton in a given sequence.
+
+    Parameters:
+    - sequence (str): The input sequence (e.g., DNA or RNA sequence) to search for patterns.
+    - automaton (ahocorasick.Automaton): An Aho-Corasick automaton containing patterns to search for.
+
+    Returns:
+    - tuple: A tuple containing:
+        - dict: A dictionary where keys are frame indices (0, 1, 2) representing reading frames 
+                and values are lists of positions where patterns were found in the sequence.
+        - dict: A dictionary where keys are positions in the sequence where patterns were found 
+                and values are the corresponding codons identified by the automaton.
+
+    This function uses an Aho-Corasick automaton (`automaton`) to efficiently search for multiple 
+    patterns (codons) within the given `sequence`. It iterates over matches found by the automaton 
+    and organizes them into reading frames (0, 1, 2) based on their position in the sequence.
+
+    The function returns two dictionaries:
+    - `frames`: Contains lists of positions (0-based) in the sequence for each reading frame 
+                where patterns were found.
+    - `codons`: Maps positions in the sequence to the specific codons identified by the automaton.
+
+    Note: This function assumes the use of the `ahocorasick` library, which provides an efficient 
+    implementation of the Aho-Corasick algorithm for pattern matching.
+    '''
     frames = {0:[], 1:[], 2:[]}
     codons = {}
     for i, (order, codon) in automaton.iter(sequence):
@@ -16,24 +42,40 @@ def find_orfs(
     minlength=0,
     maxlength=1000000
 ):
-    """
-    Finds Open Reading Frames (ORFs) within a given sequence based on specified start and stop codons.
+    '''
+    Predict Open Reading Frames (ORFs) in a given nucleotide sequence using start and stop codon patterns.
 
     Parameters:
-    - sequence (str): Input DNA sequence to search for ORFs.
-    - start_codons (list): List of start codons to identify the start of an ORF. Default is ["ATG"].
-    - stop_codons (list): List of stop codons to identify the end of an ORF. Default is ["TAA", "TAG", "TGA"].
-    - minlength (int): Minimum length of ORF to be considered. Default is 0.
-    - maxlength (int): Maximum length of ORF to be considered. Default is 1000000.
+    - sequence (str): Nucleotide sequence (e.g., DNA or RNA) in which ORFs will be predicted.
+    - tran_id (str): Identifier for the transcript sequence.
+    - startautomaton (ahocorasick.Automaton): A pre-built Aho-Corasick automaton for start codons (e.g., 'ATG').
+    - stopautomaton (ahocorasick.Automaton): A pre-built Aho-Corasick automaton for stop codons (e.g., 'TAA').
+    - minlength (int, optional): Minimum length threshold for predicted ORFs. Defaults to 0.
+    - maxlength (int, optional): Maximum length threshold for predicted ORFs. Defaults to 1000000 (1 million).
 
     Returns:
-    - orfs (list): List of tuples containing the start position, end position, length, and the sequence of each identified ORF.
+    - list: A list of dictionaries, where each dictionary represents an ORF with the following keys:
+        - "tran_id": Identifier of the transcript sequence.
+        - "start": Start position of the ORF in 0-based indexing.
+        - "stop": Stop position of the ORF in 0-based indexing.
+        - "length": Length of the ORF.
+        - "startorf": Start codon sequence.
+        - "stoporf": Stop codon sequence.
 
-    This function searches for Open Reading Frames (ORFs) within the given DNA sequence. It iterates over the sequence
-    and looks for start and stop codons to identify potential ORFs. The identified ORFs are stored as tuples
-    containing the start position, end position, length, and the corresponding sequence. ORFs that meet the specified
-    length constraints are included in the output list.
-    """
+    This function identifies potential ORFs in the provided `sequence` by searching for start and stop codon 
+    patterns using pre-built Aho-Corasick automata (`startautomaton` and `stopautomaton`). For each identified 
+    start codon, it searches for a valid stop codon downstream and calculates the ORF properties.
+
+    ORFs are represented as dictionaries containing information such as transcript ID (`tran_id`), start and 
+    stop positions (adjusted for frame), ORF length, and the sequences of start and stop codons (`startorf` 
+    and `stoporf`).
+
+    ORFs are filtered based on user-defined `minlength` and `maxlength` thresholds before being added to the 
+    `orf_list`, which is returned as the output.
+
+    Note: This function assumes the use of the `ahocorasick` library for efficient pattern matching 
+    with Aho-Corasick automata.
+    '''
     orf_list=[]
     startpositions, start_codons = find_all_positions(sequence, startautomaton)
     stoppositions, stop_codons = find_all_positions(sequence, stopautomaton)

@@ -33,7 +33,7 @@ setup(
     description="A python command-line utility for translon prediction",
     entry_points={
         "console_scripts": [
-            "Translonpredictor=Translonpredictor:translonpredictor",
+            "Translonpredictor=Translonpredictor:function",
         ],
     },
     install_requires=requirements,

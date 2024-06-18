@@ -3,7 +3,7 @@
 import polars as pl
 import pyBigWig as bw
 
-from scoring import sru_score, calculate_scores
+from .scoring import sru_score, calculate_scores
 
 
 def transcriptreads(bwfile, exon_df):

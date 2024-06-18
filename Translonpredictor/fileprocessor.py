@@ -3,7 +3,7 @@
 import polars as pl
 import os
 
-from findexonscds import getexons_and_cds
+from .findexonscds import getexons_and_cds
 
 
 def get_bam_tran(bam_df, exon_df):

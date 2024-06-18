@@ -1,7 +1,8 @@
 from jinja2 import Environment, FileSystemLoader
 
+
 def getparameters(vardict):
-    '''
+    """
     Filter out None values from a dictionary and return a new dictionary with only non-None values.
 
     Parameters:
@@ -10,8 +11,8 @@ def getparameters(vardict):
     Returns:
     - paramdict (dict): A filtered dictionary containing only key-value pairs from `vardict` where the value is not None.
 
-    This function iterates through each key-value pair in `vardict`. If the value associated with a key is not None, it 
-    adds that key-value pair to a new dictionary `paramdict`. Finally, it returns `paramdict` containing only non-None 
+    This function iterates through each key-value pair in `vardict`. If the value associated with a key is not None, it
+    adds that key-value pair to a new dictionary `paramdict`. Finally, it returns `paramdict` containing only non-None
     values from `vardict`.
 
     Example:
@@ -19,18 +20,25 @@ def getparameters(vardict):
     >>> getparameters(vardict)
     {'param1': 100, 'param3': 'value'}
 
-    Note: This function is useful for extracting valid parameters from a larger dictionary, especially when dealing with 
+    Note: This function is useful for extracting valid parameters from a larger dictionary, especially when dealing with
     optional parameters that may have default None values.
-    '''
-    paramdict={}
-    for key,val in vardict.items():
+    """
+    paramdict = {}
+    for key, val in vardict.items():
         if not val is None:
-            paramdict[key]=val
+            paramdict[key] = val
     return paramdict
 
-def generate_report(plotlist,tranplot, parameters,
-                    table, filename, pertranscript,):
-    '''
+
+def generate_report(
+    plotlist,
+    tranplot,
+    parameters,
+    table,
+    filename,
+    pertranscript,
+):
+    """
     Generate an HTML report using a template, incorporating various plots, tables, and parameters.
 
     Parameters:
@@ -67,20 +75,20 @@ def generate_report(plotlist,tranplot, parameters,
     >>> pertranscript = ['<div>Transcript-specific plot 1</div>', '<div>Transcript-specific plot 2</div>']
     >>> generate_report(plotlist, tranplot, parameters, table, 'output', pertranscript)
 
-    This function assumes familiarity with the Jinja2 templating syntax and requires the 'report.html' template to be 
+    This function assumes familiarity with the Jinja2 templating syntax and requires the 'report.html' template to be
     correctly structured to accept the provided components.
-    '''
-    env = Environment(loader=FileSystemLoader('Translonpredictor'))
-    template = env.get_template('report.html')
+    """
+    env = Environment(loader=FileSystemLoader("Translonpredictor"))
+    template = env.get_template("report.html")
     report = template.render(
         plotlist=plotlist,
         tranplot=tranplot,
         table=table,
         filename=filename,
         tranplotlist=pertranscript,
-        parameters=parameters
-        )
-    #to save the results
+        parameters=parameters,
+    )
+    # to save the results
     with open(f"report_{filename}.html", "w") as fh:
         fh.write(report)
     return

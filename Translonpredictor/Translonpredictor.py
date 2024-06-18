@@ -5,13 +5,13 @@ import click
 import polars as pl
 import warnings
 
-from readfiles import readbam
-from fileprocessor import dftobed, bedtobigwig
-from getcandidates import gettranscripts, preporfs, orfrelativeposition
-from filewriter import saveorfsandexons
-from bigwigtodf import scoring
-from plotting import plottop10
-from report import getparameters
+from .readfiles import readbam
+from .fileprocessor import dftobed, bedtobigwig
+from .getcandidates import gettranscripts, preporfs, orfrelativeposition
+from .filewriter import saveorfsandexons
+from .bigwigtodf import scoring
+from .plotting import plottop10
+from .report import getparameters
 
 warnings.filterwarnings("ignore")
 

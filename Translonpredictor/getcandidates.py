@@ -3,8 +3,8 @@ import pyranges as pr
 import polars as pl
 import ahocorasick
 
-from orffinder import find_orfs
-from findexonscds import getexons_and_cds
+from .orffinder import find_orfs
+from .findexonscds import getexons_and_cds
 
 
 def gettranscripts(seq, annotation, outfilename):

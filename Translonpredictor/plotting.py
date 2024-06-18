@@ -6,8 +6,8 @@ import plotly.subplots as sp
 import pyBigWig as bw
 import plotly.graph_objects as go
 
-from bigwigtodf import transcriptreads
-from report import generate_report
+from .bigwigtodf import transcriptreads
+from .report import generate_report
 
 
 def pertranscriptplot(df, exon_df, bwfile):

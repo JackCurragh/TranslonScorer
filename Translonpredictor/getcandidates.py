@@ -30,14 +30,42 @@ def gettranscripts(seq, annotation, outfilename):
     ann = pr.read_gtf(annotation, ignore_bad=True)
     transcripts = ann[ann.Feature == 'exon']
     tran_seq = transcripts.get_transcript_sequence(transcript_id='transcript_id', path=seq)
-    with open(f'data/{outfilename}_transcripts.fa', 'w') as fw:
+    with open(f'{outfilename}_transcripts.fa', 'w') as fw:
         for index, id, seq in tran_seq.itertuples():
             fw.write(f'>{id}\n{seq}\n')
             
-    return f'data/{outfilename}_transcripts.fa'
+    return f'{outfilename}_transcripts.fa'
 
 def classify_orf(row):
-    
+    '''
+    Classify an ORF (Open Reading Frame) based on its relative position to transcript start and stop sites.
+
+    Parameters:
+    - row (Series or dict-like): A Pandas Series or dictionary-like object containing ORF information,
+                                including 'start', 'stop', 'tran_start', and 'tran_stop' values.
+
+    Returns:
+    - str: A string indicating the classification of the ORF based on its relative position:
+           - "uORF": Upstream ORF (stop < tran_start)
+           - "CDS": Coding Sequence (start == tran_start and stop == tran_stop)
+           - "dORF": Downstream ORF (start > tran_stop)
+           - "uoORF": Upstream Overlapping ORF (start < tran_start and stop >= tran_start)
+           - "doORF": Downstream Overlapping ORF (start <= tran_stop and stop > tran_stop)
+           - "iORF": Internal ORF (start >= tran_start and stop <= tran_stop)
+           - "eoORF": Encapsulated Overlapping ORF (start < tran_start and stop > tran_stop)
+           - "extORF": Extended ORF (start < tran_start and stop == tran_stop)
+           - "Unexpected": Indicates unexpected conditions where none of the above criteria are met.
+
+    This function categorizes an ORF based on its positional relationship with the transcript start (`tran_start`) 
+    and stop (`tran_stop`) sites. It evaluates the relative positions of 'start' and 'stop' compared to 
+    'tran_start' and 'tran_stop' to determine the appropriate classification.
+
+    If the relative position does not match any expected categories, an "Unexpected" classification is printed 
+    with the values of 'start', 'stop', 'tran_start', and 'tran_stop', and "Unexpected" is returned.
+
+    Note: This function assumes the input `row` contains numerical values for 'start', 'stop', 'tran_start', 
+    and 'tran_stop', typically retrieved from a Pandas DataFrame or similar data structure.
+    '''
     if row['stop'] < row['tran_start']:
         return "uORF"
     elif row['start'] == row['tran_start'] and row['stop'] == row['tran_stop']:
@@ -118,6 +146,26 @@ def orfrelativeposition(annotation, df, cds_df):
 
 
 def create_automaton(codons):
+    '''
+    Create an Aho-Corasick automaton for efficient substring search.
+
+    Parameters:
+    - codons (list): A list of strings representing codons to be added to the automaton.
+
+    Returns:
+    - ahocorasick.Automaton: An Aho-Corasick automaton initialized with the provided codons.
+
+    This function initializes an Aho-Corasick automaton, a data structure used for efficient 
+    substring matching. It adds each codon from the `codons` list to the automaton and assigns 
+    each codon a unique index and key. After adding all codons, the automaton is finalized with 
+    `make_automaton()`.
+
+    The resulting `automaton` object is returned, which can be used to quickly search for any 
+    of the added codons within a given text or sequence.
+
+    Note: This function assumes the use of the `ahocorasick` library, which provides an efficient 
+    implementation of the Aho-Corasick algorithm for pattern matching.
+    '''
     automaton = ahocorasick.Automaton()
 
     for idx, key in enumerate(codons):
@@ -126,30 +174,42 @@ def create_automaton(codons):
     return automaton
 
 def preporfs(transcript, starts, stops, minlength, maxlength):
-    """
-    Extracts potential ORFs (Open Reading Frames) from transcript sequences.
-
-    This function reads transcript sequences from a FASTA file, identifies potential
-    ORFs within the sequences based on start and stop codons, and returns a DataFrame
-    containing information about the identified ORFs.
+    '''
+    Predict ORFs (Open Reading Frames) from transcript sequences using start and stop codon patterns.
 
     Parameters:
-        transcript (str): Path to the FASTA file containing transcript sequences.
-        starts (list): List of start codons to search for (e.g., ['ATG']).
-        stops (list): List of stop codons to search for (e.g., ['TAA', 'TAG', 'TGA']).
-        minlength (int): Minimum length of ORFs to consider.
-        maxlength (int): Maximum length of ORFs to consider.
+    - transcript (str): Path to a FASTA file containing transcript sequences.
+    - starts (list): List of strings representing start codon patterns (e.g., ['ATG', 'GTG', 'TTG']).
+    - stops (list): List of strings representing stop codon patterns (e.g., ['TAA', 'TAG', 'TGA']).
+    - minlength (int): Minimum length threshold for predicted ORFs.
+    - maxlength (int): Maximum length threshold for predicted ORFs.
 
     Returns:
-        polars.DataFrame: DataFrame containing information about identified ORFs.
-                          It has columns 'tran_id', 'pos', 'end', 'length', 'startorf',
-                          and 'stoporf', indicating transcript ID, start position, end
-                          position, length, start codon, and stop codon of each ORF respectively.
+    - DataFrame: A Pandas DataFrame containing predicted ORFs for each transcript sequence.
 
-    Example:
-        orf_df = preporfs("transcripts.fasta", ['ATG'], ['TAA', 'TAG', 'TGA'], 50, 500)
-    """
-    
+    This function reads transcript sequences from the provided FASTA file (`transcript`). For each 
+    transcript sequence, it creates Aho-Corasick automata (`startautomaton` and `stopautomaton`) 
+    using the provided lists of start and stop codon patterns (`starts` and `stops`).
+
+    It iterates through each transcript sequence, identifies ORFs using the `find_orfs` function, 
+    and appends the results to `dict_list`. After processing all transcripts, `dict_list` is converted 
+    to a Pandas DataFrame (`df`) where each dictionary represents a row of ORF predictions.
+
+    The DataFrame `df` is sorted by `tran_id` and returned as the final output.
+
+    Note: This function assumes the use of the Biopython library (`SeqIO` for parsing FASTA files) 
+    and a custom function `find_orfs` for ORF prediction based on Aho-Corasick automata.
+
+    Example usage:
+    ```python
+    transcript = 'transcript.fasta'
+    starts = ['ATG', 'GTG', 'TTG']
+    stops = ['TAA', 'TAG', 'TGA']
+    minlength = 50
+    maxlength = 5000
+    predicted_orfs = preporfs(transcript, starts, stops, minlength, maxlength)
+    ```
+    '''
     dict_list=[]
     # COUNTER!!!!!!!!!!
     counter = 0
@@ -165,4 +225,5 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
             counter = counter + 1
         df = pl.from_dicts(dict_list)
         df = df.sort("tran_id")
+        print('\n')
         return df

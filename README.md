@@ -2,7 +2,7 @@
 
 ## Overview
 
-`translonpredictor` is a command-line tool for processing various genomic data files, calculating offsets, extracting transcripts, and scoring ORFs. It supports multiple input file formats and generates output files in several formats including `.bedGraph`, `.bw`, and `.csv`.
+`translonpredictor` is a command-line tool for translon calling. The process consists of processing BAM files, extracting and scoring ORFs from transcript sequences based on the annotation and codons provided. It supports multiple input file formats and generates output files in several formats including `.bedGraph`, `.bw`, `.html`, and `.csv`.
 
 ## Installation
 
@@ -46,17 +46,15 @@ To process a BAM file and generate the necessary outputs:
 ```sh
 translonpredictor --bam example.bam --chromsize chrom.sizes --ann annotations.gtf --outfilename output_name
 ```
-### Extracting Transcripts and Scoring ORFs
-To extract transcripts from a genomic sequence and score the ORFs:
+### Extracting and scoring ORFs from transcript sequences.
+To extract and score ORFs from transcript sequences:
 
 ```sh
 translonpredictor --seq genome.fa --ann annotations.gtf --outfilename output_name
 ```
-### Using an Existing BigWig File
-If you already have a BigWig file and want to generate a report:
-
+The file containing transcript sequences can also be provided:
 ```sh
-translonpredictor --bigwig example.bw --orfs annotated_orfs.csv --exon exon_positions.csv --outfilename output_name
+translonpredictor --tran transcripts.fa --ann annotations.gtf --outfilename output_name
 ```
 ### Generating a Report from a Plot File
 To generate a report using a previously scored ORFs file:
@@ -70,10 +68,14 @@ The tool generates several output files depending on the provided inputs:
 .bedGraph files containing bedGraph formatted data.
 .bw BigWig files.
 .csv files with scored ORFs.
+.html report containing translon information.
 
 ## Error Handling
 The tool requires specific combinations of input files to function correctly. If the necessary files are not provided, it will raise an exception with guidance on the required files.
 
+If you only wish to process a BAM file, an error will still pop up for the ORF handling. In this case the error can be ignored.
+
+Please make sure to chromosome notation is the same for the annotation and the bigwig file.
 ## Contributing
 Contributions are welcome. Please fork the repository and submit a pull request.
 

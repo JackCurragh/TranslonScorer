@@ -6,6 +6,29 @@ import os
 from findexonscds import getexons_and_cds
  
 def get_bam_tran(bam_df, exon_df):
+    '''
+    Merge BAM and exon DataFrames based on chromosome alignment and calculate transcript coordinates in BAM.
+
+    Parameters:
+    - bam_df (DataFrame): DataFrame containing BAM file data with chromosome positions.
+    - exon_df (DataFrame): DataFrame containing exon annotations with chromosome positions.
+
+    Returns:
+    - dict: A dictionary where keys are column names and values are lists of corresponding values, 
+            representing transcript coordinates aligned with BAM data.
+
+    This function merges `bam_df` and `exon_df` on the 'chr' column and filters rows where the BAM 
+    positions fall within exon boundaries (`start_right` to `stop_right`). It then calculates 
+    transcript coordinates (`tran_start_bam` and `tran_stop_bam`) in the BAM file by adjusting 
+    coordinates relative to exon boundaries.
+
+    The resulting DataFrame (`df_filtered`) excludes redundant columns (`stop_right`, `start_right`, 
+    `tran_start`, `tran_stop`) and is converted to a dictionary (`bam_tran_dict`) where each key 
+    corresponds to a column name and the associated value is a list of values from `df_filtered`.
+
+    Note: This function assumes the use of a library like `pandas` (abbreviated here as `pl`) for 
+    DataFrame operations.
+    '''
     df_joined = bam_df.join(exon_df, on='chr')
     df_filtered = df_joined.filter(
         (pl.col('start') >= pl.col('start_right')) &
@@ -24,9 +47,30 @@ def get_bam_tran(bam_df, exon_df):
 
 def bamtranscript(bam_df, exon_df):
     '''
-    docstring
+    Filter BAM and exon DataFrames based on shared chromosome information and flatten exon annotations.
+
+    Parameters:
+    - bam_df (DataFrame): DataFrame containing BAM file data with chromosome positions.
+    - exon_df (DataFrame): DataFrame containing exon annotations with chromosome positions.
+
+    Returns:
+    - DataFrame: A modified version of `bam_df` and `exon_df` after filtering based on shared 
+                 chromosome information and exploding exon coordinates.
+
+    This function processes `bam_df` and `exon_df` to filter rows where chromosome information 
+    is shared between the two datasets. First, it identifies unique chromosomes present in both 
+    `bam_df` and `exon_df`. Then, it filters `bam_df` to include only rows where the chromosome 
+    matches those found in `exon_df`, and vice versa for `exon_df`.
+
+    After filtering, `exon_df` is flattened by exploding columns ['start', 'stop', 'tran_start', 'tran_stop'] 
+    to separate comma-separated values into individual rows, facilitating further processing.
+
+    The modified versions of `bam_df` and `exon_df` are returned for subsequent analysis or operations.
+
+    Note: This function assumes the use of a library like `pandas` (abbreviated here as `pl`) for 
+    DataFrame operations.
     '''
-    exon_flattened = exon_df.with_columns(pl.col('chr').apply(lambda x: x[0].split('r')[1]))
+    exon_flattened = exon_df.with_columns(pl.col('chr'))
     
     uniquechr_bam = list(bam_df['chr'].unique())
     uniquechr_exon = list(exon_flattened['chr'].unique())
@@ -95,11 +139,53 @@ def asitecalc(df, offsets):
     return df_bed
 
 def calculate_differences(start, start_dict):
+    '''
+    Calculate the difference between a given start value and each value in a dictionary of start values.
+
+    Parameters:
+    - start (int or float): The starting value for which differences are calculated.
+    - start_dict (int): A values extracted from a dictionary containing start values (int or float).
+
+    Returns:
+    - dict: A dictionary where keys correspond to identifiers from `start_dict` and values represent 
+            the differences between `start` and each corresponding value in `start_dict`.
+
+    This function computes the difference (`start - start_dict[key]`) for each key-value pair in `start_dict`.
+    The result is returned as a dictionary where keys are from `start_dict` and values are the calculated differences.
+
+    Note: This function assumes `start_dict` contains numerical values (integers or floats).
+    '''
     start_diff = start - start_dict
     
     return start_diff
 
 def bamrelativetocds(bamdf, cdsdf):
+    '''
+    Filter BAM and CDS DataFrames based on shared transcript IDs and calculate relative start positions.
+
+    Parameters:
+    - bamdf (DataFrame): DataFrame containing BAM file data with transcript information.
+    - cdsdf (DataFrame): DataFrame containing CDS annotations with transcript information.
+
+    Returns:
+    - DataFrame: A modified version of `bamdf` after calculating relative start positions relative to CDS.
+
+    This function processes `bamdf` and `cdsdf` to filter rows where transcript IDs are shared between 
+    the two datasets. First, it identifies unique transcript IDs present in both `bamdf` and `cdsdf`. 
+    Then, it filters `bamdf` to include only rows where the transcript ID matches those found in `cdsdf`, 
+    and vice versa for `cdsdf`.
+
+    Next, it creates a dictionary (`start_dict`) mapping each transcript ID to its corresponding start 
+    position in `cdsdf`. Using this dictionary, it calculates relative start positions (`bamcds_start`) 
+    in `bamdf` by subtracting the start position in `cdsdf` from the start position in `bamdf`.
+
+    The modified `bamdf` DataFrame (`bam_df2`) excludes redundant columns (`tran_start_bam`, `tran_stop_bam`) 
+    and retains only the calculated `bamcds_start` values for each row.
+
+    Note: This function assumes the use of a library like `pandas` (abbreviated here as `pl`) for 
+    DataFrame operations, and it depends on a helper function `calculate_differences` to perform 
+    numerical calculations.
+    '''
     uniquetran_bam = list(bamdf['tran_id'].unique())
     uniquetran_cds = list(cdsdf['tran_id'].unique())
 
@@ -230,7 +316,7 @@ def bedtobigwig(bedfile, chromsize, filename):
     Example:
         bedtobigwig("input.bedGraph", "chromsizes.txt", "filename")
     """
-    os.system(f"bedGraphToBigWig {bedfile} {chromsize} data/{filename}.bw")
+    os.system(f"bedGraphToBigWig {bedfile} {chromsize} {filename}.bw")
 
     return ''
 

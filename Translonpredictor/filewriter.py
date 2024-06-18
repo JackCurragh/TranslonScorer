@@ -28,9 +28,8 @@ def saveorfsandexons(orf_df, exon_df, filename):
     Example:
         saveorfsandexons(orf_df, exon_df)
     """
-    if not os.path.exists("data/files"):
-        os.mkdir("data/files")
-    orf_df.write_csv(f"data/files/{filename}_annotated_orfs.csv")
+
+    orf_df.write_csv(f"{filename}_annotated_orfs.csv")
 
     fixchromcol = exon_df.with_columns(pl.col("chr").apply(lambda x: x[0]))
 
@@ -39,5 +38,5 @@ def saveorfsandexons(orf_df, exon_df, filename):
             lambda x: ",".join(map(str, x))
         )
     )
-    exon_df.write_csv(f"data/files/{filename}_exons.csv")
-    return f"data/files/{filename}_annotated_orfs.csv", f"data/files/{filename}_exons.csv"
+    exon_df.write_csv(f"{filename}_exons.csv")
+    return f"{filename}_annotated_orfs.csv", f"{filename}_exons.csv"

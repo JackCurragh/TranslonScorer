@@ -30,7 +30,7 @@ def transcriptreads(bwfile, exon_df):
     Finally, it constructs the `df_tran` DataFrame using the extracted transcript information and returns it.
     """
     read_list=[]
-    if exon_df["chr"][0] == "M":
+    if exon_df["chr"][0] == "chrM":
         return pl.DataFrame()
     exon_pairs = zip(exon_df["start"][0], exon_df["stop"][0])
     transcript_pairs = list(
@@ -71,9 +71,28 @@ def transcriptreads(bwfile, exon_df):
         return pl.DataFrame()
 
 def oldscoring(df, tran_reads, sru_range, typeorf):
-    '''
-    docstring
-    '''
+    """
+    Applies specific scoring calculations to a DataFrame based on the type of ORF.
+
+    This function modifies the given DataFrame `df` by adding new columns based on the 
+    specified type of ORF (`uoORF`, `doORF`, or other). It calculates scores using 
+    provided `tran_reads` and `sru_range`, and then computes a final score.
+
+    Parameters:
+    df (pl.DataFrame): The input Data frame containing 'start' and 'stop' columns.
+    tran_reads (df): Data frame containing reads on transcriptomic level required for scoring functions.
+    sru_range (int): Range parameter required for SRU scoring functions.
+    typeorf (str): Type of ORF, can be 'uoORF', 'doORF', or any other value for different processing.
+
+    Returns:
+    dict: A dictionary representation of the modified DataFrame.
+
+    Notes:
+    - For 'uoORF', the function calculates the 'rise_up' score based on the 'start' column.
+    - For 'doORF', the function calculates the 'step_down' score based on the 'stop' column.
+    - For other types, it calculates a list of scores and extracts 'hrf', 'avg', and 'nzc' from it.
+    - The final score is a sum of 'rise_up', 'step_down', 'hrf', 'avg', and 'nzc' columns.
+    """
     if typeorf == 'uoORF':
         df = df.with_columns([
             pl.struct(['start'])\
@@ -103,9 +122,29 @@ def oldscoring(df, tran_reads, sru_range, typeorf):
     return df
 
 def newscoring(df, tran_reads, sru_range, typeorf, scoredict):
-    '''
-    docstring
-    '''
+    """
+    Updates a scoring dictionary with 'rise_up' and 'step_down' scores based on the DataFrame and ORF type.
+
+    This function calculates and updates the `scoredict` with 'rise_up' and 'step_down' scores
+    based on unique 'start' and 'stop' values from the DataFrame `df`. The scores are determined
+    using the `sru_score` function, and the type of ORF (`typeorf`) dictates which scores are computed.
+
+    Parameters:
+    df (pl.DataFrame or pl.Series): The input DataFrame or Series containing 'start' and 'stop' columns.
+    tran_reads (df): Data frame containing reads on transcriptomic level required for scoring functions.
+    sru_range (int): Range parameter required for SRU scoring functions.
+    typeorf (str): Type of ORF, can be 'uoORF', 'doORF', or any other value for different processing.
+    scoredict (dict): Dictionary to store the computed 'rise_up' and 'step_down' scores.
+
+    Returns:
+    dict: The updated scoring dictionary with 'rise_up' and 'step_down' scores.
+
+    Notes:
+    - For types other than 'doORF', it calculates 'rise_up' scores based on unique 'start' values.
+    - For types other than 'uoORF', it calculates 'step_down' scores based on unique 'stop' values.
+    - The `scoredict` is updated with these scores, where keys are unique 'start' or 'stop' values
+      and values are the corresponding scores from the `sru_score` function.
+    """
     if not typeorf == 'doORF':
         if type(df) != type(pl.Series()):
             startvalues = df.get_column('start')\
@@ -130,9 +169,27 @@ def newscoring(df, tran_reads, sru_range, typeorf, scoredict):
     return scoredict
 
 def globalscores(df, tran_reads, typeorf):
-    '''
-    docstring
-    '''
+    """
+    Computes global scores for a DataFrame based on 'start' and 'stop' values and the type of ORF.
+
+    This function modifies the given DataFrame `df` by calculating a list of scores from 'start' 
+    and 'stop' values and adds columns for specific scores (Highes reading frame/hrf, Average/avg, Non-zero coverage/nzc). 
+    It then computes a final score by summing up relevant columns based on the type of ORF (`typeorf`).
+
+    Parameters:
+    df (pl.DataFrame): The input DataFrame containing 'start' and 'stop' columns.
+    tran_reads (df): Data frame containing reads on transcriptomic level required for scoring functions.
+    typeorf (str): Type of ORF, can be 'uoORF', 'doORF', or any other value for different processing.
+
+    Returns:
+    dict: A dictionary representation of the modified DataFrame with computed scores.
+
+    Notes:
+    - Computes 'hrf', 'avg', and 'nzc' scores from 'start' and 'stop' columns using `calculate_scores`.
+    - For 'doORF', the final score is the sum of 'step_down', 'hrf', 'avg', and 'nzc' columns.
+    - For 'uoORF', the final score is the sum of 'rise_up', 'hrf', 'avg', and 'nzc' columns.
+    - For other types, the final score is the sum of 'rise_up', 'step_down', 'hrf', 'avg', and 'nzc' columns.
+    """
     df = df.with_columns((
         pl.struct(['start', 'stop'])\
         .apply(lambda x: calculate_scores(x['start'], x['stop'], tran_reads))\
@@ -159,9 +216,26 @@ def globalscores(df, tran_reads, typeorf):
     return df
 
 def existingscore(df, typeorf, scoredict):
-    '''
-    docstring
-    '''
+    """
+    Filters the DataFrame to exclude rows with existing scores in the scoring dictionary.
+
+    This function filters out 'start' and 'stop' values from the DataFrame `df` that already have
+    corresponding scores in the `scoredict`. The filtering behavior depends on the type of ORF (`typeorf`).
+
+    Parameters:
+    df (pl.DataFrame): The input DataFrame containing 'start' and 'stop' columns.
+    typeorf (str): Type of ORF, can be 'uoORF', 'doORF', or any other value for different processing.
+    scoredict (dict): Dictionary containing the existing scores for 'rise_up' and 'step_down'.
+
+    Returns:
+    pl.DataFrame or pl.Series: A filtered DataFrame or Series excluding rows with existing scores.
+
+    Notes:
+    - For 'uoORF', filters out 'start' values that exist in `scoredict['rise_up']`.
+    - For 'doORF', filters out 'stop' values that exist in `scoredict['step_down']`.
+    - For other types, filters out rows where either 'start' is in `scoredict['rise_up']` or 
+      'stop' is in `scoredict['step_down']`, and retains rows where at least one of these conditions is met.
+    """
     if typeorf == 'uoORF':
         df = df['start'].map_elements(lambda x: x if not x in scoredict['rise_up'] else None).drop_nulls()
         return df
@@ -182,9 +256,26 @@ def existingscore(df, typeorf, scoredict):
         return df
 
 def assigningscore(df, scoredict, typeorf):
-    '''
-    docstring
-    '''
+    """
+    Assigns scores from a dictionary to a DataFrame based on the type of ORF.
+
+    This function updates the DataFrame `df` by assigning scores from the `scoredict` to the 
+    'rise_up' and 'step_down' columns based on the 'start' and 'stop' values. The type of ORF (`typeorf`)
+    determines which scores are assigned.
+
+    Parameters:
+    df (pl.DataFrame): The input DataFrame containing 'start' and 'stop' columns.
+    scoredict (dict): Dictionary containing the scores for 'rise_up' and 'step_down'.
+    typeorf (str): Type of ORF, can be 'uoORF', 'doORF', or any other value for different processing.
+
+    Returns:
+    pl.DataFrame: The modified DataFrame with assigned scores.
+
+    Notes:
+    - For 'uoORF', assigns 'rise_up' scores from `scoredict` based on 'start' values and sets 'step_down' to 0.0.
+    - For 'doORF', assigns 'step_down' scores from `scoredict` based on 'stop' values and sets 'rise_up' to 0.0.
+    - For other types, assigns both 'rise_up' and 'step_down' scores from `scoredict` based on 'start' and 'stop' values.
+    """
     if typeorf == 'uoORF':
         df = df.with_columns(
                 (pl.col('start')
@@ -214,15 +305,39 @@ def assigningscore(df, scoredict, typeorf):
 
 def scoring(bigwig, exon, orfs, old_scoring, sru_range):
     '''
-    docstring
+    Perform scoring on ORFs based on transcript data from a BigWig file and exon annotations.
+
+    Parameters:
+    - bigwig (str): Path to the BigWig file containing transcript data.
+    - exon (str): Path to the CSV file containing exon annotations.
+    - orfs (str): Path to the CSV file containing ORF annotations.
+    - old_scoring (bool): Flag indicating whether to use the old scoring method.
+    - sru_range (int): Range parameter for scoring.
+
+    Returns:
+    - DataFrame: A Pandas DataFrame containing scored ORFs with additional metrics.
+
+    This function reads transcript and ORF annotations from provided files, 
+    computes scores based on transcript reads obtained from the BigWig file,
+    and optionally applies scoring methods based on the `old_scoring` flag.
+
+    If `old_scoring` is True, the function uses the `oldscoring` function to score ORFs,
+    appending the results to `orfscores`. If False, it first checks existing scores 
+    using `existingscore`, updates the scores with `newscoring`, and then assigns scores 
+    to each ORF using `assigningscore`. Additionally, global scores are computed using 
+    `globalscores`.
+
+    The final scored ORFs are returned as a flattened DataFrame (`orfscores_df`) where each 
+    row represents an individual ORF with associated scoring metrics.
+
+    Note: This function assumes the existence of helper functions like `transcriptreads`, 
+    `oldscoring`, `existingscore`, `newscoring`, `assigningscore`, and `globalscores`.
     '''
     bwfile = bw.open(bigwig)
     if bwfile.isBigWig():
         exon_df = pl.read_csv(exon, has_header=True, separator=",")
         exon_df = exon_df.with_columns(
-            pl.col("start", "stop", "tran_start", "tran_stop").apply(lambda x: x.split(",")),
-            pl.col('chr').apply(lambda x: x.split('r')[1]))
-
+            pl.col("start", "stop", "tran_start", "tran_stop").apply(lambda x: x.split(",")))
         orf_df = pl.read_csv(orfs, has_header=True, separator=',')
 
         counter=0
@@ -257,6 +372,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
                         orfscores.append(orfs_filtered)
             counter+=1
         orfscores_df = pl.from_dicts(orfscores).explode(pl.all())
+        print('\n')
         return orfscores_df
     
     else:

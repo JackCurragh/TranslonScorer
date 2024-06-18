@@ -28,16 +28,19 @@ def gettranscripts(seq, annotation, outfilename):
         output_file = gettranscripts("genome.fa", "annotation.gff", outfile="transcripts.fa")
     """
     ann = pr.read_gtf(annotation, ignore_bad=True)
-    transcripts = ann[ann.Feature == 'exon']
-    tran_seq = transcripts.get_transcript_sequence(transcript_id='transcript_id', path=seq)
-    with open(f'{outfilename}_transcripts.fa', 'w') as fw:
+    transcripts = ann[ann.Feature == "exon"]
+    tran_seq = transcripts.get_transcript_sequence(
+        transcript_id="transcript_id", path=seq
+    )
+    with open(f"{outfilename}_transcripts.fa", "w") as fw:
         for index, id, seq in tran_seq.itertuples():
-            fw.write(f'>{id}\n{seq}\n')
-            
-    return f'{outfilename}_transcripts.fa'
+            fw.write(f">{id}\n{seq}\n")
+
+    return f"{outfilename}_transcripts.fa"
+
 
 def classify_orf(row):
-    '''
+    """
     Classify an ORF (Open Reading Frame) based on its relative position to transcript start and stop sites.
 
     Parameters:
@@ -56,38 +59,41 @@ def classify_orf(row):
            - "extORF": Extended ORF (start < tran_start and stop == tran_stop)
            - "Unexpected": Indicates unexpected conditions where none of the above criteria are met.
 
-    This function categorizes an ORF based on its positional relationship with the transcript start (`tran_start`) 
-    and stop (`tran_stop`) sites. It evaluates the relative positions of 'start' and 'stop' compared to 
+    This function categorizes an ORF based on its positional relationship with the transcript start (`tran_start`)
+    and stop (`tran_stop`) sites. It evaluates the relative positions of 'start' and 'stop' compared to
     'tran_start' and 'tran_stop' to determine the appropriate classification.
 
-    If the relative position does not match any expected categories, an "Unexpected" classification is printed 
+    If the relative position does not match any expected categories, an "Unexpected" classification is printed
     with the values of 'start', 'stop', 'tran_start', and 'tran_stop', and "Unexpected" is returned.
 
-    Note: This function assumes the input `row` contains numerical values for 'start', 'stop', 'tran_start', 
+    Note: This function assumes the input `row` contains numerical values for 'start', 'stop', 'tran_start',
     and 'tran_stop', typically retrieved from a Pandas DataFrame or similar data structure.
-    '''
-    if row['stop'] < row['tran_start']:
+    """
+    if row["stop"] < row["tran_start"]:
         return "uORF"
-    elif row['start'] == row['tran_start'] and row['stop'] == row['tran_stop']:
+    elif row["start"] == row["tran_start"] and row["stop"] == row["tran_stop"]:
         return "CDS"
-    elif row['start'] > row['tran_stop']:
+    elif row["start"] > row["tran_stop"]:
         return "dORF"
-    elif row['start'] < row['tran_start'] and row['stop'] >= row['tran_start']:
+    elif row["start"] < row["tran_start"] and row["stop"] >= row["tran_start"]:
         return "uoORF"
-    elif row['start'] <= row['tran_stop'] and row['stop'] > row['tran_stop']:
+    elif row["start"] <= row["tran_stop"] and row["stop"] > row["tran_stop"]:
         return "doORF"
-    elif row['start'] >= row['tran_start'] and row['stop'] <= row['tran_stop']:
+    elif row["start"] >= row["tran_start"] and row["stop"] <= row["tran_stop"]:
         return "iORF"
-    elif row['start'] < row['tran_start'] and row['stop'] > row['tran_stop']:
+    elif row["start"] < row["tran_start"] and row["stop"] > row["tran_stop"]:
         return "eoORF"
-    elif row['start'] < row['tran_start'] and row['stop'] == row['tran_stop']:
+    elif row["start"] < row["tran_start"] and row["stop"] == row["tran_stop"]:
         return "extORF"
     else:
-        print("unexpected", row['start'], row['stop'], row['tran_start'], row['tran_stop'])
+        print(
+            "unexpected", row["start"], row["stop"], row["tran_start"], row["tran_stop"]
+        )
         return "Unexpected"
 
+
 def orfrelativeposition(annotation, df, cds_df):
-    '''
+    """
     Determines the relative position of ORFs to coding sequences (CDS).
 
     This function takes a genome annotation file and a DataFrame containing ORF coordinates,
@@ -108,45 +114,56 @@ def orfrelativeposition(annotation, df, cds_df):
 
     Example:
         orf_df, exon_coords = orfrelativeposition("annotation.gff", orf_df)
-    '''
-    orflist=[]
-    if not 'cdsdf' in globals():
+    """
+    orflist = []
+    if not "cdsdf" in globals():
         cds_df, exon_coords = getexons_and_cds(annotation, list(df["tran_id"].unique()))
-    
-    print('Typing ORFS')
-    tranids = list(cds_df['tran_id'].unique())
-    #TYPING ORFS
-    codingorfs = df.with_columns(shared=pl.col('tran_id').is_in(tranids))\
-                .filter(pl.col('shared') == True)\
-                .select(pl.all().exclude('shared'))
-    
-    codingorfs = codingorfs.join(cds_df, on='tran_id')
-    codingorfs = codingorfs.with_columns(
-                pl.struct(['start', 'stop', 'tran_start', 'tran_stop'])
-                .apply(lambda row: classify_orf(row))
-                .alias('type'))\
-                .select(pl.all().exclude('tran_start', 'tran_stop'))\
-                .to_dict(as_series=False)
-    orflist.append(codingorfs)
-    
-    #NON CODING ORFS
-    noncodingorfs = df.with_columns(shared=pl.col('tran_id').is_in(tranids))\
-                .filter(pl.col('shared') == False)\
-                .select(pl.all().exclude('shared'))
 
-    noncodingorfs = noncodingorfs.with_columns(type=pl.lit('Non Coding')).to_dict(as_series=False)
+    print("Typing ORFS")
+    tranids = list(cds_df["tran_id"].unique())
+    # TYPING ORFS
+    codingorfs = (
+        df.with_columns(shared=pl.col("tran_id").is_in(tranids))
+        .filter(pl.col("shared") == True)
+        .select(pl.all().exclude("shared"))
+    )
+
+    codingorfs = codingorfs.join(cds_df, on="tran_id")
+    codingorfs = (
+        codingorfs.with_columns(
+            pl.struct(["start", "stop", "tran_start", "tran_stop"])
+            .apply(lambda row: classify_orf(row))
+            .alias("type")
+        )
+        .select(pl.all().exclude("tran_start", "tran_stop"))
+        .to_dict(as_series=False)
+    )
+    orflist.append(codingorfs)
+
+    # NON CODING ORFS
+    noncodingorfs = (
+        df.with_columns(shared=pl.col("tran_id").is_in(tranids))
+        .filter(pl.col("shared") == False)
+        .select(pl.all().exclude("shared"))
+    )
+
+    noncodingorfs = noncodingorfs.with_columns(type=pl.lit("Non Coding")).to_dict(
+        as_series=False
+    )
     orflist.append(noncodingorfs)
-    #MAKE ONE DF
-    df = pl.from_dicts(orflist).explode('tran_id', 'start', 'stop', 'length', 'startorf', 'stoporf', 'type')
-    
-    cdslist = df.filter(pl.col('type') == 'CDS')
-    cdslist = list(cdslist['tran_id'].unique())
-    
+    # MAKE ONE DF
+    df = pl.from_dicts(orflist).explode(
+        "tran_id", "start", "stop", "length", "startorf", "stoporf", "type"
+    )
+
+    cdslist = df.filter(pl.col("type") == "CDS")
+    cdslist = list(cdslist["tran_id"].unique())
+
     return df, exon_coords
 
 
 def create_automaton(codons):
-    '''
+    """
     Create an Aho-Corasick automaton for efficient substring search.
 
     Parameters:
@@ -155,17 +172,17 @@ def create_automaton(codons):
     Returns:
     - ahocorasick.Automaton: An Aho-Corasick automaton initialized with the provided codons.
 
-    This function initializes an Aho-Corasick automaton, a data structure used for efficient 
-    substring matching. It adds each codon from the `codons` list to the automaton and assigns 
-    each codon a unique index and key. After adding all codons, the automaton is finalized with 
+    This function initializes an Aho-Corasick automaton, a data structure used for efficient
+    substring matching. It adds each codon from the `codons` list to the automaton and assigns
+    each codon a unique index and key. After adding all codons, the automaton is finalized with
     `make_automaton()`.
 
-    The resulting `automaton` object is returned, which can be used to quickly search for any 
+    The resulting `automaton` object is returned, which can be used to quickly search for any
     of the added codons within a given text or sequence.
 
-    Note: This function assumes the use of the `ahocorasick` library, which provides an efficient 
+    Note: This function assumes the use of the `ahocorasick` library, which provides an efficient
     implementation of the Aho-Corasick algorithm for pattern matching.
-    '''
+    """
     automaton = ahocorasick.Automaton()
 
     for idx, key in enumerate(codons):
@@ -173,8 +190,9 @@ def create_automaton(codons):
     automaton.make_automaton()
     return automaton
 
+
 def preporfs(transcript, starts, stops, minlength, maxlength):
-    '''
+    """
     Predict ORFs (Open Reading Frames) from transcript sequences using start and stop codon patterns.
 
     Parameters:
@@ -187,17 +205,17 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
     Returns:
     - DataFrame: A Pandas DataFrame containing predicted ORFs for each transcript sequence.
 
-    This function reads transcript sequences from the provided FASTA file (`transcript`). For each 
-    transcript sequence, it creates Aho-Corasick automata (`startautomaton` and `stopautomaton`) 
+    This function reads transcript sequences from the provided FASTA file (`transcript`). For each
+    transcript sequence, it creates Aho-Corasick automata (`startautomaton` and `stopautomaton`)
     using the provided lists of start and stop codon patterns (`starts` and `stops`).
 
-    It iterates through each transcript sequence, identifies ORFs using the `find_orfs` function, 
-    and appends the results to `dict_list`. After processing all transcripts, `dict_list` is converted 
+    It iterates through each transcript sequence, identifies ORFs using the `find_orfs` function,
+    and appends the results to `dict_list`. After processing all transcripts, `dict_list` is converted
     to a Pandas DataFrame (`df`) where each dictionary represents a row of ORF predictions.
 
     The DataFrame `df` is sorted by `tran_id` and returned as the final output.
 
-    Note: This function assumes the use of the Biopython library (`SeqIO` for parsing FASTA files) 
+    Note: This function assumes the use of the Biopython library (`SeqIO` for parsing FASTA files)
     and a custom function `find_orfs` for ORF prediction based on Aho-Corasick automata.
 
     Example usage:
@@ -209,8 +227,8 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
     maxlength = 5000
     predicted_orfs = preporfs(transcript, starts, stops, minlength, maxlength)
     ```
-    '''
-    dict_list=[]
+    """
+    dict_list = []
     # COUNTER!!!!!!!!!!
     counter = 0
     with open(transcript) as handle:
@@ -218,12 +236,19 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
             startautomaton = create_automaton(starts)
             stopautomaton = create_automaton(stops)
             if counter % 20000 == 0:
-                print("\r" + f"Read {counter} transcripts", end='')
+                print("\r" + f"Read {counter} transcripts", end="")
             tran_id = str(record.id).split("|")[0]
-            append_list = find_orfs(str(record.seq), tran_id, startautomaton, stopautomaton, minlength, maxlength)
+            append_list = find_orfs(
+                str(record.seq),
+                tran_id,
+                startautomaton,
+                stopautomaton,
+                minlength,
+                maxlength,
+            )
             dict_list.extend(append_list)
             counter = counter + 1
         df = pl.from_dicts(dict_list)
         df = df.sort("tran_id")
-        print('\n')
+        print("\n")
         return df

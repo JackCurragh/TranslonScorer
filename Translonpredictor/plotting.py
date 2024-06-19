@@ -129,7 +129,7 @@ def pertranscriptplot(df, exon_df, bwfile):
         fig.update_yaxes(title_text="Counts")
         fig = fig.to_html(full_html=False)
         pertranlist.append(fig)
-    return pertranlist, summary_plot, table
+    return summary_plot, table, pertranlist
 
 
 def metageneplot(df, bwfile, exon_df, range_list):

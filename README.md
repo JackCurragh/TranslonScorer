@@ -2,7 +2,7 @@
 
 ## Overview
 
-`translonpredictor` is a command-line tool for translon calling. The process consists of processing BAM files, extracting and scoring ORFs from transcript sequences based on the annotation and codons provided. It supports multiple input file formats and generates output files in several formats including `.bedGraph`, `.bw`, `.html`, and `.csv`.
+`Translonpredictor` is a command-line tool for translon calling. The process consists of processing BAM files, extracting and scoring ORFs from transcript sequences based on the annotation and codons provided. It supports multiple input file formats and generates output files in several formats including `.bedGraph`, `.bw`, `.html`, and `.csv`.
 
 ## Installation
 
@@ -12,10 +12,10 @@ To use this tool, you need to have Python and the necessary dependencies install
 pip install Translonpredictor@git+https://github.com/JackCurragh/Translonpredictor#egg=TRANSLONPREDICTOR
 ```
 ## Usage
-The tool is invoked using the `translonpredictor` command. Below are the options and their descriptions:
+The tool is invoked using the `Translonpredictor` command. Below are the options and their descriptions:
 
 ```sh
-Usage: translonpredictor [OPTIONS]
+Usage: Translonpredictor [OPTIONS]
 
 Options:
   -b, --bam TEXT              Provide a BAM file
@@ -44,23 +44,23 @@ Options:
 ### Processing BAM File
 To process a BAM file and generate the necessary outputs:
 ```sh
-translonpredictor --bam example.bam --chromsize chrom.sizes --ann annotations.gtf --outfilename output_name
+Translonpredictor --bam example.bam --chromsize chrom.sizes --ann annotations.gtf --outfilename output_name
 ```
 ### Extracting and scoring ORFs from transcript sequences.
 To extract and score ORFs from transcript sequences:
 
 ```sh
-translonpredictor --seq genome.fa --ann annotations.gtf --outfilename output_name
+Translonpredictor --seq genome.fa --ann annotations.gtf --outfilename output_name
 ```
 The file containing transcript sequences can also be provided:
 ```sh
-translonpredictor --tran transcripts.fa --ann annotations.gtf --outfilename output_name
+Translonpredictor --tran transcripts.fa --ann annotations.gtf --outfilename output_name
 ```
 ### Generating a Report from a Plot File
 To generate a report using a previously scored ORFs file:
 
 ```sh
-translonpredictor --plotfile scored_orfs.csv --bigwig example.bw --exon exon_positions.csv --outfilename output_name
+Translonpredictor --plotfile scored_orfs.csv --bigwig example.bw --exon exon_positions.csv --outfilename output_name
 ```
 ## Output Files
 The tool generates several output files depending on the provided inputs:

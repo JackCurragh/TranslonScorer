@@ -89,6 +89,6 @@ def generate_report(
         parameters=parameters,
     )
     # to save the results
-    with open(f"report_{filename}.html", "w") as fh:
+    with open(f"{filename}_report.html", "w") as fh:
         fh.write(report)
     return

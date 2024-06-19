@@ -70,14 +70,7 @@ def pertranscriptplot(df, exon_df, bwfile):
         df_type_filtered = df_type_filtered.to_dict(as_series=False)
         dflist.append(df_type_filtered)
 
-    df_type_filtered = pl.from_dicts(dflist).explode(pl.all())
-    summary = df_type_filtered.to_pandas()
-    summary_plot = px.bar(summary, x="tran_start", y="counts", color="tran_id")
-    summary_plot.update_xaxes(title_text="Transcript coordinates")
-    summary_plot.update_yaxes(title_text="Counts")
-    summary_plot = summary_plot.to_html(full_html=False)
-
-    df_type_filtered = df_type_filtered.with_columns(
+    df_type_filtered = pl.from_dicts(dflist).explode(pl.all()).with_columns(
         (pl.col("start") % 3).alias("frame"),
         (pl.col("avg")).round(2),
         (pl.col("nzc")).round(2),
@@ -85,8 +78,7 @@ def pertranscriptplot(df, exon_df, bwfile):
         (pl.col("rise_up")).round(2),
         (pl.col("step_down").round(2)),
         (pl.col("score").round(2)),
-    )
-    df_type_filtered = df_type_filtered.to_pandas()
+        ).to_pandas()
     # Table generation
     table = go.Figure(
         data=[
@@ -122,6 +114,13 @@ def pertranscriptplot(df, exon_df, bwfile):
     table = table.to_html(full_html=False)
 
     transcriptplotdf = pl.from_dicts(tranlist).explode(pl.all())
+    #summary plot
+    summary = transcriptplotdf.to_pandas()
+    summary_plot = px.bar(summary, x="tran_start", y="counts", color="tran_id")
+    summary_plot.update_xaxes(title_text="Transcript coordinates")
+    summary_plot.update_yaxes(title_text="Counts")
+    summary_plot = summary_plot.to_html(full_html=False)
+    #transcript plots
     pertranlist = []
     for tran in transcriptplotdf["tran_id"].unique():
         transcriptdf = transcriptplotdf.filter(pl.col("tran_id") == tran)

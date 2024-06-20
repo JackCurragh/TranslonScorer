@@ -234,13 +234,13 @@ def metageneplot(df, bwfile, exon_df, range_list):
             "counts": list(metagene_stop_dict.values()),
         }
         # plot metagene per type
-        fig_combined_stop = px.bar(start_dict, x="relativeloc", y="counts")
+        fig_combined_stop = px.bar(stop_dict, x="relativeloc", y="counts")
         fig_combined_stop.update_xaxes(title_text="Relative coordinates")
         fig_combined_stop.update_yaxes(title_text="Counts")
         metagene_stop = fig_combined_stop.to_html(full_html=False)
 
         fig_combined = px.bar(
-            stop_dict,
+            start_dict,
             x="relativeloc",
             y="counts",
             title=typeorf,

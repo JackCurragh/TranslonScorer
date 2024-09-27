@@ -12,7 +12,7 @@ To use this tool, you need to have Python and the necessary dependencies install
 pip install TranslonScorer@git+https://github.com/JackCurragh/TranslonScorer#egg=TRANSLONSCORER
 ```
 ## Usage
-The tool is invoked using the `Translonpredictor` command. Below are the options and their descriptions:
+The tool is invoked using the `TranslonScorer` command. Below are the options and their descriptions:
 
 ```sh
 Usage: TranslonScorer [OPTIONS]

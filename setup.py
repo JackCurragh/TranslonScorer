@@ -33,7 +33,7 @@ setup(
     description="A python command-line utility for translon prediction",
     entry_points={
         "console_scripts": [
-            "Translonpredictor=Translonpredictor.Translonpredictor:translonpredictor",
+            "translonpredictor=Translonpredictor.cli:cli",
         ],
     },
     install_requires=requirements,
@@ -50,6 +50,6 @@ setup(
     test_suite="tests",
     tests_require=test_requirements,
     url="https://github.com/JackCurragh/TranslonPredictor",
-    version="0.0.1",
+    version="0.1.0",
     zip_safe=False,
 )

@@ -2,7 +2,7 @@
 
 ## Overview
 
-`TranslonScorer` is a command-line tool for translon calling. The process consists of processing BAM files, extracting and scoring ORFs from transcript sequences based on the annotation and codons provided. It supports multiple input file formats and generates output files in several formats including `.bedGraph`, `.bw`, `.html`, and `.csv`.
+`TranslonScorer` is a command-line tool for translon calling. The process consists of processing Ribo-seq BAM files, extracting and scoring ORFs from transcript sequences based on the annotation and codons provided. It supports multiple input file formats and generates output files in several formats including `.bedGraph`, `.bw`, `.html`, and `.csv`.
 
 ## Installation
 
@@ -11,76 +11,131 @@ To use this tool, you need to have Python and the necessary dependencies install
 ```sh
 pip install TranslonScorer@git+https://github.com/JackCurragh/TranslonScorer#egg=TRANSLONSCORER
 ```
+
 ## Usage
-The tool is invoked using the `TranslonScorer` command. Below are the options and their descriptions:
+
+The tool provides several workflows for different analysis needs:
+
+### 1. Complete Pipeline (Recommended)
+
+Run the entire pipeline end-to-end with a single command:
 
 ```sh
-Usage: TranslonScorer [OPTIONS]
+translonpredictor all \
+    -b ribo.bam \
+    -c chrom.sizes \
+    -s genome.fa \
+    -a anno.gtf \
+    -o output
+```
 
-Options:
-  -b, --bam TEXT              Provide a BAM file
-  -c, --chromsize TEXT        Provide a file containing the chromosome sizes
-  -s, --seq TEXT              Provide a file containing the genomic sequence (.fa)
-  -t, --tran TEXT             Provide a file containing the transcript sequences (.fa)
-  -a, --ann TEXT              Provide a file containing the annotation (.gtf)
-  -sta, --starts TEXT         Provide a list of start codons (default: "ATG")
-  -stp, --stops TEXT          Provide a list of stop codons (default: "TAA,TAG,TGA")
-  -min, --minlen INTEGER      Provide the minimum length (default: 0)
-  -max, --maxlen INTEGER      Provide the maximum length (default: 1000000)
-  -bw, --bigwig TEXT          Provide a Bigwig file to convert
-  -ex, --exon TEXT            Provide a file containing exon positions
-  -bw, --bedfile TEXT         Provide a Bigwig file to convert
-  -of, --orfs TEXT            Provide a file containing annotated ORFs
-  -rp, --range_param INTEGER  Provide an integer for the plot range around the relative start position (default: 30)
-  -sru, --sru_range INTEGER   Provide an integer for the Start Rise Up score range (default: 15)
-  -ofs, --offsets TEXT        Provide a file containing offset parameters
-  -s, --scoretype BOOLEAN     Select the scoring algorithm (default: False for old scoring algorithm)
-  -pf, --plotfile TEXT        Provide a '.csv' file containing scored ORFs to use for plotting
-  -ofn, --outfilename TEXT    Provide a name for the output files
+This will:
+1. Process the Ribo-seq BAM file
+2. Extract transcripts
+3. Find and score ORFs
+4. Generate visualization reports
 
-  --help                      Show this message and exit.
-```
-## Examples
-### Processing BAM File
-To process a BAM file and generate the necessary outputs:
-```sh
-Translonpredictor --bam example.bam --chromsize chrom.sizes --ann annotations.gtf --outfilename output_name
-```
-### Extracting and scoring ORFs from transcript sequences.
-To extract and score ORFs from transcript sequences:
+### 2. Individual Steps
 
-```sh
-TranslonScorer--seq genome.fa --ann annotations.gtf --outfilename output_name
-```
-The file containing transcript sequences can also be provided:
-```sh
-TranslonScorer --tran transcripts.fa --ann annotations.gtf --outfilename output_name
-```
-### Generating a Report from a Plot File
-To generate a report using a previously scored ORFs file:
+For more control, you can run each step separately:
 
+#### Process BAM Files
 ```sh
-TranslonScorer --plotfile scored_orfs.csv --bigwig example.bw --exon exon_positions.csv --outfilename output_name
+translonpredictor process-bam \
+    -b ribo.bam \
+    -c chrom.sizes \
+    -a anno.gtf \
+    -o output
 ```
+
+#### Find and Score ORFs
+```sh
+translonpredictor find-orfs \
+    -s genome.fa \
+    -a anno.gtf \
+    -bw coverage.bw \
+    -o output
+```
+
+#### Score Existing ORFs
+```sh
+translonpredictor score-orfs \
+    -f orfs.csv \
+    -bw coverage.bw \
+    -e exons.csv \
+    -o output
+```
+
+#### Generate Visualization Report
+```sh
+translonpredictor plot \
+    -s scored_orfs.csv \
+    -bw coverage.bw \
+    -e exons.csv \
+    -o report
+```
+
+## Command Options
+
+### Common Options
+- `-o, --outfile`: Base name for output files (required)
+
+### Process BAM Command
+- `-b, --bam`: Input BAM file from Ribo-seq data (required)
+- `-c, --chromsizes`: Chromosome sizes file (required)
+- `-a, --annotation`: GTF annotation file (required)
+- `-off, --offsets`: File containing read length-specific offsets for A-site calculation
+
+### Find ORFs Command
+- `-s, --sequence`: Input FASTA file (genomic or transcriptomic) (required)
+- `-a, --annotation`: GTF annotation file (required)
+- `-bw, --bigwig`: BigWig file containing Ribo-seq coverage (required)
+- `--start-codons`: Comma-separated list of start codons (default: ATG)
+- `--stop-codons`: Comma-separated list of stop codons (default: TAA,TAG,TGA)
+- `--min-len`: Minimum ORF length in nucleotides (default: 0)
+- `--max-len`: Maximum ORF length in nucleotides (default: 1000000)
+- `--sru-range`: Nucleotide range for Start Rise Up score calculation (default: 15)
+- `--scoring-method`: Scoring algorithm to use (classic/modern, default: modern)
+
+### Score ORFs Command
+- `-f, --orfs`: CSV file containing pre-annotated ORFs (required)
+- `-bw, --bigwig`: BigWig file containing Ribo-seq coverage (required)
+- `-e, --exons`: CSV file containing exon positions (required)
+- `--scoring-method`: Scoring algorithm to use (classic/modern, default: modern)
+- `--sru-range`: Nucleotide range for Start Rise Up score calculation (default: 15)
+
+### Plot Command
+- `-s, --scored-orfs`: CSV file containing scored ORFs (required)
+- `-bw, --bigwig`: BigWig file containing Ribo-seq coverage (required)
+- `-e, --exons`: CSV file containing exon positions (required)
+- `--plot-range`: Plot range around start position (default: 30)
+
 ## Output Files
-The tool generates several output files depending on the provided inputs:
 
-.bedGraph files containing bedGraph formatted data.
-.bw BigWig files.
-.csv files with scored ORFs.
-.html report containing translon information.
+The tool generates several output files depending on the command used:
+
+### Process BAM
+- `{outfile}.bedGraph`: Coverage in bedGraph format
+- `{outfile}.bw`: Coverage in bigWig format
+
+### Find ORFs / Score ORFs
+- `{outfile}_orfs_scored.csv`: Scored ORFs
+- `{outfile}_report.html`: Visualization report
 
 ## Error Handling
+
 The tool requires specific combinations of input files to function correctly. If the necessary files are not provided, it will raise an exception with guidance on the required files.
 
-If you only wish to process a BAM file, an error will still pop up for the ORF handling. In this case the error can be ignored.
+Please ensure that:
+1. All required input files exist and are readable
+2. File formats match the expected types (BAM, FASTA, GTF, etc.)
+3. Chromosome notation is consistent across annotation and coverage files
 
-Please make sure to chromosome notation is the same for the annotation and the bigwig file.
 ## Contributing
+
 Contributions are welcome. Please fork the repository and submit a pull request.
 
 ## License
+
 This project is licensed under the MIT License.
-```r
-This README file provides an overview, installation instructions, usage examples, output desc
 ```

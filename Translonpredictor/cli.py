@@ -20,17 +20,126 @@ warnings.filterwarnings("ignore")
 def cli():
     """TranslonScorer: A tool for identifying and scoring translational events from Ribo-seq data.
     
-    This tool provides three main workflows:
+    This tool provides several workflows:
     
-    1. process-bam: Process Ribo-seq BAM files to generate coverage tracks
-    2. find-orfs: Identify and score potential ORFs from sequence data
-    3. score-orfs: Score existing ORFs using coverage data
-    4. plot: Generate visualization reports from scored ORFs
+    1. all: Run the complete pipeline end-to-end
+    2. process-bam: Process Ribo-seq BAM files to generate coverage tracks
+    3. find-orfs: Identify and score potential ORFs from sequence data
+    4. score-orfs: Score existing ORFs using coverage data
+    5. plot: Generate visualization reports from scored ORFs
     
     For detailed instructions, use --help with any command:
-    translonpredictor process-bam --help
+    translonpredictor all --help
     """
     pass
+
+@cli.command()
+@click.option('--bam', '-b', required=True,
+              help='Input BAM file from Ribo-seq data (required)')
+@click.option('--chromsizes', '-c', required=True,
+              help='Chromosome sizes file (required for bigWig conversion)')
+@click.option('--sequence', '-s', required=True,
+              help='Input FASTA file (genomic or transcriptomic)')
+@click.option('--annotation', '-a', required=True,
+              help='GTF annotation file (required)')
+@click.option('--offsets', '-off',
+              help='File containing read length-specific offsets for A-site calculation')
+@click.option('--start-codons', default="ATG",
+              help='Comma-separated list of start codons (default: ATG)')
+@click.option('--stop-codons', default="TAA,TAG,TGA",
+              help='Comma-separated list of stop codons (default: TAA,TAG,TGA)')
+@click.option('--min-len', type=int, default=0,
+              help='Minimum ORF length in nucleotides (default: 0)')
+@click.option('--max-len', type=int, default=1000000,
+              help='Maximum ORF length in nucleotides (default: 1000000)')
+@click.option('--sru-range', type=int, default=15,
+              help='Nucleotide range for Start Rise Up score calculation (default: 15)')
+@click.option('--scoring-method', type=click.Choice(['classic', 'modern']), 
+              default='modern', help='Scoring algorithm to use (default: modern)')
+@click.option('--plot-range', type=int, default=30,
+              help='Plot range around start position (default: 30)')
+@click.option('--outfile', '-o', required=True,
+              help='Base name for output files')
+def all(bam: str, chromsizes: str, sequence: str, annotation: str,
+        outfile: str, offsets: Optional[str] = None,
+        start_codons: str = "ATG", stop_codons: str = "TAA,TAG,TGA",
+        min_len: int = 0, max_len: int = 1000000,
+        sru_range: int = 15, scoring_method: str = 'modern',
+        plot_range: int = 30):
+    """Run the complete TranslonScorer pipeline end-to-end.
+    
+    This command runs all steps of the pipeline in sequence:
+    1. Process Ribo-seq BAM file to generate coverage tracks
+    2. Extract transcripts from sequence data
+    3. Find and score potential ORFs
+    4. Generate visualization reports
+    
+    Required files:
+    - BAM file: Transcriptome-aligned Ribo-seq reads
+    - Chromosome sizes: Tab-separated file with chr\tsize
+    - Sequence: FASTA file (genomic or transcriptomic)
+    - Annotation: GTF file with transcript annotations
+    
+    Example:
+    translonpredictor all -b ribo.bam -c chrom.sizes -s genome.fa -a anno.gtf -o output
+    
+    Note: This command will generate all intermediate files with the specified output prefix.
+    """
+    click.echo("Starting complete TranslonScorer pipeline...")
+    
+    # Step 1: Process BAM file
+    click.echo("\nStep 1/4: Processing BAM file")
+    location = os.path.abspath(bam)
+    if not os.path.isfile(location):
+        raise click.BadParameter(f"BAM file not found: {bam}")
+    
+    df = readbam(location)
+    click.echo("Calculating and applying offsets")
+    beddf, exondf, cdsdf = dftobed(df, annotation, offsets)
+    
+    bedgraph_path = f"{outfile}.bedGraph"
+    click.echo(f"Writing bedGraph file: {bedgraph_path}")
+    if not os.path.exists(bedgraph_path):
+        beddf.write_csv(bedgraph_path, separator="\t", include_header=False)
+    
+    bigwig_path = f"{outfile}.bw"
+    click.echo(f"Writing bigWig file: {bigwig_path}")
+    bedtobigwig(bedgraph_path, chromsizes, outfile)
+    
+    # Step 2: Extract transcripts
+    click.echo("\nStep 2/4: Extracting transcripts")
+    transcript = gettranscripts(sequence, annotation, outfile)
+    
+    # Step 3: Find and score ORFs
+    click.echo("\nStep 3/4: Finding and scoring ORFs")
+    click.echo("Finding candidate ORFs")
+    orfdf = preporfs(
+        transcript, 
+        start_codons.split(","), 
+        stop_codons.split(","), 
+        min_len, 
+        max_len
+    )
+    
+    click.echo("Mapping ORFs to transcript coordinates")
+    orf_ann_df, exon_df = orfrelativeposition(annotation, orfdf, cdsdf)
+    orfs, exon = saveorfsandexons(orf_ann_df, exon_df, outfile)
+    
+    click.echo("Scoring ORFs")
+    scoredorfs = scoring(bigwig_path, exon, orfs, scoring_method == 'modern', sru_range)
+    scoredorfs.write_csv(f"{outfile}_orfs_scored.csv")
+    
+    # Step 4: Generate report
+    click.echo("\nStep 4/4: Generating visualization report")
+    plottop10(f"{outfile}_orfs_scored.csv", bigwig_path, exon, plot_range, outfile, getparameters(locals()))
+    
+    click.echo("\nPipeline completed successfully!")
+    click.echo(f"Output files generated with prefix: {outfile}")
+    click.echo("Files generated:")
+    click.echo(f"  - {outfile}.bedGraph: Coverage in bedGraph format")
+    click.echo(f"  - {outfile}.bw: Coverage in bigWig format")
+    click.echo(f"  - {outfile}_orfs_scored.csv: Scored ORFs")
+    click.echo(f"  - {outfile}_report.html: Visualization report")
 
 @cli.command()
 @click.option('--bam', '-b', required=True,

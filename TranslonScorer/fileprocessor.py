@@ -628,7 +628,7 @@ def bedtobigwig(bedfile, chromsize, filename):
                 
                 # Create a list of chromosome names matching the length of other lists
                 chromosomes = [chrom] * len(starts)
-                print(chromosomes, '\n', starts, '\n', ends, '\n', values)
+                print(chromosomes[:5], '\n', starts[:5], '\n', ends[:5], '\n', values[:5])
                 print(len(chromosomes), len(starts), len(ends), len(values))
                 
                 # Add entries to bigWig file

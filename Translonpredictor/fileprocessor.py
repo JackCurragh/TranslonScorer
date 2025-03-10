@@ -16,54 +16,77 @@ def normalize_chrom_name(chrom):
     
     return norm_chrom
 
+def get_matching_chromosomes(bam_ids, exon_chroms):
+    """
+    Find matching chromosomes between BAM and annotation, handling naming variations.
+    
+    Parameters:
+    - bam_ids (set): Set of chromosome IDs from BAM
+    - exon_chroms (set): Set of chromosome IDs from annotation
+    
+    Returns:
+    - tuple: (bool for match found, bool for normalization needed, set of common chromosomes)
+    """
+    # Try direct matching first
+    common_chr = bam_ids.intersection(exon_chroms)
+    if common_chr:
+        return True, False, common_chr
+    
+    # Try normalized matching
+    norm_bam_chroms = {normalize_chrom_name(c) for c in bam_ids}
+    norm_exon_chroms = {normalize_chrom_name(c) for c in exon_chroms}
+    
+    common_chr = norm_bam_chroms.intersection(norm_exon_chroms)
+    if common_chr:
+        # Map normalized chromosomes back to original exon names
+        chrom_map = {normalize_chrom_name(c): c for c in exon_chroms}
+        original_common = {chrom_map[c] for c in common_chr}
+        return True, True, original_common
+        
+    return False, False, set()
+
 def detect_bam_type(df, exon_df):
     """
     Detect whether a BAM file is genomic or transcriptomic by checking chromosome/transcript ID patterns.
-    Handles variations in chromosome naming (with/without 'chr' prefix).
     
     Parameters:
     - df (DataFrame): BAM DataFrame with chromosome/transcript information
     - exon_df (DataFrame): Exon DataFrame with both chromosome and transcript IDs
     
     Returns:
-    - str: 'genomic' or 'transcriptomic'
-    - dict: Additional information about the match (e.g., whether chromosome names need normalization)
+    - tuple: (str for BAM type, dict with match info including common chromosomes)
     
     Raises:
-    - ValueError: If BAM type cannot be determined or if no matching IDs found
+    - ValueError: If BAM type cannot be determined
     """
     bam_ids = set(df["chr"].unique())
     exon_chroms = set(exon_df["chr"].unique())
     exon_trans = set(exon_df["tran_id"].unique())
     
-    # Try direct chromosome matching first
-    chrom_match = len(bam_ids.intersection(exon_chroms))
+    # Check for transcript matches first
     trans_match = len(bam_ids.intersection(exon_trans))
+    if trans_match > 0:
+        return 'transcriptomic', {
+            'needs_normalization': False,
+            'common_ids': bam_ids.intersection(exon_trans)
+        }
     
-    if chrom_match > trans_match:
-        return 'genomic', {'needs_normalization': False}
-    elif trans_match > chrom_match:
-        return 'transcriptomic', {'needs_normalization': False}
+    # Check for chromosome matches
+    has_match, needs_norm, common_chr = get_matching_chromosomes(bam_ids, exon_chroms)
+    if has_match:
+        return 'genomic', {
+            'needs_normalization': needs_norm,
+            'common_chromosomes': common_chr
+        }
     
-    # If no direct matches, try normalized chromosome names
-    norm_bam_chroms = {normalize_chrom_name(c) for c in bam_ids}
-    norm_exon_chroms = {normalize_chrom_name(c) for c in exon_chroms}
-    
-    norm_chrom_match = len(norm_bam_chroms.intersection(norm_exon_chroms))
-    
-    if norm_chrom_match > trans_match:
-        return 'genomic', {'needs_normalization': True}
-    elif trans_match > norm_chrom_match:
-        return 'transcriptomic', {'needs_normalization': False}
-    else:
-        raise ValueError(
-            "Unable to determine BAM type. No significant matches found with either:\n"
-            f"Chromosomes in annotation (original): {sorted(exon_chroms)}\n"
-            f"Chromosomes in annotation (normalized): {sorted(norm_exon_chroms)}\n"
-            f"Transcript IDs in annotation: {sorted(exon_trans)}\n"
-            f"IDs in BAM (original): {sorted(bam_ids)}\n"
-            f"IDs in BAM (normalized): {sorted(norm_bam_chroms)}"
-        )
+    # If no matches found, raise informative error
+    raise ValueError(
+        "Unable to determine BAM type. No significant matches found with either:\n"
+        f"Chromosomes in annotation: {sorted(exon_chroms)}\n"
+        f"Transcript IDs in annotation: {sorted(exon_trans)}\n"
+        f"IDs in BAM: {sorted(bam_ids)}\n"
+        "Try ensuring chromosome naming is consistent (e.g., 'chr1' vs '1')"
+    )
 
 def process_genomic_bam(df_namesplit, exon_df, needs_normalization=False):
     """
@@ -85,6 +108,23 @@ def process_genomic_bam(df_namesplit, exon_df, needs_normalization=False):
         exon_df = exon_df.with_columns(
             pl.col("chr").apply(normalize_chrom_name).alias("chr")
         )
+    
+    # Filter to matching chromosomes
+    bam_ids = set(df_namesplit["chr"].unique())
+    exon_chroms = set(exon_df["chr"].unique())
+    _, _, common_chr = get_matching_chromosomes(bam_ids, exon_chroms)
+    
+    df_namesplit = (
+        df_namesplit.with_columns(shared=pl.col("chr").is_in(common_chr))
+        .filter(pl.col("shared") == True)
+        .select(pl.all().exclude("shared"))
+    )
+    
+    exon_df = (
+        exon_df.with_columns(shared=pl.col("chr").is_in(common_chr))
+        .filter(pl.col("shared") == True)
+        .select(pl.all().exclude("shared"))
+    )
     
     return bamtranscript(df_namesplit, exon_df)
 
@@ -120,7 +160,7 @@ def dftobed(df, annotation, offsets):
     # Get annotations
     cds_df, exon_df = getexons_and_cds(annotation)
     
-    # Detect BAM type
+    # Detect BAM type and get matching info
     bam_type, info = detect_bam_type(df_namesplit, exon_df)
     
     # Process based on BAM type

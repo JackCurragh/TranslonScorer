@@ -540,7 +540,7 @@ def dftobed(df, annotation, offsets):
 
 def bedtobigwig(bedfile, chromsize, filename):
     """
-    Converts a bedGraph file to a bigWig file using the bedGraphToBigWig utility.
+    Converts a bedGraph file to a bigWig file using pyBigWig.
 
     Parameters:
         bedfile (str): The path to the input bedGraph file.
@@ -548,15 +548,50 @@ def bedtobigwig(bedfile, chromsize, filename):
         filename (str): The name for the generated file.
 
     Returns:
-        None
+        str: Path to the created bigWig file
 
     Notes:
-        - The output bigWig file will be named 'filename.bw' and will be created in the same directory as the input file.
-        - Requires the bedGraphToBigWig utility to be installed and accessible in the system path.
-
-    Example:
-        bedtobigwig("input.bedGraph", "chromsizes.txt", "filename")
+        - The output bigWig file will be named 'filename.bw'
+        - Uses pyBigWig library instead of external kent utils
+        - Handles chromosome sizes file reading internally
     """
-    os.system(f"bedGraphToBigWig {bedfile} {chromsize} {filename}.bw")
-
-    return ""
+    import pyBigWig as bw
+    import polars as pl
+    
+    log_info("Reading chromosome sizes")
+    # Read chromosome sizes file
+    chrom_sizes = {}
+    with open(chromsize, 'r') as f:
+        for line in f:
+            chrom, size = line.strip().split('\t')
+            chrom_sizes[chrom] = int(size)
+    
+    log_info("Reading bedGraph data")
+    # Read bedGraph data
+    bed_data = pl.read_csv(bedfile, separator='\t', has_header=False)
+    bed_data = bed_data.rename({
+        "column_1": "chrom",
+        "column_2": "start",
+        "column_3": "end",
+        "column_4": "value"
+    })
+    
+    # Create bigWig file
+    log_info("Creating bigWig file")
+    bw_file = bw.open(f"{filename}.bw", "w")
+    
+    # Add header with chromosome sizes
+    bw_file.addHeader(list(chrom_sizes.items()))
+    
+    # Write data chromosome by chromosome
+    for chrom in bed_data["chrom"].unique():
+        chrom_data = bed_data.filter(pl.col("chrom") == chrom)
+        if not chrom_data.is_empty():
+            starts = chrom_data["start"].to_list()
+            ends = chrom_data["end"].to_list()
+            values = chrom_data["value"].to_list()
+            bw_file.addEntries(chrom, starts, ends=ends, values=values)
+    
+    bw_file.close()
+    log_info(f"Successfully created {filename}.bw")
+    return f"{filename}.bw"

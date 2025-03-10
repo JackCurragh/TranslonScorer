@@ -347,6 +347,11 @@ def detect_bam_type(df, exon_df):
     
     # Check for genomic BAM (chromosome matches)
     chrom_match = len(bam_ids.intersection(exon_chroms))
+
+    if chrom_match == 0:
+        exon_chroms = {chr.replace("chr", "") for chr in exon_chroms}
+        bam_ids = {chr.replace("chr", "") for chr in bam_ids}
+        chrom_match = len(bam_ids.intersection(exon_chroms))
     
     # Check for transcriptomic BAM (transcript matches)
     trans_match = len(bam_ids.intersection(exon_trans))

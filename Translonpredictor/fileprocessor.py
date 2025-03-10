@@ -63,23 +63,34 @@ def bamtranscript(bam_df, exon_df):
     - DataFrame: A modified version of `bam_df` and `exon_df` after filtering based on shared
                  chromosome information and exploding exon coordinates.
 
-    This function processes `bam_df` and `exon_df` to filter rows where chromosome information
-    is shared between the two datasets. First, it identifies unique chromosomes present in both
-    `bam_df` and `exon_df`. Then, it filters `bam_df` to include only rows where the chromosome
-    matches those found in `exon_df`, and vice versa for `exon_df`.
-
-    After filtering, `exon_df` is flattened by exploding columns ['start', 'stop', 'tran_start', 'tran_stop']
-    to separate comma-separated values into individual rows, facilitating further processing.
-
-    The modified versions of `bam_df` and `exon_df` are returned for subsequent analysis or operations.
-
-    Note: This function assumes the use of a library like `pandas` (abbreviated here as `pl`) for
-    DataFrame operations.
+    Raises:
+    - ValueError: If there's no overlap between BAM and exon chromosomes
+    - ValueError: If no overlapping regions are found between BAM and exon coordinates
     """
     exon_flattened = exon_df.with_columns(pl.col("chr"))
 
-    uniquechr_bam = list(bam_df["chr"].unique())
-    uniquechr_exon = list(exon_flattened["chr"].unique())
+    # Get unique chromosomes and check overlap
+    uniquechr_bam = set(bam_df["chr"].unique())
+    uniquechr_exon = set(exon_flattened["chr"].unique())
+    common_chr = uniquechr_bam.intersection(uniquechr_exon)
+    
+    if not common_chr:
+        # Check if this might be due to chromosome naming
+        bam_chr_stripped = {chr.replace("chr", "") for chr in uniquechr_bam}
+        exon_chr_stripped = {chr.replace("chr", "") for chr in uniquechr_exon}
+        if bam_chr_stripped.intersection(exon_chr_stripped):
+            raise ValueError(
+                "Chromosome naming is inconsistent between BAM and annotation files. "
+                f"BAM chromosomes: {sorted(uniquechr_bam)}, "
+                f"Annotation chromosomes: {sorted(uniquechr_exon)}. "
+                "Please ensure consistent chromosome naming (e.g., both using 'chr1' or both using '1')."
+            )
+        else:
+            raise ValueError(
+                "No overlapping chromosomes found between BAM and annotation files. "
+                f"BAM chromosomes: {sorted(uniquechr_bam)}, "
+                f"Annotation chromosomes: {sorted(uniquechr_exon)}"
+            )
 
     bam_df = (
         bam_df.with_columns(shared=pl.col("chr").is_in(uniquechr_exon))
@@ -94,12 +105,17 @@ def bamtranscript(bam_df, exon_df):
     )
 
     results = []
-    for chr in bam_df["chr"].unique():
+    for chr in common_chr:
         # Filter exons that overlap with the current bam range
         bam_with_chr = bam_df.filter(pl.col("chr") == chr)
         exon_with_chr = exon_flattened.filter(pl.col("chr") == chr)
+        
+        if exon_with_chr.is_empty() or bam_with_chr.is_empty():
+            continue
+            
         min_val = min(exon_with_chr["start"])
         max_val = max(exon_with_chr["stop"])
+        
         for i in range(min_val, max_val, 225000):
             rng = i + 225000
             exon_chr = exon_with_chr.filter(
@@ -111,6 +127,15 @@ def bamtranscript(bam_df, exon_df):
             if not exon_chr.is_empty() and not bam_chr.is_empty():
                 result_dict = get_bam_tran(bam_chr, exon_chr)
                 results.append(result_dict)
+
+    if not results:
+        raise ValueError(
+            "No overlapping regions found between BAM and annotation files. "
+            "This could be due to:\n"
+            "1. Mismatched coordinates\n"
+            "2. BAM file aligned to different genome version than annotation\n"
+            "3. No reads mapping to annotated regions"
+        )
 
     bam_df = pl.from_dicts(results)
     bam_df = bam_df.explode(
@@ -300,22 +325,91 @@ def change_point_analysis(offset_df):
     return offset_dict
 
 
+def detect_bam_type(df, exon_df):
+    """
+    Detect whether a BAM file is genomic or transcriptomic by checking chromosome/transcript ID patterns.
+    
+    Parameters:
+    - df (DataFrame): BAM DataFrame with chromosome/transcript information
+    - exon_df (DataFrame): Exon DataFrame with both chromosome and transcript IDs
+    
+    Returns:
+    - str: 'genomic' or 'transcriptomic'
+    
+    Raises:
+    - ValueError: If BAM type cannot be determined or if no matching IDs found
+    """
+    bam_ids = set(df["chr"].unique())
+    exon_chroms = set(exon_df["chr"].unique())
+    exon_trans = set(exon_df["tran_id"].unique())
+    
+    # Check for genomic BAM (chromosome matches)
+    chrom_match = len(bam_ids.intersection(exon_chroms))
+    
+    # Check for transcriptomic BAM (transcript matches)
+    trans_match = len(bam_ids.intersection(exon_trans))
+    
+    if chrom_match > trans_match:
+        return 'genomic'
+    elif trans_match > chrom_match:
+        return 'transcriptomic'
+    else:
+        raise ValueError(
+            "Unable to determine BAM type. No significant matches found with either:\n"
+            f"Chromosomes in annotation: {sorted(exon_chroms)}\n"
+            f"Transcript IDs in annotation: {sorted(exon_trans)}\n"
+            f"IDs in BAM: {sorted(bam_ids)}"
+        )
+
+
+def process_transcriptomic_bam(df_namesplit, cds_df):
+    """
+    Process a transcriptomic BAM file where reads are already aligned to transcripts.
+    
+    Parameters:
+    - df_namesplit (DataFrame): BAM DataFrame with transcript alignments
+    - cds_df (DataFrame): CDS DataFrame with transcript information
+    
+    Returns:
+    - DataFrame: Processed BAM data ready for A-site calculation
+    """
+    # Rename chr column to tran_id since it contains transcript IDs
+    df_with_tran = df_namesplit.rename({"chr": "tran_id"})
+    
+    # Filter for transcripts present in CDS annotation
+    bam_to_cds = (
+        df_with_tran.with_columns(shared=pl.col("tran_id").is_in(cds_df["tran_id"]))
+        .filter(pl.col("shared") == True)
+        .select(pl.all().exclude("shared"))
+    )
+    
+    # Calculate position relative to CDS start
+    tran_dict = cds_df.to_dict(as_series=False)
+    start_dict = dict(zip(tran_dict["tran_id"], tran_dict["tran_start"]))
+    
+    bam_to_cds = bam_to_cds.with_columns(
+        [
+            pl.struct(["tran_id", "start"])
+            .apply(lambda x: calculate_differences(x["start"], start_dict[x["tran_id"]]))
+            .alias("bamcds_start")
+        ]
+    )
+    
+    return bam_to_cds
+
+
 def dftobed(df, annotation, offsets):
     """
     Converts a DataFrame to BED format with A-site calculation and offset values.
+    Automatically detects and handles both genomic and transcriptomic BAM files.
 
     Parameters:
-    - df (DataFrame): Input DataFrame to be converted to BED format.
+    - df (DataFrame): Input DataFrame to be converted to BED format
+    - annotation (str): Path to annotation file
+    - offsets (dict, optional): Pre-calculated offsets for A-site calculation
 
     Returns:
-    - bed (DataFrame): DataFrame representing the BED format data with A-site positions and aggregated counts.
-
-    This function takes an input DataFrame 'df' and performs the following operations:
-    1. Creates a new DataFrame 'df_filtered' by calculating the length using the 'end' and 'pos' columns and excluding the 'end' column from the selection.
-    2. Splits the 'qname' column values specifically on "_x", applies a split function to extract the integer value, renames the columns to 'count' and 'chr', and stores the results in a new DataFrame 'df_namesplit'.
-    3. Obtains the length values from the 'df_namesplit' DataFrame and creates offsets dictionary with a hardcoded offset value of 15 for each length value.
-    4. Calls the 'asitecalc' function to calculate A-site positions using the 'df_namesplit' DataFrame and the generated offsets, and stores the resulting BED format data in the 'bed' DataFrame.
-
+    - tuple: (bed DataFrame, exon DataFrame, CDS DataFrame)
     """
     df_filtered = df.with_columns(
         (pl.col("end") - pl.col("pos")).alias("length")
@@ -325,7 +419,7 @@ def dftobed(df, annotation, offsets):
         )
     )
 
-    # split specifically on _x -> implement more!!!
+    # Split read names to get counts
     split_func = lambda s: int(s.split("_x")[1])
     df_namesplit = (
         df_filtered.with_columns(pl.col("qname").apply(split_func))
@@ -333,18 +427,28 @@ def dftobed(df, annotation, offsets):
         .cast({"chr": pl.String})
     )
 
+    # Get annotations
     cds_df, exon_df = getexons_and_cds(annotation)
-    # calculate transcriptomic coordinates
-    bam_tran = bamtranscript(df_namesplit, exon_df)
-    # Calculate position relative to cds
-    bam_to_cds = bamrelativetocds(bam_tran, cds_df)
+    
+    # Detect BAM type
+    bam_type = detect_bam_type(df_namesplit, exon_df)
+    
+    # Process based on BAM type
+    if bam_type == 'genomic':
+        # Existing genomic BAM processing
+        bam_tran = bamtranscript(df_namesplit, exon_df)
+        bam_to_cds = bamrelativetocds(bam_tran, cds_df)
+    else:  # transcriptomic
+        bam_to_cds = process_transcriptomic_bam(df_namesplit, cds_df)
+    
+    # Calculate offsets if not provided
     if not offsets:
         bam_offsets = bam_to_cds.group_by("bamcds_start", "length").agg(
             pl.col("count").sum()
         )
-        # offset dictionary
         offsets = change_point_analysis(bam_offsets)
-    # A site calculation
+    
+    # A-site calculation
     bed = asitecalc(bam_to_cds, offsets)
 
     return bed, exon_df, cds_df

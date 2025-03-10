@@ -2,6 +2,8 @@
 
 import polars as pl
 import os
+from typing import Optional
+from .logging_config import log_info, log_warning, log_error
 
 from .findexonscds import getexons_and_cds
 
@@ -67,31 +69,61 @@ def bamtranscript(bam_df, exon_df):
     - ValueError: If there's no overlap between BAM and exon chromosomes
     - ValueError: If no overlapping regions are found between BAM and exon coordinates
     """
+    log_info("Starting BAM to transcript conversion")
     exon_flattened = exon_df.with_columns(pl.col("chr"))
 
     # Get unique chromosomes and check overlap
     uniquechr_bam = set(bam_df["chr"].unique())
     uniquechr_exon = set(exon_flattened["chr"].unique())
+    
+    log_info(f"Found {len(uniquechr_bam)} unique chromosomes in BAM and {len(uniquechr_exon)} in annotation")
+    
+    # First try direct matching
     common_chr = uniquechr_bam.intersection(uniquechr_exon)
     
     if not common_chr:
+        log_info("No direct chromosome matches found, attempting chromosome name normalization")
         # Check if this might be due to chromosome naming
         bam_has_chr = any(c.startswith('chr') for c in uniquechr_bam)
         exon_has_chr = any(c.startswith('chr') for c in uniquechr_exon)
+        
         if bam_has_chr != exon_has_chr:
             if exon_has_chr:
-                # Add 'chr' prefix to BAM chromosomes
-                bam_df = bam_df.with_columns(pl.col("chr").str.concat("chr"))
+                log_info("Adding 'chr' prefix to BAM chromosomes")
+                bam_df = bam_df.with_columns(
+                    pl.when(pl.col("chr").str.starts_with("chr"))
+                    .then(pl.col("chr"))
+                    .otherwise(pl.concat_str(["chr", pl.col("chr")]))
+                    .alias("chr")
+                )
+                uniquechr_bam = set(bam_df["chr"].unique())
             else:
-                # Remove 'chr' prefix from BAM chromosomes
-                bam_df = bam_df.with_columns(pl.col("chr").str.replace("chr", ""))
-        else:
-            raise ValueError(
-                "No overlapping chromosomes found between BAM and annotation files. "
-                f"BAM chromosomes: {sorted(uniquechr_bam)[:5]}, "
-                f"Annotation chromosomes: {sorted(uniquechr_exon)[:5]}. "
-            )
+                log_info("Removing 'chr' prefix from BAM chromosomes")
+                bam_df = bam_df.with_columns(
+                    pl.col("chr").str.replace("chr", "").alias("chr")
+                )
+                uniquechr_bam = set(bam_df["chr"].unique())
+            
+            # Try matching again after normalization
+            common_chr = uniquechr_bam.intersection(uniquechr_exon)
+            
+            if common_chr:
+                log_info(f"After normalization, found {len(common_chr)} matching chromosomes")
+            else:
+                # Create stripped versions for error message
+                bam_chr_stripped = {c.replace("chr", "") for c in uniquechr_bam}
+                exon_chr_stripped = {c.replace("chr", "") for c in uniquechr_exon}
+                error_msg = (
+                    "No overlapping chromosomes found between BAM and annotation files after normalization.\n"
+                    f"BAM chromosomes: {sorted(uniquechr_bam)[:5]}\n"
+                    f"Annotation chromosomes: {sorted(uniquechr_exon)[:5]}\n"
+                    f"BAM stripped: {sorted(bam_chr_stripped)[:5]}\n"
+                    f"Annotation stripped: {sorted(exon_chr_stripped)[:5]}"
+                )
+                log_error(error_msg)
+                raise ValueError(error_msg)
 
+    # Filter to matching chromosomes
     bam_df = (
         bam_df.with_columns(shared=pl.col("chr").is_in(uniquechr_exon))
         .filter(pl.col("shared") == True)
@@ -103,20 +135,43 @@ def bamtranscript(bam_df, exon_df):
         .select(pl.all().exclude("shared"))
         .explode(["start", "stop", "tran_start", "tran_stop"])
     )
-
+    
+    if bam_df.is_empty():
+        error_msg = (
+            "No overlapping chromosomes found between BAM and annotation after name normalization.\n"
+            f"BAM chromosomes: {sorted(uniquechr_bam)}\n"
+            f"Annotation chromosomes: {sorted(uniquechr_exon)}"
+        )
+        log_error(error_msg)
+        raise ValueError(error_msg)
+    
+    # Process matching chromosomes
     results = []
-    for chr in common_chr:
-        # Filter exons that overlap with the current bam range
+    total_chr = len(set(bam_df["chr"].unique()))
+    log_info(f"\nProcessing {total_chr} chromosomes")
+    
+    for idx, chr in enumerate(set(bam_df["chr"].unique()), 1):
+        if idx % 5 == 0 or idx == total_chr:
+            log_info(f"Processing chromosome {chr} ({idx}/{total_chr})")
+            
         bam_with_chr = bam_df.filter(pl.col("chr") == chr)
         exon_with_chr = exon_flattened.filter(pl.col("chr") == chr)
         
         if exon_with_chr.is_empty() or bam_with_chr.is_empty():
+            log_warning(f"No data found for chromosome {chr}")
             continue
             
         min_val = min(exon_with_chr["start"])
         max_val = max(exon_with_chr["stop"])
+        total_chunks = (max_val - min_val) // 225000 + 1
         
-        for i in range(min_val, max_val, 225000):
+        if total_chunks > 100:  # Only show chunk progress for larger chromosomes
+            log_info(f"  Processing {total_chunks} chunks for chromosome {chr}")
+        
+        for chunk_idx, i in enumerate(range(min_val, max_val, 225000), 1):
+            if total_chunks > 100 and (chunk_idx % 50 == 0 or chunk_idx == total_chunks):
+                log_info(f"    Chunk {chunk_idx}/{total_chunks}")
+                
             rng = i + 225000
             exon_chr = exon_with_chr.filter(
                 (pl.col("start") >= i) & (pl.col("stop") <= rng)
@@ -129,14 +184,17 @@ def bamtranscript(bam_df, exon_df):
                 results.append(result_dict)
 
     if not results:
-        raise ValueError(
-            "No overlapping regions found between BAM and annotation files. "
+        error_msg = (
+            "No overlapping regions found between BAM and annotation files.\n"
             "This could be due to:\n"
             "1. Mismatched coordinates\n"
             "2. BAM file aligned to different genome version than annotation\n"
             "3. No reads mapping to annotated regions"
         )
+        log_error(error_msg)
+        raise ValueError(error_msg)
 
+    log_info("\nCreating final BAM transcript DataFrame")
     bam_df = pl.from_dicts(results)
     bam_df = bam_df.explode(
         [
@@ -150,6 +208,7 @@ def bamtranscript(bam_df, exon_df):
             "tran_stop_bam",
         ]
     )
+    log_info("BAM transcript conversion complete")
     return bam_df
 
 
@@ -278,50 +337,56 @@ def bamrelativetocds(bamdf, cdsdf):
 
 def change_point_analysis(offset_df):
     """
-    Calculate the change point for the metagene profile
-    This should reflect where the cds starts and as a result the
-    offset to apply to get a-site
-
-    Inputs:
-        read_counts: Dictionary containing the read counts for each position
-        surrounding_range: tuple of start and stop for change point analysis
-
-    Outputs:
-        max_shift_position: The position of the change point
+    Calculate the change point for the metagene profile using vectorized operations.
     """
-    max_shift = 0
-    max_shift_position = None
+    log_info(f"Processing offset analysis for {len(offset_df['length'].unique())} different read lengths")
+    
     offset_dict = {}
-    for length in offset_df["length"].unique():
-        offset_df_len = offset_df.filter(pl.col("length") == length).sort(
-            "bamcds_start"
-        )
-        for i in range(-30, 11):
-            left = []
-            for j in range(i - 3, i + 1):
-                left_df = offset_df_len.filter(pl.col("bamcds_start") == j)
-                if not left_df.is_empty():
-                    left.append(left_df["count"][0])
-                else:
-                    left.append(0)
-            right = []
-            for j in range(i + 1, i + 5):
-                right_df = offset_df_len.filter(pl.col("bamcds_start") == j)
-                if not right_df.is_empty():
-                    right.append(right_df["count"][0])
-                else:
-                    right.append(0)
-
-        mean_left = sum(left) / 4
-        mean_right = sum(right) / 4
-        shift = abs(mean_right - mean_left)
-        if shift > max_shift:
-            max_shift = shift
-            max_shift_position = i
-        if max_shift_position == None:
-            offset_dict[length] = 15
-        else:
-            offset_dict[length] = max_shift_position
+    total_lengths = len(offset_df["length"].unique())
+    
+    for idx, length in enumerate(offset_df["length"].unique(), 1):
+        if idx % 10 == 0 or idx == total_lengths:
+            log_info(f"Processing length {length} ({idx}/{total_lengths})")
+            
+        # Get data for this length and sort
+        offset_df_len = offset_df.filter(pl.col("length") == length).sort("bamcds_start")
+        
+        if offset_df_len.is_empty():
+            log_warning(f"No data found for length {length}, using default offset of 15")
+            offset_dict[length] = 15  # default offset
+            continue
+            
+        # Pre-calculate all positions we need
+        positions = list(range(-30, 11))
+        max_shift = 0
+        max_shift_position = None
+        
+        # Create a lookup dictionary for counts at each position
+        count_dict = dict(zip(
+            offset_df_len["bamcds_start"].to_list(),
+            offset_df_len["count"].to_list()
+        ))
+        
+        # Vectorized calculation of shifts
+        for i in positions:
+            left_positions = range(i - 3, i + 1)
+            right_positions = range(i + 1, i + 5)
+            
+            # Get counts, defaulting to 0 for missing positions
+            left_counts = [count_dict.get(pos, 0) for pos in left_positions]
+            right_counts = [count_dict.get(pos, 0) for pos in right_positions]
+            
+            mean_left = sum(left_counts) / 4
+            mean_right = sum(right_counts) / 4
+            shift = abs(mean_right - mean_left)
+            
+            if shift > max_shift:
+                max_shift = shift
+                max_shift_position = i
+        
+        offset_dict[length] = max_shift_position if max_shift_position is not None else 15
+    
+    log_info("Offset analysis complete")
     return offset_dict
 
 
@@ -355,9 +420,9 @@ def detect_bam_type(df, exon_df):
     trans_match = len(bam_ids.intersection(exon_trans))
     
     if chrom_match > trans_match:
-        return 'genomic'
+        return 'genomic', {}
     elif trans_match > chrom_match:
-        return 'transcriptomic'
+        return 'transcriptomic', {}
     else:
         raise ValueError(
             "Unable to determine BAM type. No significant matches found with either:\n"
@@ -416,6 +481,8 @@ def dftobed(df, annotation, offsets):
     Returns:
     - tuple: (bed DataFrame, exon DataFrame, CDS DataFrame)
     """
+    log_info("Starting BAM to BED conversion")
+    log_info("Filtering and preparing BAM data")
     df_filtered = df.with_columns(
         (pl.col("end") - pl.col("pos")).alias("length")
     ).select(
@@ -425,6 +492,7 @@ def dftobed(df, annotation, offsets):
     )
 
     # Split read names to get counts
+    log_info("Processing read names")
     split_func = lambda s: int(s.split("_x")[1])
     df_namesplit = (
         df_filtered.with_columns(pl.col("qname").apply(split_func))
@@ -433,28 +501,39 @@ def dftobed(df, annotation, offsets):
     )
 
     # Get annotations
+    log_info("Loading annotations")
     cds_df, exon_df = getexons_and_cds(annotation)
     
-    # Detect BAM type
-    bam_type = detect_bam_type(df_namesplit, exon_df)
+    # Detect BAM type and get matching info
+    log_info("Detecting BAM type")
+    bam_type, info = detect_bam_type(df_namesplit, exon_df)
+    log_info(f"Detected BAM type: {bam_type}")
     
     # Process based on BAM type
     if bam_type == 'genomic':
-        # Existing genomic BAM processing
+        log_info("Processing genomic BAM")
         bam_tran = bamtranscript(df_namesplit, exon_df)
+        log_info("Converting BAM coordinates to CDS coordinates")
         bam_to_cds = bamrelativetocds(bam_tran, cds_df)
     else:  # transcriptomic
+        log_info("Processing transcriptomic BAM")
         bam_to_cds = process_transcriptomic_bam(df_namesplit, cds_df)
     
     # Calculate offsets if not provided
     if not offsets:
+        log_info("Calculating read length offsets")
         bam_offsets = bam_to_cds.group_by("bamcds_start", "length").agg(
             pl.col("count").sum()
         )
+        log_info("Performing change point analysis")
         offsets = change_point_analysis(bam_offsets)
+    else:
+        log_info("Using provided offsets")
     
     # A-site calculation
+    log_info("Calculating A-sites")
     bed = asitecalc(bam_to_cds, offsets)
+    log_info("BAM to BED conversion complete")
 
     return bed, exon_df, cds_df
 

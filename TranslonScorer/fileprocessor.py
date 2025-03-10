@@ -590,26 +590,40 @@ def bedtobigwig(bedfile, chromsize, filename):
     for chrom in bed_data["chrom"].unique():
         chrom_data = bed_data.filter(pl.col("chrom") == chrom)
         if not chrom_data.is_empty():
-            # Convert polars Series to lists and ensure numeric types
-            starts = chrom_data["start"].cast(pl.Int64).to_list()
-            ends = chrom_data["end"].cast(pl.Int64).to_list()
-            values = chrom_data["value"].cast(pl.Float64).to_list()
-            
-            # Ensure all lists have the same length
-            if len(starts) != len(ends) or len(starts) != len(values):
-                log_warning(f"Skipping chromosome {chrom} due to mismatched data lengths")
-                continue
+            try:
+                # Convert polars Series to lists and ensure numeric types
+                starts = chrom_data["start"].cast(pl.Int64).to_list()
+                ends = chrom_data["end"].cast(pl.Int64).to_list()
+                values = chrom_data["value"].cast(pl.Float64).to_list()
                 
-            # Ensure all positions are valid
-            if any(end <= start for start, end in zip(starts, ends)):
-                log_warning(f"Skipping chromosome {chrom} due to invalid positions (end <= start)")
-                continue
+                # Ensure all lists have the same length
+                if len(starts) != len(ends) or len(starts) != len(values):
+                    log_warning(f"Skipping chromosome {chrom} due to mismatched data lengths")
+                    continue
+                    
+                # Ensure all positions are valid
+                if any(end <= start for start, end in zip(starts, ends)):
+                    log_warning(f"Skipping chromosome {chrom} due to invalid positions (end <= start)")
+                    continue
                 
-            # try:
-            bw_file.addEntries(chrom, starts, ends=ends, values=values)
-            # except Exception as e:
-            #     log_warning(f"Error adding entries for chromosome {chrom}: {str(e)}")
-            #     continue
+                # Ensure all values are valid numbers
+                if any(not isinstance(v, (int, float)) or pd.isna(v) for v in values):
+                    log_warning(f"Skipping chromosome {chrom} due to invalid values")
+                    continue
+                
+                # Create a list of chromosome names matching the length of other lists
+                chromosomes = [chrom] * len(starts)
+                
+                # Add entries to bigWig file
+                bw_file.addEntries(
+                    chromosomes,
+                    starts,
+                    ends=ends,
+                    values=values
+                )
+            except Exception as e:
+                log_warning(f"Error processing chromosome {chrom}: {str(e)}")
+                continue
     
     bw_file.close()
     log_info(f"Successfully created {filename}.bw")

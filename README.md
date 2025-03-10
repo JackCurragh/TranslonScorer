@@ -2,7 +2,7 @@
 
 ## Overview
 
-`TranslonScorer` is a command-line tool for scoring potential translational events (translons) from Ribo-seq data. The tool processes Ribo-seq BAM files, identifies potential ORFs from transcript sequences, and scores them based on ribosome coverage patterns. It provides detailed scoring metrics that allow users to apply their own thresholds for translon classification based on their required stringency. The tool supports multiple input file formats and generates output files in several formats including `.bedGraph`, `.bw`, `.html`, and `.csv`.
+`TranslonScorer` is a command-line tool for scoring potential translational events (translons) from Ribo-seq data. The tool processes Ribo-seq BAM files (supporting both genomic and transcriptomic alignments), identifies potential ORFs from transcript sequences, and scores them based on ribosome coverage patterns. It provides detailed scoring metrics that allow users to apply their own thresholds for translon classification based on their required stringency. The tool supports multiple input file formats and generates output files in several formats including `.bedGraph`, `.bw`, `.html`, and `.csv`.
 
 ## Installation
 
@@ -30,7 +30,7 @@ translonscorer all \
 ```
 
 This will:
-1. Process the Ribo-seq BAM file
+1. Process the Ribo-seq BAM file (automatically detecting genomic or transcriptomic alignments)
 2. Extract transcripts
 3. Find and score potential ORFs
 4. Generate visualization reports
@@ -47,6 +47,10 @@ translonscorer process-bam \
     -a anno.gtf \
     -o output
 ```
+
+The tool automatically detects whether your BAM file contains genomic or transcriptomic alignments and processes it accordingly:
+- For genomic BAMs: Converts genomic coordinates to transcript coordinates using the annotation
+- For transcriptomic BAMs: Uses transcript coordinates directly from the alignment
 
 #### Find and Score ORFs
 ```sh
@@ -81,7 +85,7 @@ translonscorer plot \
 - `-o, --outfile`: Base name for output files (required)
 
 ### Process BAM Command
-- `-b, --bam`: Input BAM file from Ribo-seq data (required)
+- `-b, --bam`: Input BAM file from Ribo-seq data, either genomic or transcriptomic (required)
 - `-c, --chromsizes`: Chromosome sizes file (required)
 - `-a, --annotation`: GTF annotation file (required)
 - `-off, --offsets`: File containing read length-specific offsets for A-site calculation
@@ -139,7 +143,8 @@ The tool requires specific combinations of input files to function correctly. If
 Please ensure that:
 1. All required input files exist and are readable
 2. File formats match the expected types (BAM, FASTA, GTF, etc.)
-3. Chromosome notation is consistent across annotation and coverage files
+3. For genomic BAMs: Chromosome notation is consistent across annotation and BAM files
+4. For transcriptomic BAMs: Transcript IDs in the BAM match those in the annotation
 
 ## Contributing
 

@@ -35,7 +35,7 @@ def cli():
 
 @cli.command()
 @click.option('--bam', '-b', required=True,
-              help='Input BAM file from Ribo-seq data (required)')
+              help='Input BAM file from Ribo-seq data. Supports both genomic and transcriptomic alignments (required)')
 @click.option('--chromsizes', '-c', required=True,
               help='Chromosome sizes file (required for bigWig conversion)')
 @click.option('--sequence', '-s', required=True,
@@ -70,12 +70,12 @@ def all(bam: str, chromsizes: str, sequence: str, annotation: str,
     
     This command runs all steps of the pipeline in sequence:
     1. Process Ribo-seq BAM file to generate coverage tracks
-    2. Extract transcripts from sequence data
+    2. Extract transcripts
     3. Find and score potential ORFs
     4. Generate visualization reports
     
     Required files:
-    - BAM file: Transcriptome-aligned Ribo-seq reads
+    - BAM file: Ribo-seq reads aligned to either genome or transcriptome
     - Chromosome sizes: Tab-separated file with chr\tsize
     - Sequence: FASTA file (genomic or transcriptomic)
     - Annotation: GTF file with transcript annotations
@@ -84,6 +84,7 @@ def all(bam: str, chromsizes: str, sequence: str, annotation: str,
     translonpredictor all -b ribo.bam -c chrom.sizes -s genome.fa -a anno.gtf -o output
     
     Note: This command will generate all intermediate files with the specified output prefix.
+    The tool automatically detects whether the BAM file contains genomic or transcriptomic alignments.
     """
     click.echo("Starting complete TranslonScorer pipeline...")
     
@@ -143,7 +144,7 @@ def all(bam: str, chromsizes: str, sequence: str, annotation: str,
 
 @cli.command()
 @click.option('--bam', '-b', required=True,
-              help='Input BAM file from Ribo-seq data (required)')
+              help='Input BAM file from Ribo-seq data. Supports both genomic and transcriptomic alignments (required)')
 @click.option('--chromsizes', '-c', required=True,
               help='Chromosome sizes file (required for bigWig conversion)')
 @click.option('--annotation', '-a', required=True,
@@ -162,12 +163,15 @@ def process_bam(bam: str, chromsizes: str, annotation: str,
     3. Extract exon and CDS information
     
     Required files:
-    - BAM file: Transcriptome-aligned Ribo-seq reads
+    - BAM file: Ribo-seq reads aligned to either genome or transcriptome
     - Chromosome sizes: Tab-separated file with chr\tsize
     - Annotation: GTF file with transcript annotations
     
     Example:
     translonpredictor process-bam -b sample.bam -c chrom.sizes -a anno.gtf -o output
+    
+    Note: The tool automatically detects whether the BAM file contains genomic or 
+    transcriptomic alignments and processes it accordingly.
     """
     print("Processing BAM file")
     location = os.path.abspath(bam)

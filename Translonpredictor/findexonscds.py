@@ -144,12 +144,24 @@ def procesexons(df):
 
     groupedexonspos = (
         exonplus.group_by("tran_id")
-        .agg(pl.col("start"), pl.col("stop"), pl.col("strand"), pl.col("chr"))
+        .agg([
+            pl.col("start"),
+            pl.col("stop"),
+            pl.col("strand"),
+            # Take first chromosome as they should all be the same for a transcript
+            pl.col("chr").first().alias("chr")
+        ])
         .select(["chr", "tran_id", "start", "stop", "strand"])
     )
     groupedexonsneg = (
         exonneg.group_by("tran_id")
-        .agg(pl.col("start"), pl.col("stop"), pl.col("strand"), pl.col("chr"))
+        .agg([
+            pl.col("start"),
+            pl.col("stop"),
+            pl.col("strand"),
+            # Take first chromosome as they should all be the same for a transcript
+            pl.col("chr").first().alias("chr")
+        ])
         .select(["chr", "tran_id", "start", "stop", "strand"])
     )
     return groupedexonspos, groupedexonsneg

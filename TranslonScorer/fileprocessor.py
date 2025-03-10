@@ -1,6 +1,7 @@
 """This script contains functions to transform data frames into different file types"""
 
 import polars as pl
+import pandas as pd
 import os
 from typing import Optional
 from .logging_config import log_info, log_warning, log_error
@@ -606,9 +607,9 @@ def bedtobigwig(bedfile, chromsize, filename):
                     log_warning(f"Skipping chromosome {chrom} due to invalid positions (end <= start)")
                     continue
                 
-                # Ensure all values are valid numbers
-                if any(not isinstance(v, (int, float)) or pd.isna(v) for v in values):
-                    log_warning(f"Skipping chromosome {chrom} due to invalid values")
+                # Ensure all values are valid numbers using polars
+                if chrom_data["value"].is_null().any():
+                    log_warning(f"Skipping chromosome {chrom} due to null values")
                     continue
                 
                 # Create a list of chromosome names matching the length of other lists

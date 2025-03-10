@@ -558,6 +558,7 @@ def bedtobigwig(bedfile, chromsize, filename):
         - The output bigWig file will be named 'filename.bw'
         - Uses pyBigWig library instead of external kent utils
         - Handles chromosome sizes file reading internally
+        - Ensures data is sorted by chromosome and position before writing
     """
     import pyBigWig as bw
     import polars as pl
@@ -571,7 +572,7 @@ def bedtobigwig(bedfile, chromsize, filename):
             chrom_sizes[chrom] = int(size)
     
     log_info("Reading bedGraph data")
-    # Read bedGraph data
+    # Read bedGraph data and sort by chromosome and start position
     bed_data = pl.read_csv(bedfile, separator='\t', has_header=False)
     bed_data = bed_data.rename({
         "column_1": "chrom",
@@ -579,6 +580,9 @@ def bedtobigwig(bedfile, chromsize, filename):
         "column_3": "end",
         "column_4": "value"
     })
+    
+    # Sort the data by chromosome and start position
+    bed_data = bed_data.sort(["chrom", "start"])
     
     # Create bigWig file
     log_info("Creating bigWig file")

@@ -356,9 +356,9 @@ def detect_bam_type(df, exon_df):
     else:
         raise ValueError(
             "Unable to determine BAM type. No significant matches found with either:\n"
-            f"Chromosomes in annotation: {sorted(exon_chroms)}\n"
-            f"Transcript IDs in annotation: {sorted(exon_trans)}\n"
-            f"IDs in BAM: {sorted(bam_ids)}"
+            f"Chromosomes in annotation: {sorted(exon_chroms)[:5]}\n"
+            f"Transcript IDs in annotation: {sorted(exon_trans)[:5]}\n"
+            f"IDs in BAM: {sorted(bam_ids)[:5]}"
         )
 
 

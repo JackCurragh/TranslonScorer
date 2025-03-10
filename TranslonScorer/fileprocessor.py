@@ -587,10 +587,10 @@ def bedtobigwig(bedfile, chromsize, filename):
     for chrom in bed_data["chrom"].unique():
         chrom_data = bed_data.filter(pl.col("chrom") == chrom)
         if not chrom_data.is_empty():
-            # Convert to lists and ensure all values are numeric
-            starts = [int(x) for x in chrom_data["start"].to_list()]
-            ends = [int(x) for x in chrom_data["end"].to_list()]
-            values = [float(x) for x in chrom_data["value"].to_list()]
+            # Convert polars Series to lists and ensure numeric types
+            starts = chrom_data["start"].cast(pl.Int64).to_list()
+            ends = chrom_data["end"].cast(pl.Int64).to_list()
+            values = chrom_data["value"].cast(pl.Float64).to_list()
             
             # Ensure all lists have the same length
             if len(starts) != len(ends) or len(starts) != len(values):

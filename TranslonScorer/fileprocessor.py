@@ -76,22 +76,20 @@ def bamtranscript(bam_df, exon_df):
     
     if not common_chr:
         # Check if this might be due to chromosome naming
-        bam_chr_stripped = {chr.replace("chr", "") for chr in uniquechr_bam}
-        exon_chr_stripped = {chr.replace("chr", "") for chr in uniquechr_exon}
-        if bam_chr_stripped.intersection(exon_chr_stripped):
-            raise ValueError(
-                "Chromosome naming is inconsistent between BAM and annotation files. "
-                f"BAM chromosomes: {sorted(uniquechr_bam)}, "
-                f"Annotation chromosomes: {sorted(uniquechr_exon)}. "
-                "Please ensure consistent chromosome naming (e.g., both using 'chr1' or both using '1')."
-            )
+        bam_has_chr = any(c.startswith('chr') for c in uniquechr_bam)
+        exon_has_chr = any(c.startswith('chr') for c in uniquechr_exon)
+        if bam_has_chr != exon_has_chr:
+            if exon_has_chr:
+                # Add 'chr' prefix to BAM chromosomes
+                bam_df = bam_df.with_columns(pl.col("chr").str.concat("chr"))
+            else:
+                # Remove 'chr' prefix from BAM chromosomes
+                bam_df = bam_df.with_columns(pl.col("chr").str.replace("chr", ""))
         else:
             raise ValueError(
                 "No overlapping chromosomes found between BAM and annotation files. "
-                f"BAM chromosomes: {sorted(uniquechr_bam)}, "
-                f"Annotation chromosomes: {sorted(uniquechr_exon)}"
-                f"Annotation stripped: {sorted(exon_chr_stripped)}, "
-
+                f"BAM chromosomes: {sorted(uniquechr_bam)[:5]}, "
+                f"Annotation chromosomes: {sorted(uniquechr_exon)[:5]}. "
             )
 
     bam_df = (

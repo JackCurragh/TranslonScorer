@@ -30,32 +30,32 @@ def transcriptreads(bwfile, exon_df):
     coordinates. It calculates the transcript start and stop coordinates for each interval and stores the information in corresponding lists.
     Finally, it constructs the `df_tran` DataFrame using the extracted transcript information and returns it.
     """
-    try:
-        reads = []
-        # Convert Series to lists and ensure numeric types
-        chromosomes = exon_df["chr"].to_list()
-        starts = exon_df["start"].cast(pl.Int64).to_list()
-        stops = exon_df["stop"].cast(pl.Int64).to_list()
-        
-        for chr, start, stop in zip(chromosomes, starts, stops):
-            try:
-                values = bwfile.values(chr, start, stop)
-                if values:
-                    reads.extend(values)
-            except RuntimeError:
-                log_warning(f"Could not read values for {chr}:{start}-{stop}")
-                continue
-        
-        if not reads:
-            return pl.DataFrame()
-            
-        return pl.DataFrame({
-            "tran_start": range(len(reads)),
-            "counts": reads
-        })
-    except Exception as e:
-        log_error(f"Error reading transcript data: {str(e)}")
+    # try:
+    reads = []
+    # Convert Series to lists and ensure numeric types
+    chromosomes = exon_df["chr"].to_list()
+    starts = exon_df["start"].cast(pl.Int64).to_list()
+    stops = exon_df["stop"].cast(pl.Int64).to_list()
+    
+    for chr, start, stop in zip(chromosomes, starts, stops):
+        try:
+            values = bwfile.values(chr, start, stop)
+            if values:
+                reads.extend(values)
+        except RuntimeError:
+            log_warning(f"Could not read values for {chr}:{start}-{stop}")
+            continue
+    
+    if not reads:
         return pl.DataFrame()
+        
+    return pl.DataFrame({
+        "tran_start": range(len(reads)),
+        "counts": reads
+    })
+    # except Exception as e:
+    #     log_error(f"Error reading transcript data: {str(e)}")
+    #     return pl.DataFrame()
 
 
 def oldscoring(df, tran_reads, sru_range, typeorf):

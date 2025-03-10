@@ -83,6 +83,7 @@ def bamtranscript(bam_df, exon_df):
                 "Chromosome naming is inconsistent between BAM and annotation files. "
                 f"BAM chromosomes: {sorted(uniquechr_bam)}, "
                 f"Annotation chromosomes: {sorted(uniquechr_exon)}. "
+                f"Annotation stripped: {sorted(exon_chr_stripped)}, "
                 "Please ensure consistent chromosome naming (e.g., both using 'chr1' or both using '1')."
             )
         else:

@@ -13,6 +13,7 @@ from .filewriter import saveorfsandexons
 from .bigwigtodf import scoring
 from .plotting import plottop10
 from .report import getparameters
+from .logging_config import configure_logging, log_info, log_warning, log_error
 
 warnings.filterwarnings("ignore")
 
@@ -60,12 +61,19 @@ def cli():
               help='Plot range around start position (default: 30)')
 @click.option('--outfile', '-o', required=True,
               help='Base name for output files')
+@click.option('--log-file', type=str,
+              help='Path to log file. If not provided, logs will only be written to console.')
+@click.option('--log-level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']),
+              default='INFO', help='Set the logging level (default: INFO)')
+@click.option('--disable-logging', is_flag=True,
+              help='Disable logging output')
 def all(bam: str, chromsizes: str, sequence: str, annotation: str,
         outfile: str, offsets: Optional[str] = None,
         start_codons: str = "ATG", stop_codons: str = "TAA,TAG,TGA",
         min_len: int = 0, max_len: int = 1000000,
         sru_range: int = 15, scoring_method: str = 'modern',
-        plot_range: int = 30):
+        plot_range: int = 30, log_file: Optional[str] = None,
+        log_level: str = 'INFO', disable_logging: bool = False):
     """Run the complete TranslonScorer pipeline end-to-end.
     
     This command runs all steps of the pipeline in sequence:
@@ -86,34 +94,43 @@ def all(bam: str, chromsizes: str, sequence: str, annotation: str,
     Note: This command will generate all intermediate files with the specified output prefix.
     The tool automatically detects whether the BAM file contains genomic or transcriptomic alignments.
     """
-    click.echo("Starting complete TranslonScorer pipeline...")
+    
+    # Configure logging
+    configure_logging(
+        enable=not disable_logging,
+        log_file=log_file,
+        log_level=log_level
+    )
+    
+    log_info("Starting complete TranslonScorer pipeline...")
     
     # Step 1: Process BAM file
-    click.echo("\nStep 1/4: Processing BAM file")
+    log_info("Step 1/4: Processing BAM file")
     location = os.path.abspath(bam)
     if not os.path.isfile(location):
+        log_error(f"BAM file not found: {bam}")
         raise click.BadParameter(f"BAM file not found: {bam}")
     
     df = readbam(location)
-    click.echo("Calculating and applying offsets")
+    log_info("Calculating and applying offsets")
     beddf, exondf, cdsdf = dftobed(df, annotation, offsets)
     
     bedgraph_path = f"{outfile}.bedGraph"
-    click.echo(f"Writing bedGraph file: {bedgraph_path}")
+    log_info(f"Writing bedGraph file: {bedgraph_path}")
     if not os.path.exists(bedgraph_path):
         beddf.write_csv(bedgraph_path, separator="\t", include_header=False)
     
     bigwig_path = f"{outfile}.bw"
-    click.echo(f"Writing bigWig file: {bigwig_path}")
+    log_info(f"Writing bigWig file: {bigwig_path}")
     bedtobigwig(bedgraph_path, chromsizes, outfile)
     
     # Step 2: Extract transcripts
-    click.echo("\nStep 2/4: Extracting transcripts")
+    log_info("Step 2/4: Extracting transcripts")
     transcript = gettranscripts(sequence, annotation, outfile)
     
     # Step 3: Find and score ORFs
-    click.echo("\nStep 3/4: Finding and scoring ORFs")
-    click.echo("Finding candidate ORFs")
+    log_info("Step 3/4: Finding and scoring ORFs")
+    log_info("Finding candidate ORFs")
     orfdf = preporfs(
         transcript, 
         start_codons.split(","), 
@@ -122,25 +139,25 @@ def all(bam: str, chromsizes: str, sequence: str, annotation: str,
         max_len
     )
     
-    click.echo("Mapping ORFs to transcript coordinates")
+    log_info("Mapping ORFs to transcript coordinates")
     orf_ann_df, exon_df = orfrelativeposition(annotation, orfdf, cdsdf)
     orfs, exon = saveorfsandexons(orf_ann_df, exon_df, outfile)
     
-    click.echo("Scoring ORFs")
+    log_info("Scoring ORFs")
     scoredorfs = scoring(bigwig_path, exon, orfs, scoring_method == 'modern', sru_range)
     scoredorfs.write_csv(f"{outfile}_orfs_scored.csv")
     
     # Step 4: Generate report
-    click.echo("\nStep 4/4: Generating visualization report")
+    log_info("Step 4/4: Generating visualization report")
     plottop10(f"{outfile}_orfs_scored.csv", bigwig_path, exon, plot_range, outfile, getparameters(locals()))
     
-    click.echo("\nPipeline completed successfully!")
-    click.echo(f"Output files generated with prefix: {outfile}")
-    click.echo("Files generated:")
-    click.echo(f"  - {outfile}.bedGraph: Coverage in bedGraph format")
-    click.echo(f"  - {outfile}.bw: Coverage in bigWig format")
-    click.echo(f"  - {outfile}_orfs_scored.csv: Scored ORFs")
-    click.echo(f"  - {outfile}_report.html: Visualization report")
+    log_info("Pipeline completed successfully!")
+    log_info(f"Output files generated with prefix: {outfile}")
+    log_info("Files generated:")
+    log_info(f"  - {outfile}.bedGraph: Coverage in bedGraph format")
+    log_info(f"  - {outfile}.bw: Coverage in bigWig format")
+    log_info(f"  - {outfile}_orfs_scored.csv: Scored ORFs")
+    log_info(f"  - {outfile}_report.html: Visualization report")
 
 @cli.command()
 @click.option('--bam', '-b', required=True,

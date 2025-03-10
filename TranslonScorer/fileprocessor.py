@@ -605,11 +605,11 @@ def bedtobigwig(bedfile, chromsize, filename):
                 log_warning(f"Skipping chromosome {chrom} due to invalid positions (end <= start)")
                 continue
                 
-            try:
-                bw_file.addEntries(chrom, starts, ends=ends, values=values)
-            except Exception as e:
-                log_warning(f"Error adding entries for chromosome {chrom}: {str(e)}")
-                continue
+            # try:
+            bw_file.addEntries(chrom, starts, ends=ends, values=values)
+            # except Exception as e:
+            #     log_warning(f"Error adding entries for chromosome {chrom}: {str(e)}")
+            #     continue
     
     bw_file.close()
     log_info(f"Successfully created {filename}.bw")

@@ -32,11 +32,14 @@ def transcriptreads(bwfile, exon_df):
     """
     try:
         reads = []
-        for chr, start, stop in zip(
-            exon_df["chr"], exon_df["start"], exon_df["stop"]
-        ):
+        # Convert Series to lists and ensure numeric types
+        chromosomes = exon_df["chr"].to_list()
+        starts = exon_df["start"].cast(pl.Int64).to_list()
+        stops = exon_df["stop"].cast(pl.Int64).to_list()
+        
+        for chr, start, stop in zip(chromosomes, starts, stops):
             try:
-                values = bwfile.values(chr, int(start), int(stop))
+                values = bwfile.values(chr, start, stop)
                 if values:
                     reads.extend(values)
             except RuntimeError:

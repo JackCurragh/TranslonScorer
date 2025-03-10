@@ -559,6 +559,7 @@ def bedtobigwig(bedfile, chromsize, filename):
         - Uses pyBigWig library instead of external kent utils
         - Handles chromosome sizes file reading internally
         - Ensures data is sorted by chromosome and position before writing
+        - Uses span=1 for single-nucleotide resolution (appropriate for ribo-seq data)
     """
     import pyBigWig as bw
     import polars as pl
@@ -628,15 +629,14 @@ def bedtobigwig(bedfile, chromsize, filename):
                 
                 # Create a list of chromosome names matching the length of other lists
                 chromosomes = [chrom] * len(starts)
-                print(chromosomes[:5], '\n', starts[:5], '\n', ends[:5], '\n', values[:5])
-                print(len(chromosomes), len(starts), len(ends), len(values))
                 
-                # Add entries to bigWig file
+                # Add entries to bigWig file with span=1 for single-nucleotide resolution
                 bw_file.addEntries(
                     chromosomes,
                     starts,
                     ends=ends,
-                    values=values
+                    values=values,
+                    span=1  # Use single-nucleotide resolution for ribo-seq data
                 )
             except Exception as e:
                 log_warning(f"Error processing chromosome {chrom}: {str(e)}")

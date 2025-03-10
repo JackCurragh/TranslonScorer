@@ -33,6 +33,7 @@ def transcriptreads(bwfile, exon_df):
     # try:
     reads = []
     # Convert Series to lists and ensure numeric types
+    print(exon_df)
     chromosomes = exon_df["chr"].to_list()
     starts = exon_df["start"].cast(pl.Int64).to_list()
     stops = exon_df["stop"].cast(pl.Int64).to_list()
@@ -365,11 +366,13 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
 
     log_info("Loading exon and ORF data")
     exon_df = pl.read_csv(exon, has_header=True, separator=",")
-    exon_df = exon_df.with_columns(
-        pl.col("start", "stop", "tran_start", "tran_stop").apply(
-            lambda x: x.split(",")
-        )
-    )
+    # Split and convert to integers
+    exon_df = exon_df.with_columns([
+        pl.col("start").apply(lambda x: [int(i) for i in x.split(",")]),
+        pl.col("stop").apply(lambda x: [int(i) for i in x.split(",")]),
+        pl.col("tran_start").apply(lambda x: [int(i) for i in x.split(",")]),
+        pl.col("tran_stop").apply(lambda x: [int(i) for i in x.split(",")])
+    ])
     orf_df = pl.read_csv(orfs, has_header=True, separator=",")
 
     counter = 0

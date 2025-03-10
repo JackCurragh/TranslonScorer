@@ -587,10 +587,26 @@ def bedtobigwig(bedfile, chromsize, filename):
     for chrom in bed_data["chrom"].unique():
         chrom_data = bed_data.filter(pl.col("chrom") == chrom)
         if not chrom_data.is_empty():
-            starts = chrom_data["start"].to_list()
-            ends = chrom_data["end"].to_list()
-            values = chrom_data["value"].to_list()
-            bw_file.addEntries(chrom, starts, ends=ends, values=values)
+            # Convert to lists and ensure all values are numeric
+            starts = [int(x) for x in chrom_data["start"].to_list()]
+            ends = [int(x) for x in chrom_data["end"].to_list()]
+            values = [float(x) for x in chrom_data["value"].to_list()]
+            
+            # Ensure all lists have the same length
+            if len(starts) != len(ends) or len(starts) != len(values):
+                log_warning(f"Skipping chromosome {chrom} due to mismatched data lengths")
+                continue
+                
+            # Ensure all positions are valid
+            if any(end <= start for start, end in zip(starts, ends)):
+                log_warning(f"Skipping chromosome {chrom} due to invalid positions (end <= start)")
+                continue
+                
+            try:
+                bw_file.addEntries(chrom, starts, ends=ends, values=values)
+            except Exception as e:
+                log_warning(f"Error adding entries for chromosome {chrom}: {str(e)}")
+                continue
     
     bw_file.close()
     log_info(f"Successfully created {filename}.bw")

@@ -71,7 +71,7 @@ def bamtranscript(bam_df, exon_df):
     """
     log_info("Starting BAM to transcript conversion")
     exon_flattened = exon_df.with_columns(pl.col("chr"))
-
+    print(bam_df.head())
     # Get unique chromosomes and check overlap
     uniquechr_bam = set(bam_df["chr"].unique())
     uniquechr_exon = set(exon_flattened["chr"].unique())

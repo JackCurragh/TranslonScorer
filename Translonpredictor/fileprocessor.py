@@ -181,3 +181,99 @@ def dftobed(df, annotation, offsets):
     bed = asitecalc(bam_to_cds, offsets)
 
     return bed, exon_df, cds_df 
+
+def bamtranscript(bam_df, exon_df):
+    """
+    Filter BAM and exon DataFrames based on shared chromosome information and flatten exon annotations.
+
+    Parameters:
+    - bam_df (DataFrame): DataFrame containing BAM file data with chromosome positions
+    - exon_df (DataFrame): DataFrame containing exon annotations with chromosome positions
+
+    Returns:
+    - DataFrame: A modified version of bam_df after filtering and coordinate conversion
+    """
+    # Get unique chromosomes from both datasets
+    bam_chroms = set(bam_df["chr"].unique())
+    exon_chroms = set(exon_df["chr"].unique())
+    
+    # Check if we need to add/remove 'chr' prefix
+    bam_has_chr = any(c.startswith('chr') for c in bam_chroms)
+    exon_has_chr = any(c.startswith('chr') for c in exon_chroms)
+    
+    if bam_has_chr != exon_has_chr:
+        if exon_has_chr:
+            # Add 'chr' prefix to BAM chromosomes
+            bam_df = bam_df.with_columns(
+                pl.when(pl.col("chr").str.starts_with("chr"))
+                .then(pl.col("chr"))
+                .otherwise(pl.concat_str(["chr", pl.col("chr")]))
+                .alias("chr")
+            )
+        else:
+            # Remove 'chr' prefix from BAM chromosomes
+            bam_df = bam_df.with_columns(
+                pl.col("chr").str.replace("chr", "").alias("chr")
+            )
+    
+    # Now filter for matching chromosomes
+    bam_df = (
+        bam_df.with_columns(shared=pl.col("chr").is_in(exon_chroms))
+        .filter(pl.col("shared") == True)
+        .select(pl.all().exclude("shared"))
+    )
+    
+    if bam_df.is_empty():
+        raise ValueError(
+            "No overlapping chromosomes found between BAM and annotation after name normalization.\n"
+            f"BAM chromosomes: {sorted(bam_chroms)}\n"
+            f"Annotation chromosomes: {sorted(exon_chroms)}"
+        )
+    
+    # Process matching chromosomes
+    results = []
+    for chr in set(bam_df["chr"].unique()):
+        bam_with_chr = bam_df.filter(pl.col("chr") == chr)
+        exon_with_chr = exon_df.filter(pl.col("chr") == chr)
+        
+        if exon_with_chr.is_empty() or bam_with_chr.is_empty():
+            continue
+            
+        min_val = min(exon_with_chr["start"])
+        max_val = max(exon_with_chr["stop"])
+        
+        for i in range(min_val, max_val, 225000):
+            rng = i + 225000
+            exon_chr = exon_with_chr.filter(
+                (pl.col("start") >= i) & (pl.col("stop") <= rng)
+            )
+            bam_chr = bam_with_chr.filter(
+                (pl.col("start") >= i) & (pl.col("stop") <= rng)
+            )
+            if not exon_chr.is_empty() and not bam_chr.is_empty():
+                result_dict = get_bam_tran(bam_chr, exon_chr)
+                results.append(result_dict)
+
+    if not results:
+        raise ValueError(
+            "No overlapping regions found between BAM and annotation files.\n"
+            "This could be due to:\n"
+            "1. Mismatched coordinates\n"
+            "2. BAM file aligned to different genome version than annotation\n"
+            "3. No reads mapping to annotated regions"
+        )
+
+    bam_df = pl.from_dicts(results)
+    bam_df = bam_df.explode(
+        [
+            "count",
+            "chr",
+            "start",
+            "stop",
+            "length",
+            "tran_id",
+            "tran_start_bam",
+            "tran_stop_bam",
+        ]
+    )
+    return bam_df 

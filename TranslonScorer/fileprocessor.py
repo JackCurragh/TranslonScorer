@@ -93,15 +93,14 @@ def bamtranscript(bam_df, exon_df):
                 bam_df = bam_df.with_columns(
                     pl.when(pl.col("chr").str.starts_with("chr"))
                     .then(pl.col("chr"))
-                    .otherwise(pl.concat_str(["chr", pl.col("chr")]))
+                    .otherwise(pl.concat_str([pl.lit("chr"), pl.col("chr")]))
                     .alias("chr")
                 )
                 uniquechr_bam = set(bam_df["chr"].unique())
-                print(bam_df.head())
             else:
                 log_info("Removing 'chr' prefix from BAM chromosomes")
                 bam_df = bam_df.with_columns(
-                    pl.col("chr").str.replace("chr", "").alias("chr")
+                    pl.col("chr").str.replace("^chr", "").alias("chr")
                 )
                 uniquechr_bam = set(bam_df["chr"].unique())
             

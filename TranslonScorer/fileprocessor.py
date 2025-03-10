@@ -270,6 +270,9 @@ def calculate_differences(start, start_dict):
 
     Note: This function assumes `start_dict` contains numerical values (integers or floats).
     """
+    # Handle polars Series objects
+    if isinstance(start, pl.Series):
+        start = start[0]  # Take the first value if it's a Series
     start_diff = start - start_dict
 
     return start_diff

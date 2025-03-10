@@ -572,8 +572,18 @@ def bedtobigwig(bedfile, chromsize, filename):
             chrom_sizes[chrom] = int(size)
     
     log_info("Reading bedGraph data")
-    # Read bedGraph data and sort by chromosome and start position
-    bed_data = pl.read_csv(bedfile, separator='\t', has_header=False)
+    # Read bedGraph data with proper column types
+    bed_data = pl.read_csv(
+        bedfile, 
+        separator='\t', 
+        has_header=False,
+        dtypes={
+            "column_1": pl.String,
+            "column_2": pl.Int64,
+            "column_3": pl.Int64,
+            "column_4": pl.Float64
+        }
+    )
     bed_data = bed_data.rename({
         "column_1": "chrom",
         "column_2": "start",
@@ -596,10 +606,10 @@ def bedtobigwig(bedfile, chromsize, filename):
         chrom_data = bed_data.filter(pl.col("chrom") == chrom)
         if not chrom_data.is_empty():
             try:
-                # Convert polars Series to lists and ensure numeric types
-                starts = chrom_data["start"].cast(pl.Int64).to_list()
-                ends = chrom_data["end"].cast(pl.Int64).to_list()
-                values = chrom_data["value"].cast(pl.Float64).to_list()
+                # Convert polars Series to lists (no need to cast since types are already correct)
+                starts = chrom_data["start"].to_list()
+                ends = chrom_data["end"].to_list()
+                values = chrom_data["value"].to_list()
                 
                 # Ensure all lists have the same length
                 if len(starts) != len(ends) or len(starts) != len(values):

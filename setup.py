@@ -30,26 +30,26 @@ setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
     ],
-    description="A python command-line utility for translon prediction",
+    description="A python command-line utility for scoring translational events from Ribo-seq data",
     entry_points={
         "console_scripts": [
-            "translonpredictor=Translonpredictor.cli:cli",
+            "translonscorer=TranslonScorer.cli:cli",
         ],
     },
     install_requires=requirements,
     license="MIT license",
     include_package_data=True,
-    keywords="Translonpredictor",
-    name="Translonpredictor",
+    keywords="TranslonScorer ribosome-profiling translation-analysis",
+    name="TranslonScorer",
     packages=find_packages(
-        include=["Translonpredictor", "Translonpredictor.*"],
+        include=["TranslonScorer", "TranslonScorer.*"],
         exclude=[
             "data/*",
         ],
     ),
     test_suite="tests",
     tests_require=test_requirements,
-    url="https://github.com/JackCurragh/TranslonPredictor",
+    url="https://github.com/JackCurragh/TranslonScorer",
     version="0.1.0",
     zip_safe=False,
 )

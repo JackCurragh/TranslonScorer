@@ -48,44 +48,43 @@ def get_matching_chromosomes(bam_ids, exon_chroms):
 def detect_bam_type(df, exon_df):
     """
     Detect whether a BAM file is genomic or transcriptomic by checking chromosome/transcript ID patterns.
+    Handles 'chr' prefix variations in chromosome names.
     
     Parameters:
     - df (DataFrame): BAM DataFrame with chromosome/transcript information
     - exon_df (DataFrame): Exon DataFrame with both chromosome and transcript IDs
     
     Returns:
-    - tuple: (str for BAM type, dict with match info including common chromosomes)
-    
-    Raises:
-    - ValueError: If BAM type cannot be determined
+    - tuple: (str for BAM type, dict with match info)
     """
     bam_ids = set(df["chr"].unique())
     exon_chroms = set(exon_df["chr"].unique())
     exon_trans = set(exon_df["tran_id"].unique())
     
-    # Check for transcript matches first
-    trans_match = len(bam_ids.intersection(exon_trans))
-    if trans_match > 0:
-        return 'transcriptomic', {
-            'needs_normalization': False,
-            'common_ids': bam_ids.intersection(exon_trans)
-        }
+    # First check for transcript matches
+    trans_matches = bam_ids.intersection(exon_trans)
+    if trans_matches:
+        return 'transcriptomic', {'needs_normalization': False}
     
-    # Check for chromosome matches
-    has_match, needs_norm, common_chr = get_matching_chromosomes(bam_ids, exon_chroms)
-    if has_match:
-        return 'genomic', {
-            'needs_normalization': needs_norm,
-            'common_chromosomes': common_chr
-        }
+    # Check for direct chromosome matches
+    chrom_matches = bam_ids.intersection(exon_chroms)
+    if chrom_matches:
+        return 'genomic', {'needs_normalization': False}
     
-    # If no matches found, raise informative error
+    # Try matching after removing 'chr' prefix
+    bam_no_chr = {c.replace('chr', '') for c in bam_ids}
+    exon_no_chr = {c.replace('chr', '') for c in exon_chroms}
+    
+    if bam_no_chr.intersection(exon_no_chr):
+        return 'genomic', {'needs_normalization': True}
+    
+    # If still no matches, show helpful error
     raise ValueError(
-        "Unable to determine BAM type. No significant matches found with either:\n"
-        f"Chromosomes in annotation: {sorted(exon_chroms)}\n"
-        f"Transcript IDs in annotation: {sorted(exon_trans)}\n"
-        f"IDs in BAM: {sorted(bam_ids)}\n"
-        "Try ensuring chromosome naming is consistent (e.g., 'chr1' vs '1')"
+        "Unable to determine BAM type. No matches found between:\n"
+        f"BAM chromosomes: {sorted(bam_ids)}\n"
+        f"Annotation chromosomes: {sorted(exon_chroms)}\n"
+        f"Annotation transcripts: {sorted(exon_trans)}\n"
+        "Note: Tried matching with and without 'chr' prefix"
     )
 
 def process_genomic_bam(df_namesplit, exon_df, needs_normalization=False):

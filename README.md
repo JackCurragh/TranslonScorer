@@ -1,8 +1,8 @@
-# Translon Scorer
+# TranslonScorer
 
 ## Overview
 
-`TranslonScorer` is a command-line tool for translon calling. The process consists of processing Ribo-seq BAM files, extracting and scoring ORFs from transcript sequences based on the annotation and codons provided. It supports multiple input file formats and generates output files in several formats including `.bedGraph`, `.bw`, `.html`, and `.csv`.
+`TranslonScorer` is a command-line tool for scoring potential translational events (translons) from Ribo-seq data. The tool processes Ribo-seq BAM files, identifies potential ORFs from transcript sequences, and scores them based on ribosome coverage patterns. It provides detailed scoring metrics that allow users to apply their own thresholds for translon classification based on their required stringency. The tool supports multiple input file formats and generates output files in several formats including `.bedGraph`, `.bw`, `.html`, and `.csv`.
 
 ## Installation
 
@@ -21,7 +21,7 @@ The tool provides several workflows for different analysis needs:
 Run the entire pipeline end-to-end with a single command:
 
 ```sh
-translonpredictor all \
+translonscorer all \
     -b ribo.bam \
     -c chrom.sizes \
     -s genome.fa \
@@ -32,7 +32,7 @@ translonpredictor all \
 This will:
 1. Process the Ribo-seq BAM file
 2. Extract transcripts
-3. Find and score ORFs
+3. Find and score potential ORFs
 4. Generate visualization reports
 
 ### 2. Individual Steps
@@ -41,7 +41,7 @@ For more control, you can run each step separately:
 
 #### Process BAM Files
 ```sh
-translonpredictor process-bam \
+translonscorer process-bam \
     -b ribo.bam \
     -c chrom.sizes \
     -a anno.gtf \
@@ -50,7 +50,7 @@ translonpredictor process-bam \
 
 #### Find and Score ORFs
 ```sh
-translonpredictor find-orfs \
+translonscorer find-orfs \
     -s genome.fa \
     -a anno.gtf \
     -bw coverage.bw \
@@ -59,7 +59,7 @@ translonpredictor find-orfs \
 
 #### Score Existing ORFs
 ```sh
-translonpredictor score-orfs \
+translonscorer score-orfs \
     -f orfs.csv \
     -bw coverage.bw \
     -e exons.csv \
@@ -68,7 +68,7 @@ translonpredictor score-orfs \
 
 #### Generate Visualization Report
 ```sh
-translonpredictor plot \
+translonscorer plot \
     -s scored_orfs.csv \
     -bw coverage.bw \
     -e exons.csv \
@@ -119,8 +119,18 @@ The tool generates several output files depending on the command used:
 - `{outfile}.bw`: Coverage in bigWig format
 
 ### Find ORFs / Score ORFs
-- `{outfile}_orfs_scored.csv`: Scored ORFs
-- `{outfile}_report.html`: Visualization report
+- `{outfile}_orfs_scored.csv`: Scored ORFs with multiple metrics for classification
+- `{outfile}_report.html`: Visualization report showing score distributions and features
+
+## Interpreting Results
+
+The tool provides several scoring metrics for each potential ORF:
+- Start Rise Up (SRU) score: Measures ribosome accumulation at start codons
+- High Read Frame (HRF) score: Quantifies reading frame preference
+- Average coverage
+- Non-Zero Codon ratio
+
+Users should determine appropriate score thresholds based on their specific requirements and experimental context. The visualization report includes score distributions to help inform threshold selection.
 
 ## Error Handling
 

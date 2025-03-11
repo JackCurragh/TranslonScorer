@@ -571,7 +571,7 @@ def bedtobigwig(bedfile, chromsize, filename):
         for line in f:
             chrom, size = line.strip().split('\t')
             chrom_sizes[chrom] = int(size)
-    
+    print(chrom_sizes.keys())
     log_info("Reading bedGraph data")
     # Read bedGraph data with proper column types
     bed_data = pl.read_csv(
@@ -594,6 +594,7 @@ def bedtobigwig(bedfile, chromsize, filename):
     
     # Sort the data by chromosome and start position
     bed_data = bed_data.sort(["chrom", "start"])
+    print(bed_data.head())
     
     # Create bigWig file
     log_info("Creating bigWig file")
@@ -639,7 +640,7 @@ def bedtobigwig(bedfile, chromsize, filename):
                     span=1  # Use single-nucleotide resolution for ribo-seq data
                 )
             except Exception as e:
-                log_warning(f"Error processing chromosome {chrom}: {str(e)}")
+                log_error(f"Error processing chromosome {chrom}: {str(e)}")
                 continue
     
     bw_file.close()

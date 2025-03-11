@@ -53,7 +53,7 @@ check_status "Development version cleanup"
 
 # Now test as a user would experience it
 echo "Testing user installation from GitHub..."
-pip install git+https://github.com/JackCurragh/TranslonScorer-1
+pip install git+https://github.com/JackCurragh/TranslonScorer
 check_status "User installation"
 
 echo "Testing user installation execution..."

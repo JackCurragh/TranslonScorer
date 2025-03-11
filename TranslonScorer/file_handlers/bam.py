@@ -26,28 +26,35 @@ def readbam(bampath):
     pysam.index(bampath)
     log_info("BAM file indexed successfully")
     
-    # Read BAM file using pysam
-    bam = pysam.AlignmentFile(bampath, "rb")
+    # Read BAM file using oxbow for speed
+    bamfile = ox.read_bam(bampath)
+    log_info("BAM file read successfully")
     
-    # Extract relevant information
-    records = []
-    for read in bam.fetch():
-        if read.is_unmapped:
-            continue
-            
-        records.append({
-            'chr': bam.get_reference_name(read.reference_id),
-            'start': read.reference_start,
-            'stop': read.reference_end,
-            'length': read.query_length,
-            'strand': '-' if read.is_reverse else '+',
-            'count': 1
-        })
+    # Convert to DataFrame and ensure correct column names
+    df = pl.read_ipc(bamfile)
     
-    # Convert to DataFrame
-    df = pl.DataFrame(records)
+    # Rename columns if needed
+    if 'reference_name' in df.columns:
+        df = df.rename({'reference_name': 'chr'})
+    if 'reference_start' in df.columns:
+        df = df.rename({'reference_start': 'start'})
+    if 'reference_end' in df.columns:
+        df = df.rename({'reference_end': 'stop'})
+    if 'query_length' in df.columns:
+        df = df.rename({'query_length': 'length'})
+    if 'is_reverse' in df.columns:
+        df = df.with_columns(
+            pl.when(pl.col('is_reverse'))
+            .then(pl.lit('-'))
+            .otherwise(pl.lit('+'))
+            .alias('strand')
+        ).drop('is_reverse')
     
-    # Group by position to get counts
+    # Add count column if not present
+    if 'count' not in df.columns:
+        df = df.with_columns(count=pl.lit(1))
+        
+    # Group by position to get counts if needed
     df = df.group_by(['chr', 'start', 'stop', 'length', 'strand']).agg(
         pl.col('count').sum()
     ).sort(['chr', 'start'])

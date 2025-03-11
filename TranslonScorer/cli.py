@@ -5,10 +5,13 @@ import click
 import polars as pl
 import warnings
 from typing import List, Optional
+import pysam
+import oxbow as ox
+from pathlib import Path
 
 from .core import scoring, coordinates
 from .file_handlers import bam, bed, bigwig
-from .utils.logging import setup_logging
+from .utils.logging import setup_logging, log_info, log_error
 from .visualization import plots
 
 warnings.filterwarnings("ignore")
@@ -287,6 +290,56 @@ def plot(scored_orfs: str, bigwig: str, exons: str,
     print("Generating visualization report...")
     plots.plottop10(scored_orfs, bigwig, exons, plot_range, outfile)
     print("Report generation complete!")
+
+@click.command()
+@click.option('--bam-file', required=True, help='Path to BAM file')
+@click.option('--gtf-file', required=True, help='Path to GTF annotation file')
+@click.option('--chrom-sizes', required=True, help='Path to chromosome sizes file')
+@click.option('--output-prefix', required=True, help='Prefix for output files')
+@click.option('--min-quality', default=50, help='Minimum mapping quality', type=int)
+@click.option('--genomic/--transcriptomic', default=True, help='Whether BAM is genomic or transcriptomic')
+def main(bam_file, gtf_file, chrom_sizes, output_prefix, min_quality, genomic):
+    """
+    Main entry point for TranslonScorer analysis.
+    """
+    try:
+        # Create output directory if needed
+        output_dir = Path(output_prefix).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Process BAM file
+        log_info('Processing BAM file...')
+        bam_df = bam.readbam(bam_file)
+        
+        # Get exons and CDS
+        cds_df, exon_df = bam.getexons_and_cds(gtf_file)
+
+        # Process BAM data
+        if genomic:
+            bam_df = bam.bamtranscript(bam_df, exon_df)
+        else:
+            bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
+
+        # Calculate A-site positions
+        offsets = coordinates.change_point_analysis(bam_df)
+        bed_df = bed.asitecalc(bam_df, offsets)
+
+        # Convert to BigWig
+        bedgraph = f"{output_prefix}.bedGraph"
+        bigwig_out = f"{output_prefix}.bw"
+        bed.bedtobigwig(bedgraph, chrom_sizes, bigwig_out)
+
+        # Score ORFs
+        orfs_df = bigwig.scoring(bigwig_out, exon_df, cds_df, False, min_quality)
+
+        # Save results
+        bed.saveorfsandexons(orfs_df, exon_df, output_prefix)
+        
+        log_info('Analysis complete!')
+        
+    except Exception as e:
+        log_error(f"Error during analysis: {str(e)}")
+        raise
 
 if __name__ == '__main__':
     cli() 

@@ -1,17 +1,12 @@
 """
 Coordinate transformation functionality for TranslonScorer.
 
-This module contains functions for converting between different coordinate systems
-(genomic, transcriptomic, CDS-relative) and handling coordinate-related calculations.
-
 This module provides functions for coordinate transformations and ORF classification
 relative to transcript features.
 """
 
 import polars as pl
-import ahocorasick
-from Bio import SeqIO
-from ..utils.logging import log_info, log_warning, log_error
+from ..utils.logging import log_info, log_warning
 from ..file_handlers.bam import getexons_and_cds
 
 
@@ -122,129 +117,6 @@ def classify_orf(row):
             f"tran_start={tran_start}, tran_stop={tran_stop}"
         )
         return "Unexpected"
-
-
-def find_all_positions(sequence, automaton):
-    """
-    Find positions of all occurrences of patterns from an Aho-Corasick automaton.
-
-    Args:
-        sequence (str): Input sequence to search for patterns
-        automaton (ahocorasick.Automaton): Aho-Corasick automaton with patterns
-
-    Returns:
-        tuple: (frames dict with positions, codons dict with patterns)
-    """
-    frames = {0: [], 1: [], 2: []}
-    codons = {}
-    for i, (order, codon) in automaton.iter(sequence):
-        # position of last nucleotide of codon returned
-        frames[(i - 2) % 3].append(i)
-        codons[i] = codon
-    return frames, codons
-
-
-def find_orfs(sequence, tran_id, startautomaton, stopautomaton, minlength=0, maxlength=1000000):
-    """
-    Predict Open Reading Frames in a nucleotide sequence.
-
-    Args:
-        sequence (str): Nucleotide sequence
-        tran_id (str): Transcript identifier
-        startautomaton (ahocorasick.Automaton): Automaton for start codons
-        stopautomaton (ahocorasick.Automaton): Automaton for stop codons
-        minlength (int): Minimum ORF length
-        maxlength (int): Maximum ORF length
-
-    Returns:
-        list: List of dictionaries containing ORF information
-    """
-    orf_list = []
-    startpositions, start_codons = find_all_positions(sequence, startautomaton)
-    stoppositions, stop_codons = find_all_positions(sequence, stopautomaton)
-
-    for frame, startpositions in startpositions.items():
-        for position in startpositions:
-            valid_stops = [i for i in stoppositions[frame] if i > position]
-            if valid_stops:
-                stopposition = min(valid_stops)
-                stopcodon = stop_codons[stopposition]
-            else:
-                stopposition = len(sequence)
-                stopcodon = sequence[-3:]
-            if stopcodon != "TAA" or stopcodon != "TAG" or stopcodon != "TGA":
-                orf_data = {
-                    "tran_id": tran_id,
-                    "start": position - 2,
-                    "stop": stopposition,
-                    "length": stopposition - position,
-                    "startorf": start_codons[position],
-                    "stoporf": stopcodon,
-                }
-            else:
-                orf_data = {
-                    "tran_id": tran_id,
-                    "start": position - 2,
-                    "stop": stopposition - 3,
-                    "length": stopposition - position,
-                    "startorf": start_codons[position],
-                    "stoporf": stopcodon,
-                }
-            if orf_data["length"] < maxlength and orf_data["length"] > minlength:
-                orf_list.append(orf_data)
-    return orf_list
-
-
-def preporfs(transcript, starts, stops, minlength, maxlength):
-    """
-    Predict ORFs from transcript sequences using start and stop codon patterns.
-
-    Args:
-        transcript (str): Path to FASTA file with transcript sequences
-        starts (list): List of start codon patterns
-        stops (list): List of stop codon patterns
-        minlength (int): Minimum ORF length
-        maxlength (int): Maximum ORF length
-
-    Returns:
-        DataFrame: Predicted ORFs for each transcript sequence
-    """
-    dict_list = []
-    counter = 0
-    
-    # Create Aho-Corasick automata
-    startautomaton = ahocorasick.Automaton()
-    stopautomaton = ahocorasick.Automaton()
-    
-    for start in starts:
-        startautomaton.add_word(start, start)
-    startautomaton.make_automaton()
-    
-    for stop in stops:
-        stopautomaton.add_word(stop, stop)
-    stopautomaton.make_automaton()
-    
-    # Process each transcript
-    for record in SeqIO.parse(transcript, "fasta"):
-        if counter % 1000 == 0:
-            log_info(f"Processed {counter} transcripts")
-            
-        sequence = str(record.seq).upper()
-        tran_id = record.id
-        
-        orfs = find_orfs(
-            sequence,
-            tran_id,
-            startautomaton,
-            stopautomaton,
-            minlength,
-            maxlength
-        )
-        dict_list.extend(orfs)
-        counter += 1
-        
-    log_info(f"Found {len(dict_list)} ORFs in {counter} transcripts")
-    return pl.DataFrame(dict_list)
 
 
 def orfrelativeposition(annotation, df, cds_df=None):

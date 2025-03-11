@@ -35,7 +35,7 @@ def cli():
     pass
 
 @cli.command()
-@click.option('--bam', '-b', required=True,
+@click.option('--bam_path', '-b', required=True,
               help='Input BAM file from Ribo-seq data. Supports both genomic and transcriptomic alignments (required)')
 @click.option('--chromsizes', '-c', required=True,
               help='Chromosome sizes file (required for bigWig conversion)')

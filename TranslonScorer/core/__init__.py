@@ -19,7 +19,8 @@ from .scoring import (
 
 from .coordinates import (
     classify_orf,
-    orfrelativeposition
+    orfrelativeposition,
+    change_point_analysis
 )
 
 from .orffinder import (
@@ -42,6 +43,7 @@ __all__ = [
     # Coordinate functions
     'classify_orf',
     'orfrelativeposition',
+    'change_point_analysis',
     
     # ORF finding functions
     'find_orfs',

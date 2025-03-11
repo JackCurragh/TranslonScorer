@@ -1,7 +1,7 @@
 import pysam
 import polars as pl
 import oxbow as ox
-
+from ..utils.logging import log_info
 
 def readbam(bampath):
     """
@@ -20,6 +20,7 @@ def readbam(bampath):
     pysam.index(bampath)
     bamfile = ox.read_bam(bampath)
     df = pl.read_ipc(bamfile)
+    log_info("BAM file read successfully")
     return df
 
 

@@ -91,11 +91,12 @@ mkdir -p "$OUTPUT_DIR"
 echo "Running TranslonScorer..."
 
 # Run the analysis using the CLI
-translonscorer --bam-file "$BAM_FILE" \
-               --gtf-file "$GTF_FILE" \
-               --chrom-sizes "$CHROM_SIZES" \
-               --output-prefix "$OUTPUT_PREFIX" \
-               --genomic
+translonscorer all \
+    --bam "$BAM_FILE" \
+    --chromsizes "$CHROM_SIZES" \
+    --sequence "$GENOME_FA" \
+    --annotation "$GTF_FILE" \
+    --outfile "$OUTPUT_PREFIX"
 check_status "TranslonScorer execution"
 
 echo "Script completed successfully!"

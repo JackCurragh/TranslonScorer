@@ -4,6 +4,7 @@ import os
 import click
 import polars as pl
 import warnings
+import logging
 from typing import List, Optional
 import pysam
 import oxbow as ox

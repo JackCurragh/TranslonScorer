@@ -116,7 +116,6 @@ def getexons_and_cds(annotation_file, tran=[]):
     exondf = pl.concat([exon_coords_pos, exon_coords_neg]).select(
         pl.all().exclude("strand")
     )
-    print(exondf.head())
     return cds_coords, exondf
 
 

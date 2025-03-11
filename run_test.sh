@@ -65,9 +65,9 @@ echo "All installation tests passed. Proceeding with analysis..."
 
 # Check if required files exist
 BAM_FILE=~/Processed_test/star_align/bam/SRR25602018.Aligned.sortedByCoord.out.bam
-CHROM_SIZES=data/chrom.sizes
-GENOME_FA=data/genome.fa
-GTF_FILE=data/MANE.gtf
+CHROM_SIZES=TranslonScorer/data/chrom.sizes
+GENOME_FA=TranslonScorer/data/genome.fa
+GTF_FILE=TranslonScorer/data/MANE.gtf
 OUTPUT_PREFIX=test_output/test
 
 # Check input files

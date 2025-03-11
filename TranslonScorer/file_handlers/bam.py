@@ -20,18 +20,39 @@ def readbam(bampath):
 
     Returns:
     - df (DataFrame): Polars DataFrame containing the extracted information from the BAM file.
-
-    This function indexes the BAM file using pysam, reads the indexed file using ox.read_bam,
-    and then reads the data into a DataFrame using pl.read_ipc. The DataFrame containing the
-    relevant information extracted from the BAM file is returned for further processing.
+                     Contains columns: chr, start, stop, length, strand, count
     """
     log_info("Indexing BAM file")
     pysam.index(bampath)
     log_info("BAM file indexed successfully")
-    bamfile = ox.read_bam(bampath)
-    log_info("BAM file read successfully")
-    df = pl.read_ipc(bamfile)
-    log_info("DataFrame created successfully")
+    
+    # Read BAM file using pysam
+    bam = pysam.AlignmentFile(bampath, "rb")
+    
+    # Extract relevant information
+    records = []
+    for read in bam.fetch():
+        if read.is_unmapped:
+            continue
+            
+        records.append({
+            'chr': bam.get_reference_name(read.reference_id),
+            'start': read.reference_start,
+            'stop': read.reference_end,
+            'length': read.query_length,
+            'strand': '-' if read.is_reverse else '+',
+            'count': 1
+        })
+    
+    # Convert to DataFrame
+    df = pl.DataFrame(records)
+    
+    # Group by position to get counts
+    df = df.group_by(['chr', 'start', 'stop', 'length', 'strand']).agg(
+        pl.col('count').sum()
+    ).sort(['chr', 'start'])
+    
+    log_info(f"Processed {len(df)} unique read positions")
     return df
 
 

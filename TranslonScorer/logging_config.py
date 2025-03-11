@@ -72,7 +72,7 @@ def log_info(message: str) -> None:
 def log_warning(message: str) -> None:
     """Log a warning message if logging is enabled."""
     if LOGGING_ENABLED:
-        logger.warning(message)
+        logger.error(message)
 
 def log_error(message: str) -> None:
     """Log an error message if logging is enabled."""

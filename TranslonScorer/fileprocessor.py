@@ -587,8 +587,41 @@ def bedtobigwig(bedfile, chromsize, filename):
         "column_4": "value"
     })
     
+    # Check for chromosome prefix mismatches
+    bed_chroms = set(bed_data["chrom"].unique())
+    chromsizes_chroms = set(chrom_sizes.keys())
+    
+    # Check if we need to normalize chromosome names
+    bed_has_chr = any(c.startswith('chr') for c in bed_chroms)
+    chromsizes_has_chr = any(c.startswith('chr') for c in chromsizes_chroms)
+    
+    if bed_has_chr != chromsizes_has_chr:
+        log_info("Normalizing chromosome names between bedGraph and chromosome sizes")
+        if chromsizes_has_chr:
+            # Add 'chr' prefix to bedGraph chromosomes
+            bed_data = bed_data.with_columns(
+                pl.when(pl.col("chrom").str.starts_with("chr"))
+                .then(pl.col("chrom"))
+                .otherwise(pl.concat_str([pl.lit("chr"), pl.col("chrom")]))
+                .alias("chrom")
+            )
+        else:
+            # Remove 'chr' prefix from bedGraph chromosomes
+            bed_data = bed_data.with_columns(
+                pl.col("chrom").str.replace("^chr", "").alias("chrom")
+            )
+    
     # Filter out chromosomes that aren't in the chromosome sizes file
     bed_data = bed_data.filter(pl.col("chrom").is_in(chrom_sizes.keys()))
+    
+    if bed_data.is_empty():
+        error_msg = (
+            "No matching chromosomes found between bedGraph and chromosome sizes after normalization.\n"
+            f"BedGraph chromosomes: {sorted(bed_chroms)[:5]}\n"
+            f"Chromosome sizes chromosomes: {sorted(chromsizes_chroms)[:5]}"
+        )
+        log_error(error_msg)
+        raise ValueError(error_msg)
     
     # Ensure all positions are valid
     bed_data = bed_data.filter(pl.col("end") > pl.col("start"))
@@ -610,7 +643,8 @@ def bedtobigwig(bedfile, chromsize, filename):
     
     # Process chromosomes in a specific order (match chromosome sizes order)
     chroms_to_process = [chrom for chrom in chrom_sizes.keys() if chrom in bed_data["chrom"].unique()]
-    print(chroms_to_process)
+    if not chroms_to_process:
+        log_error("No matched chromosomes to process - check that chromsizes matches BAM/bedGraph")
     for chrom in chroms_to_process:
         chrom_data = bed_data.filter(pl.col("chrom") == chrom)
         if len(chrom_data) == 0:

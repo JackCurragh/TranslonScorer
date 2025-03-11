@@ -414,13 +414,11 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
                 orfs_filtered = orfs.filter(pl.col("type") == typeorf)
 
                 if old_scoring:
-                    log_info(f"Using classic scoring for {typeorf} ORFs in transcript {tran}")
                     orfs_filtered = oldscoring(
                         orfs_filtered, tran_reads, sru_range, typeorf
                     )
                     orfscores.append(orfs_filtered)
                 else:
-                    log_info(f"Using modern scoring for {typeorf} ORFs in transcript {tran}")
                     emptyscore_df = existingscore(orfs_filtered, typeorf, {"rise_up": {}, "step_down": {}})
                     if not emptyscore_df.is_empty():
                         scoredict = newscoring(

@@ -557,16 +557,6 @@ def bedtobigwig(bedfile, chromsize, filename):
     import pyBigWig as bw
     import polars as pl
     
-    log_info("Reading chromosome sizes")
-    # Read chromosome sizes file
-    chrom_sizes = {}
-    with open(chromsize, 'r') as f:
-        for line in f:
-            chrom, size = line.strip().split('\t')
-            chrom_sizes[chrom] = int(size)
-    
-    log_info(f"Found {len(chrom_sizes)} chromosomes in sizes file")
-    
     log_info("Reading bedGraph data")
     # Read bedGraph data with proper column types
     bed_data = pl.read_csv(
@@ -587,29 +577,24 @@ def bedtobigwig(bedfile, chromsize, filename):
         "column_4": "value"
     })
     
-    # Check for chromosome prefix mismatches
+    # Get unique chromosomes from bedGraph
     bed_chroms = set(bed_data["chrom"].unique())
-    chromsizes_chroms = set(chrom_sizes.keys())
-    
-    # Check if we need to normalize chromosome names
     bed_has_chr = any(c.startswith('chr') for c in bed_chroms)
-    chromsizes_has_chr = any(c.startswith('chr') for c in chromsizes_chroms)
     
-    if bed_has_chr != chromsizes_has_chr:
-        log_info("Normalizing chromosome names between bedGraph and chromosome sizes")
-        if chromsizes_has_chr:
-            # Add 'chr' prefix to bedGraph chromosomes
-            bed_data = bed_data.with_columns(
-                pl.when(pl.col("chrom").str.starts_with("chr"))
-                .then(pl.col("chrom"))
-                .otherwise(pl.concat_str([pl.lit("chr"), pl.col("chrom")]))
-                .alias("chrom")
-            )
-        else:
-            # Remove 'chr' prefix from bedGraph chromosomes
-            bed_data = bed_data.with_columns(
-                pl.col("chrom").str.replace("^chr", "").alias("chrom")
-            )
+    log_info("Reading chromosome sizes")
+    # Read chromosome sizes file and normalize to match bedGraph format
+    chrom_sizes = {}
+    with open(chromsize, 'r') as f:
+        for line in f:
+            chrom, size = line.strip().split('\t')
+            # Normalize chromosome name to match bedGraph format
+            if bed_has_chr and not chrom.startswith('chr'):
+                chrom = f"chr{chrom}"
+            elif not bed_has_chr and chrom.startswith('chr'):
+                chrom = chrom[3:]  # Remove 'chr' prefix
+            chrom_sizes[chrom] = int(size)
+    
+    log_info(f"Found {len(chrom_sizes)} chromosomes in sizes file")
     
     # Filter out chromosomes that aren't in the chromosome sizes file
     bed_data = bed_data.filter(pl.col("chrom").is_in(chrom_sizes.keys()))
@@ -618,7 +603,7 @@ def bedtobigwig(bedfile, chromsize, filename):
         error_msg = (
             "No matching chromosomes found between bedGraph and chromosome sizes after normalization.\n"
             f"BedGraph chromosomes: {sorted(bed_chroms)[:5]}\n"
-            f"Chromosome sizes chromosomes: {sorted(chromsizes_chroms)[:5]}"
+            f"Chromosome sizes chromosomes: {sorted(chrom_sizes.keys())[:5]}"
         )
         log_error(error_msg)
         raise ValueError(error_msg)
@@ -646,7 +631,6 @@ def bedtobigwig(bedfile, chromsize, filename):
     if not chroms_to_process:
         log_error("No matched chromosomes to process - check that chromsizes matches BAM/bedGraph")
     
-    print(chroms_to_process)
     for chrom in chroms_to_process:
         chrom_data = bed_data.filter(pl.col("chrom") == chrom)
         if len(chrom_data) == 0:

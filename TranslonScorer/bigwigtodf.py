@@ -32,7 +32,6 @@ def transcriptreads(bwfile, exon_df):
     Finally, it constructs the `df_tran` DataFrame using the extracted transcript information and returns it.
     """
     reads = []
-    print(exon_df.head())
     # Explode the lists into rows and sort by chromosome and start position
     exon_exploded = exon_df.with_columns([
         pl.col("start").alias("start_list"),
@@ -41,10 +40,8 @@ def transcriptreads(bwfile, exon_df):
     
     # Sort by chromosome and start position
     exon_exploded = exon_exploded.sort(["chr", "start_list"])
-    print(exon_exploded.head())
     # Process each chromosome separately to maintain order
     for chrom in exon_exploded["chr"].unique():
-        print(chrom)
         chrom_data = exon_exploded.filter(pl.col("chr") == chrom)
         
         # Get sorted positions for this chromosome

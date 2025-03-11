@@ -93,7 +93,7 @@ def all(bam: str, chromsizes: str, sequence: str, annotation: str,
     setup_logging(level=getattr(logging, log_level))
     
     # Step 1: Process BAM file
-    print("Processing BAM file...")
+    print("Processing BAM file....")
     location = os.path.abspath(bam)
     if not os.path.isfile(location):
         raise click.BadParameter(f"BAM file not found: {bam}")

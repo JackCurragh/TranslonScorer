@@ -15,6 +15,12 @@ check_status() {
     fi
 }
 
+# Activate micromamba environment
+echo "Activating TranslonScorer environment..."
+eval "$(micromamba shell hook --shell bash)"
+micromamba activate TranslonScorer
+check_status "Environment activation"
+
 # Check for uncommitted changes
 echo "Checking git status..."
 if [[ -n $(git status -s) ]]; then
@@ -53,7 +59,7 @@ check_status "Development version cleanup"
 
 # Now test as a user would experience it
 echo "Testing user installation from GitHub..."
-pip install git+https://github.com/JackCurragh/TranslonScorer
+pip install git+https://github.com/JackCurragh/TranslonScorer-1
 check_status "User installation"
 
 echo "Testing user installation execution..."
@@ -65,9 +71,9 @@ echo "All installation tests passed. Proceeding with analysis..."
 
 # Check if required files exist
 BAM_FILE=~/Processed_test/star_align/bam/SRR25602018.Aligned.sortedByCoord.out.bam
-CHROM_SIZES=TranslonScorer/data/chrom.sizes
-GENOME_FA=TranslonScorer/data/genome.fa
-GTF_FILE=TranslonScorer/data/MANE.gtf
+CHROM_SIZES=data/chrom.sizes
+GENOME_FA=data/genome.fa
+GTF_FILE=data/MANE.gtf
 OUTPUT_PREFIX=test_output/test
 
 # Check input files
@@ -123,4 +129,7 @@ print('Analysis complete!')
 check_status "TranslonScorer execution"
 
 echo "Script completed successfully!"
-echo "Output files can be found with prefix: $OUTPUT_PREFIX" 
+echo "Output files can be found with prefix: $OUTPUT_PREFIX"
+
+# Deactivate the environment
+micromamba deactivate 

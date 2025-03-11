@@ -645,6 +645,8 @@ def bedtobigwig(bedfile, chromsize, filename):
     chroms_to_process = [chrom for chrom in chrom_sizes.keys() if chrom in bed_data["chrom"].unique()]
     if not chroms_to_process:
         log_error("No matched chromosomes to process - check that chromsizes matches BAM/bedGraph")
+    
+    print(chroms_to_process)
     for chrom in chroms_to_process:
         chrom_data = bed_data.filter(pl.col("chrom") == chrom)
         if len(chrom_data) == 0:

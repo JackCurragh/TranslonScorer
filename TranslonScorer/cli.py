@@ -65,7 +65,7 @@ def cli():
               help='Path to log file. If not provided, logs will only be written to console.')
 @click.option('--log-level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']),
               default='INFO', help='Set the logging level (default: INFO)')
-def all(bam: str, chromsizes: str, sequence: str, annotation: str,
+def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
         outfile: str, offsets: Optional[str] = None,
         start_codons: str = "ATG", stop_codons: str = "TAA,TAG,TGA",
         min_len: int = 0, max_len: int = 1000000,
@@ -94,9 +94,9 @@ def all(bam: str, chromsizes: str, sequence: str, annotation: str,
     
     # Step 1: Process BAM file
     print("Processing BAM file....")
-    location = os.path.abspath(bam)
+    location = os.path.abspath(bam_path)
     if not os.path.isfile(location):
-        raise click.BadParameter(f"BAM file not found: {bam}")
+        raise click.BadParameter(f"BAM file not found: {bam_path}")
     
     # Read BAM file
     log_info('Processing BAM file...')

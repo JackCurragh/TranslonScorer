@@ -1,9 +1,10 @@
 """
 Core functionality for TranslonScorer.
 
-This package contains the core functionality for TranslonScorer, including:
+This module contains the core algorithms and functionality including:
+- ORF prediction and classification
 - Scoring algorithms and metrics
-- Coordinate transformations and ORF prediction
+- Coordinate transformations
 """
 
 from .scoring import (
@@ -13,17 +14,23 @@ from .scoring import (
     newscoring,
     globalscores,
     existingscore,
-    assigningscore,
+    assigningscore
 )
+
 from .coordinates import (
-    change_point_analysis,
     classify_orf,
-    find_all_positions,
+    orfrelativeposition
+)
+
+from .orffinder import (
     find_orfs,
     preporfs,
+    find_all_positions,
+    build_codon_automaton
 )
 
 __all__ = [
+    # Scoring functions
     'sru_score',
     'calculate_scores',
     'oldscoring',
@@ -31,9 +38,14 @@ __all__ = [
     'globalscores',
     'existingscore',
     'assigningscore',
-    'change_point_analysis',
+    
+    # Coordinate functions
     'classify_orf',
-    'find_all_positions',
+    'orfrelativeposition',
+    
+    # ORF finding functions
     'find_orfs',
     'preporfs',
+    'find_all_positions',
+    'build_codon_automaton'
 ] 

@@ -3,12 +3,16 @@ Coordinate transformation functionality for TranslonScorer.
 
 This module contains functions for converting between different coordinate systems
 (genomic, transcriptomic, CDS-relative) and handling coordinate-related calculations.
+
+This module provides functions for coordinate transformations and ORF classification
+relative to transcript features.
 """
 
 import polars as pl
 import ahocorasick
 from Bio import SeqIO
 from ..utils.logging import log_info, log_warning, log_error
+from ..file_handlers.bam import getexons_and_cds
 
 
 def change_point_analysis(offset_df):
@@ -240,4 +244,59 @@ def preporfs(transcript, starts, stops, minlength, maxlength):
         counter += 1
         
     log_info(f"Found {len(dict_list)} ORFs in {counter} transcripts")
-    return pl.DataFrame(dict_list) 
+    return pl.DataFrame(dict_list)
+
+
+def orfrelativeposition(annotation, df, cds_df=None):
+    """
+    Determine relative positions of ORFs to coding sequences.
+
+    Args:
+        annotation (str): Path to genome annotation file
+        df (DataFrame): DataFrame containing ORF coordinates
+        cds_df (DataFrame, optional): Pre-loaded CDS DataFrame
+
+    Returns:
+        tuple: (orf_df, exon_df) where:
+            - orf_df: DataFrame with ORFs and their classifications
+            - exon_df: DataFrame with exon coordinates
+    """
+    log_info("Determining ORF positions relative to CDS...")
+    
+    # Get CDS and exon data if not provided
+    if cds_df is None:
+        cds_df, exon_df = getexons_and_cds(annotation, list(df["tran_id"].unique()))
+    
+    # Process coding transcripts
+    tranids = list(cds_df["tran_id"].unique())
+    
+    # Classify coding ORFs
+    codingorfs = (
+        df.with_columns(shared=pl.col("tran_id").is_in(tranids))
+        .filter(pl.col("shared") == True)
+        .select(pl.all().exclude("shared"))
+    )
+
+    codingorfs = codingorfs.join(cds_df, on="tran_id")
+    codingorfs = (
+        codingorfs.with_columns(
+            pl.struct(["start", "stop", "tran_start", "tran_stop"])
+            .apply(lambda row: classify_orf(row))
+            .alias("type")
+        )
+        .select(pl.all().exclude("tran_start", "tran_stop"))
+    )
+
+    # Process non-coding ORFs
+    noncodingorfs = (
+        df.with_columns(shared=pl.col("tran_id").is_in(tranids))
+        .filter(pl.col("shared") == False)
+        .select(pl.all().exclude("shared"))
+        .with_columns(type=pl.lit("Non Coding"))
+    )
+
+    # Combine results
+    orf_df = pl.concat([codingorfs, noncodingorfs])
+    
+    log_info(f"Classified {len(orf_df)} ORFs")
+    return orf_df, exon_df 

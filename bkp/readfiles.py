@@ -18,9 +18,11 @@ def readbam(bampath):
     relevant information extracted from the BAM file is returned for further processing.
     """
     pysam.index(bampath)
+    log_info("BAM file indexed successfully")
     bamfile = ox.read_bam(bampath)
-    df = pl.read_ipc(bamfile)
     log_info("BAM file read successfully")
+    df = pl.read_ipc(bamfile)
+    log_info("DataFrame created successfully")
     return df
 
 

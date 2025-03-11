@@ -90,42 +90,12 @@ mkdir -p "$OUTPUT_DIR"
 
 echo "Running TranslonScorer..."
 
-# Run the test script that exercises the new implementation
-python -c "
-from TranslonScorer.file_handlers import bam, bed, bigwig
-from TranslonScorer.core import scoring, coordinates
-import polars as pl
-
-# Process BAM file
-print('Processing BAM file...')
-bam_df = pl.read_csv('$BAM_FILE')
-exon_df = pl.read_csv('$GTF_FILE')
-
-# Get exons and CDS
-cds_df, exon_df = bam.getexons_and_cds('$GTF_FILE')
-
-# Process BAM data
-bam_type, _ = bam.detect_bam_type(bam_df, exon_df)
-if bam_type == 'genomic':
-    bam_df = bam.bamtranscript(bam_df, exon_df)
-else:
-    bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
-
-# Calculate A-site positions
-offsets = coordinates.change_point_analysis(bam_df)
-bed_df = bed.asitecalc(bam_df, offsets)
-
-# Convert to BigWig
-bed.bedtobigwig('${OUTPUT_PREFIX}.bedGraph', '$CHROM_SIZES', '${OUTPUT_PREFIX}')
-
-# Score ORFs
-orfs_df = bigwig.scoring('${OUTPUT_PREFIX}.bw', exon_df, cds_df, False, 50)
-
-# Save results
-bed.saveorfsandexons(orfs_df, exon_df, '${OUTPUT_PREFIX}')
-
-print('Analysis complete!')
-"
+# Run the analysis using the CLI
+translonscorer --bam-file "$BAM_FILE" \
+               --gtf-file "$GTF_FILE" \
+               --chrom-sizes "$CHROM_SIZES" \
+               --output-prefix "$OUTPUT_PREFIX" \
+               --genomic
 check_status "TranslonScorer execution"
 
 echo "Script completed successfully!"

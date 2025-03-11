@@ -72,12 +72,24 @@ def log_info(message: str) -> None:
 def log_warning(message: str) -> None:
     """Log a warning message if logging is enabled."""
     if LOGGING_ENABLED:
-        logger.error(message)
+        logger.warning(message)
 
-def log_error(message: str) -> None:
-    """Log an error message if logging is enabled."""
+def log_error(message: str, raise_exception: bool = True, exception_type: type = RuntimeError) -> None:
+    """
+    Log an error message and optionally raise an exception.
+
+    Args:
+        message: The error message to log
+        raise_exception: Whether to raise an exception after logging (default: True)
+        exception_type: Type of exception to raise (default: RuntimeError)
+
+    Raises:
+        The specified exception type with the error message if raise_exception is True
+    """
     if LOGGING_ENABLED:
         logger.error(message)
+    if raise_exception:
+        raise exception_type(message)
 
 def log_debug(message: str) -> None:
     """Log a debug message if logging is enabled."""

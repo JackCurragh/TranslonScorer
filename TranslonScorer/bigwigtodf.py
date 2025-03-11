@@ -18,7 +18,8 @@ def transcriptreads(bwfile, exon_df):
     - df_tran (DataFrame): DataFrame containing transcript information derived from the BigWig file.
 
     Raises:
-    - Exception: if a BigWig file is not provided.
+    - RuntimeError: If there are issues reading values from the bigWig file
+    - ValueError: If no reads could be extracted from any chromosome
 
     This function reads a BigWig file and an exon annotation file. It performs various operations to extract transcript information
     from the BigWig file based on the exon coordinates. The resulting transcript information is stored in a DataFrame named `df_tran`.
@@ -31,22 +32,38 @@ def transcriptreads(bwfile, exon_df):
     Finally, it constructs the `df_tran` DataFrame using the extracted transcript information and returns it.
     """
     reads = []
-    # Get lists directly since they're already in the correct format
-    chromosomes = exon_df["chr"].to_list()
-    starts = exon_df["start"].explode().to_list()  # Explode the lists of integers
-    stops = exon_df["stop"].explode().to_list()    # Explode the lists of integers
     
-    for chr, start, stop in zip(chromosomes * len(starts), starts, stops):
+    # Explode the lists into rows and sort by chromosome and start position
+    exon_exploded = exon_df.with_columns([
+        pl.col("start").alias("start_list"),
+        pl.col("stop").alias("stop_list")
+    ]).explode(["start_list", "stop_list"])
+    
+    # Sort by chromosome and start position
+    exon_exploded = exon_exploded.sort(["chr", "start_list"])
+    
+    # Process each chromosome separately to maintain order
+    for chrom in exon_exploded["chr"].unique():
+        chrom_data = exon_exploded.filter(pl.col("chr") == chrom)
+        
+        # Get sorted positions for this chromosome
+        starts = chrom_data["start_list"].to_list()
+        stops = chrom_data["stop_list"].to_list()
+        
         try:
-            values = bwfile.values(chr, start, stop)
-            if values:
-                reads.extend(values)
-        except RuntimeError:
-            log_warning(f"Could not read values for {chr}:{start}-{stop}")
-            continue
+            # Get values for all positions in this chromosome
+            for start, stop in zip(starts, stops):
+                try:
+                    values = bwfile.values(chrom, start, stop)
+                    if values:
+                        reads.extend(values)
+                except RuntimeError as e:
+                    log_error(f"Could not read values for {chrom}:{start}-{stop}: {str(e)}")
+        except Exception as e:
+            log_error(f"Error processing chromosome {chrom}: {str(e)}")
     
     if not reads:
-        return pl.DataFrame()
+        log_error("No reads could be extracted from any chromosome", exception_type=ValueError)
         
     return pl.DataFrame({
         "tran_start": range(len(reads)),

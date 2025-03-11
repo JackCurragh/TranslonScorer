@@ -5,8 +5,34 @@ This module contains functions for processing BAM files and converting
 them to other formats, including coordinate transformations.
 """
 
+import pysam
 import polars as pl
-from ..utils.logging import log_info, log_warning, log_error
+import oxbow as ox
+from ..utils.logging import log_info, log_error, log_warning
+
+
+def readbam(bampath):
+    """
+    Reads a given BAM file, extracts relevant information, and returns it as a DataFrame.
+
+    Parameters:
+    - bampath (str): Path to the BAM file to be processed.
+
+    Returns:
+    - df (DataFrame): Polars DataFrame containing the extracted information from the BAM file.
+
+    This function indexes the BAM file using pysam, reads the indexed file using ox.read_bam,
+    and then reads the data into a DataFrame using pl.read_ipc. The DataFrame containing the
+    relevant information extracted from the BAM file is returned for further processing.
+    """
+    log_info("Indexing BAM file")
+    pysam.index(bampath)
+    log_info("BAM file indexed successfully")
+    bamfile = ox.read_bam(bampath)
+    log_info("BAM file read successfully")
+    df = pl.read_ipc(bamfile)
+    log_info("DataFrame created successfully")
+    return df
 
 
 def getexons_and_cds(annotation_file, tran=[]):

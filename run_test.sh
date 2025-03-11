@@ -92,7 +92,7 @@ echo "Running TranslonScorer..."
 
 # Run the analysis using the CLI
 translonscorer all \
-    --bam "$BAM_FILE" \
+    --bam_path "$BAM_FILE" \
     --chromsizes "$CHROM_SIZES" \
     --sequence "$GENOME_FA" \
     --annotation "$GTF_FILE" \

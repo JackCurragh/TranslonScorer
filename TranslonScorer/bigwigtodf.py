@@ -30,15 +30,13 @@ def transcriptreads(bwfile, exon_df):
     coordinates. It calculates the transcript start and stop coordinates for each interval and stores the information in corresponding lists.
     Finally, it constructs the `df_tran` DataFrame using the extracted transcript information and returns it.
     """
-    # try:
     reads = []
-    # Convert Series to lists and ensure numeric types
-    print(exon_df)
+    # Get lists directly since they're already in the correct format
     chromosomes = exon_df["chr"].to_list()
-    starts = exon_df["start"].cast(pl.Int64).to_list()
-    stops = exon_df["stop"].cast(pl.Int64).to_list()
+    starts = exon_df["start"].explode().to_list()  # Explode the lists of integers
+    stops = exon_df["stop"].explode().to_list()    # Explode the lists of integers
     
-    for chr, start, stop in zip(chromosomes, starts, stops):
+    for chr, start, stop in zip(chromosomes * len(starts), starts, stops):
         try:
             values = bwfile.values(chr, start, stop)
             if values:
@@ -54,9 +52,6 @@ def transcriptreads(bwfile, exon_df):
         "tran_start": range(len(reads)),
         "counts": reads
     })
-    # except Exception as e:
-    #     log_error(f"Error reading transcript data: {str(e)}")
-    #     return pl.DataFrame()
 
 
 def oldscoring(df, tran_reads, sru_range, typeorf):

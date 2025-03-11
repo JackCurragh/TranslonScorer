@@ -88,38 +88,45 @@ def oldscoring(df, tran_reads, sru_range, typeorf):
 
     Returns:
     dict: A dictionary representation of the modified DataFrame.
-
-    Notes:
-    - For 'uoORF', the function calculates the 'rise_up' score based on the 'start' column.
-    - For 'doORF', the function calculates the 'step_down' score based on the 'stop' column.
-    - For other types, it calculates a list of scores and extracts 'hrf', 'avg', and 'nzc' from it.
-    - The final score is a sum of 'rise_up', 'step_down', 'hrf', 'avg', and 'nzc' columns.
     """
     try:
+        # Initialize rise_up and step_down columns with default values
+        df = df.with_columns([
+            pl.lit(0.0).alias("rise_up"),
+            pl.lit(0.0).alias("step_down")
+        ])
+
         if typeorf == "uoORF":
             df = df.with_columns(
-                [
-                    pl.struct(["start"])
-                    .apply(lambda x: sru_score(x["start"], tran_reads, sru_range, 0))
-                    .alias("rise_up")
-                ]
+                pl.struct(["start"])
+                .apply(lambda x: sru_score(x["start"], tran_reads, sru_range, 0))
+                .alias("rise_up")
             )
         elif typeorf == "doORF":
             df = df.with_columns(
-                [
-                    pl.struct(["stop"])
-                    .apply(lambda x: sru_score(x["stop"], tran_reads, sru_range, 1))
-                    .alias("step_down")
-                ]
+                pl.struct(["stop"])
+                .apply(lambda x: sru_score(x["stop"], tran_reads, sru_range, 1))
+                .alias("step_down")
             )
         else:
-            df = df.with_columns(
-                (
-                    pl.struct(["start", "stop"])
-                    .apply(lambda x: calculate_scores(x["start"], x["stop"], tran_reads))
-                    .alias("list_scores")
-                )
+            # For other types, calculate both rise_up and step_down
+            df = df.with_columns([
+                pl.struct(["start"])
+                .apply(lambda x: sru_score(x["start"], tran_reads, sru_range, 0))
+                .alias("rise_up"),
+                pl.struct(["stop"])
+                .apply(lambda x: sru_score(x["stop"], tran_reads, sru_range, 1))
+                .alias("step_down")
+            ])
+
+        # Calculate other scores
+        df = df.with_columns(
+            (
+                pl.struct(["start", "stop"])
+                .apply(lambda x: calculate_scores(x["start"], x["stop"], tran_reads))
+                .alias("list_scores")
             )
+        )
         df = df.with_columns(
             (pl.col("list_scores").apply(lambda x: x[0]).alias("hrf")),
             (pl.col("list_scores").apply(lambda x: x[1]).alias("avg")),

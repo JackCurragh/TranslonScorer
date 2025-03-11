@@ -17,6 +17,7 @@ def readbam(bampath):
     and then reads the data into a DataFrame using pl.read_ipc. The DataFrame containing the
     relevant information extracted from the BAM file is returned for further processing.
     """
+    log_info("Indexing BAM file")
     pysam.index(bampath)
     log_info("BAM file indexed successfully")
     bamfile = ox.read_bam(bampath)

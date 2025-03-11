@@ -553,13 +553,6 @@ def bedtobigwig(bedfile, chromsize, filename):
 
     Returns:
         str: Path to the created bigWig file
-
-    Notes:
-        - The output bigWig file will be named 'filename.bw'
-        - Uses pyBigWig library instead of external kent utils
-        - Handles chromosome sizes file reading internally
-        - Ensures data is sorted by chromosome and position before writing
-        - Uses span=1 for single-nucleotide resolution (appropriate for ribo-seq data)
     """
     import pyBigWig as bw
     import polars as pl
@@ -571,7 +564,9 @@ def bedtobigwig(bedfile, chromsize, filename):
         for line in f:
             chrom, size = line.strip().split('\t')
             chrom_sizes[chrom] = int(size)
-    print(chrom_sizes.keys())
+    
+    log_info(f"Found {len(chrom_sizes)} chromosomes in sizes file")
+    
     log_info("Reading bedGraph data")
     # Read bedGraph data with proper column types
     bed_data = pl.read_csv(
@@ -592,9 +587,19 @@ def bedtobigwig(bedfile, chromsize, filename):
         "column_4": "value"
     })
     
+    # Filter out chromosomes that aren't in the chromosome sizes file
+    bed_data = bed_data.filter(pl.col("chrom").is_in(chrom_sizes.keys()))
+    
+    # Ensure all positions are valid
+    bed_data = bed_data.filter(pl.col("end") > pl.col("start"))
+    
+    # Remove any rows with NaN values
+    bed_data = bed_data.drop_nulls()
+    
     # Sort the data by chromosome and start position
     bed_data = bed_data.sort(["chrom", "start"])
-    print(bed_data.head())
+    
+    log_info(f"Processed bedGraph data: {len(bed_data)} entries")
     
     # Create bigWig file
     log_info("Creating bigWig file")
@@ -603,45 +608,49 @@ def bedtobigwig(bedfile, chromsize, filename):
     # Add header with chromosome sizes
     bw_file.addHeader(list(chrom_sizes.items()))
     
-    # Write data chromosome by chromosome
-    for chrom in bed_data["chrom"].unique():
+    # Process chromosomes in a specific order (match chromosome sizes order)
+    chroms_to_process = [chrom for chrom in chrom_sizes.keys() if chrom in bed_data["chrom"].unique()]
+    
+    for chrom in chroms_to_process:
         chrom_data = bed_data.filter(pl.col("chrom") == chrom)
-        if not chrom_data.is_empty():
-            try:
-                # Convert polars Series to lists (no need to cast since types are already correct)
-                starts = chrom_data["start"].to_list()
-                ends = chrom_data["end"].to_list()
-                values = chrom_data["value"].to_list()
+        if len(chrom_data) == 0:
+            continue
+            
+        log_info(f"Processing chromosome {chrom} with {len(chrom_data)} entries")
+        
+        try:
+            # Convert polars Series to lists
+            starts = chrom_data["start"].to_list()
+            ends = chrom_data["end"].to_list()
+            values = chrom_data["value"].to_list()
+            
+            # Validate positions against chromosome size
+            max_pos = max(ends)
+            if max_pos > chrom_sizes[chrom]:
+                log_warning(f"Trimming entries exceeding chromosome {chrom} size ({max_pos} > {chrom_sizes[chrom]})")
                 
-                # Ensure all lists have the same length
-                if len(starts) != len(ends) or len(starts) != len(values):
-                    log_warning(f"Skipping chromosome {chrom} due to mismatched data lengths")
+                # Filter entries to be within chromosome size
+                valid_entries = [(s, e, v) for s, e, v in zip(starts, ends, values) if e <= chrom_sizes[chrom]]
+                if not valid_entries:
+                    log_warning(f"No valid entries for chromosome {chrom} after trimming")
                     continue
                     
-                # Ensure all positions are valid
-                if any(end <= start for start, end in zip(starts, ends)):
-                    log_warning(f"Skipping chromosome {chrom} due to invalid positions (end <= start)")
-                    continue
-                
-                # Ensure all values are valid numbers using polars
-                if chrom_data["value"].is_null().any():
-                    log_warning(f"Skipping chromosome {chrom} due to null values")
-                    continue
-                
-                # Create a list of chromosome names matching the length of other lists
-                chromosomes = [chrom] * len(starts)
-                
-                # Add entries to bigWig file with span=1 for single-nucleotide resolution
-                bw_file.addEntries(
-                    chromosomes,
-                    starts,
-                    ends=ends,
-                    values=values,
-                    span=1  # Use single-nucleotide resolution for ribo-seq data
-                )
-            except Exception as e:
-                log_error(f"Error processing chromosome {chrom}: {str(e)}")
-                continue
+                starts, ends, values = zip(*valid_entries)
+            
+            # Add entries chromosome by chromosome
+            bw_file.addEntries(
+                [chrom] * len(starts),
+                starts,
+                ends=ends,
+                values=values
+            )
+            
+            log_info(f"Successfully added {len(starts)} entries for chromosome {chrom}")
+            
+        except Exception as e:
+            log_error(f"Error processing chromosome {chrom}: {str(e)}")
+            # Continue with next chromosome instead of terminating the whole process
+            continue
     
     bw_file.close()
     log_info(f"Successfully created {filename}.bw")

@@ -99,7 +99,8 @@ def all(bam: str, chromsizes: str, sequence: str, annotation: str,
         raise click.BadParameter(f"BAM file not found: {bam}")
     
     # Read BAM file
-    bam_df = pl.read_csv(location)
+    log_info('Processing BAM file...')
+    bam_df = bam.readbam(location)
     
     # Get exons and CDS
     cds_df, exon_df = bam.getexons_and_cds(annotation)

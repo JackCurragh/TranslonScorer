@@ -44,6 +44,7 @@ def transcriptreads(bwfile, exon_df):
     
     # Process each chromosome separately to maintain order
     for chrom in exon_exploded["chr"].unique():
+        print(chrom)
         chrom_data = exon_exploded.filter(pl.col("chr") == chrom)
         
         # Get sorted positions for this chromosome

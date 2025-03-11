@@ -610,7 +610,7 @@ def bedtobigwig(bedfile, chromsize, filename):
     
     # Process chromosomes in a specific order (match chromosome sizes order)
     chroms_to_process = [chrom for chrom in chrom_sizes.keys() if chrom in bed_data["chrom"].unique()]
-    
+    print(chroms_to_process)
     for chrom in chroms_to_process:
         chrom_data = bed_data.filter(pl.col("chrom") == chrom)
         if len(chrom_data) == 0:

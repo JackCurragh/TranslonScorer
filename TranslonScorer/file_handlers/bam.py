@@ -30,31 +30,38 @@ def readbam(bampath):
     bamfile = ox.read_bam(bampath)
     log_info("BAM file read successfully")
     
-    # Convert to DataFrame and ensure correct column names
+    # Convert to DataFrame
     df = pl.read_ipc(bamfile)
+    log_info(f"Available columns: {df.columns}")
     
-    # Rename columns if needed
-    if 'reference_name' in df.columns:
-        df = df.rename({'reference_name': 'chr'})
-    if 'reference_start' in df.columns:
-        df = df.rename({'reference_start': 'start'})
-    if 'reference_end' in df.columns:
-        df = df.rename({'reference_end': 'stop'})
-    if 'query_length' in df.columns:
-        df = df.rename({'query_length': 'length'})
-    if 'is_reverse' in df.columns:
+    # Map oxbow column names to our expected names
+    column_mapping = {
+        'rname': 'chr',
+        'pos': 'start',
+        'end': 'stop',
+        'qlen': 'length',
+        'flag': 'flag'  # We'll use this to determine strand
+    }
+    
+    # Rename columns that exist
+    for old_name, new_name in column_mapping.items():
+        if old_name in df.columns:
+            df = df.rename({old_name: new_name})
+    
+    # Add strand based on SAM flag (0x10 is the reverse strand bit)
+    if 'flag' in df.columns:
         df = df.with_columns(
-            pl.when(pl.col('is_reverse'))
+            pl.when(pl.col('flag') & 0x10 > 0)
             .then(pl.lit('-'))
             .otherwise(pl.lit('+'))
             .alias('strand')
-        ).drop('is_reverse')
+        ).drop('flag')
     
     # Add count column if not present
     if 'count' not in df.columns:
         df = df.with_columns(count=pl.lit(1))
         
-    # Group by position to get counts if needed
+    # Group by position to get counts
     df = df.group_by(['chr', 'start', 'stop', 'length', 'strand']).agg(
         pl.col('count').sum()
     ).sort(['chr', 'start'])

@@ -104,7 +104,8 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
     ])
 
     print(orfs)
-    orf_df = pl.read_csv(orfs, has_header=True, separator=",")
+    orf_df =orfs 
+    # = pl.read_csv(orfs, has_header=True, separator=",")
 
     counter = 0
     orfscores = []

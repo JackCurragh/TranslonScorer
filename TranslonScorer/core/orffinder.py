@@ -167,3 +167,143 @@ def preporfs(sequence_input, start_codons=None, stop_codons=None, minlength=0, m
         })
     
     return pl.DataFrame(all_orfs) 
+
+def getexons_and_cds(annotation_file, tran=[]):
+    """
+    Extracts CDS and exon coordinates from an annotation file.
+
+    This function reads an annotation file in GTF/GFF format and extracts the
+    coordinates of coding sequences (CDS) and exons. It then processes these
+    coordinates to obtain transcript-level coordinates for exons and returns
+    the results.
+
+    Parameters:
+        annotation_file (str): The path to the annotation file in GTF/GFF format.
+        tran (list): A list of transcript IDs to filter. Only coordinates corresponding
+                     to these transcripts will be extracted if provided. Default is [].
+
+    Returns:
+        tuple: A tuple containing two polars DataFrames:
+               - The first DataFrame contains CDS coordinates.
+               - The second DataFrame contains exon coordinates.
+
+    Notes:
+        - This function assumes the annotation file has columns separated by tabs ('\t').
+        - The annotation file is expected to have no header, with comment lines starting with '#'.
+        - The following columns are expected in the annotation file: 'chr', 'type', 'start', 'stop',
+          'strand', 'attributes'.
+        - The 'attributes' column is expected to contain transcript IDs.
+        - The function 'extract_transcript_id' is used to extract transcript IDs from the 'attributes' column.
+        - If 'tran' is provided, only coordinates corresponding to the specified transcripts will be extracted.
+
+    Example:
+        cds_coords, exon_coords = getexons_and_cds("annotation.gff", tran=['ENST00000223972', 'ENST00000456328'])
+    """
+    df = (
+        pl.read_csv(
+            annotation_file,
+            separator="\t",
+            ignore_errors=True,
+            has_header=False,
+            truncate_ragged_lines=True,
+            comment_prefix="#",
+        )
+        .select(
+            ["column_1", "column_3", "column_4", "column_5", "column_7", "column_9"]
+        )
+        .rename(
+            {
+                "column_1": "chr",
+                "column_3": "type",
+                "column_4": "start",
+                "column_5": "stop",
+                "column_7": "strand",
+                "column_9": "attributes",
+            }
+        )
+    )
+    df = df.with_columns(
+        pl.col("attributes")
+        .apply(lambda attributes: extract_transcript_id(attributes))
+        .alias("tran_id")
+    ).select(pl.all().exclude("attributes"))
+
+    if tran:
+        df = df.filter((pl.col("tran_id").is_in(tran)))
+
+    # Getting CDS
+    coding_regions = df.filter((pl.col("type") == "CDS"))
+
+    groupedcds = (
+        coding_regions.group_by("tran_id")
+        .agg(pl.col("start"), pl.col("stop"), pl.col("chr"))
+        .select(["chr", "tran_id", "start", "stop"])
+    )
+    # Getting exons
+    exon_regions = df.filter((pl.col("type") == "exon"))
+    pos_exons, neg_exons = procesexons(exon_regions)
+
+    # column names switched to calculate inverse of positions for negative strands
+    exon_coords_pos = exontranscriptcoords(pos_exons, posstrand=True)
+    exon_coords_neg = exontranscriptcoords(neg_exons, posstrand=False)
+
+    cds_coords_pos = gettranscriptcoords(groupedcds, exon_coords_pos, posstrand=True)
+    cds_coords_neg = gettranscriptcoords(groupedcds, exon_coords_neg, posstrand=False)
+
+    cds_coords = pl.concat([cds_coords_pos, cds_coords_neg])
+    exondf = pl.concat([exon_coords_pos, exon_coords_neg]).select(
+        pl.all().exclude("strand")
+    )
+    return cds_coords, exondf
+
+def classify_orf(row):
+    """
+    Classify an ORF (Open Reading Frame) based on its relative position to transcript start and stop sites.
+
+    Parameters:
+    - row (Series or dict-like): A Pandas Series or dictionary-like object containing ORF information,
+                                including 'start', 'stop', 'tran_start', and 'tran_stop' values.
+
+    Returns:
+    - str: A string indicating the classification of the ORF based on its relative position:
+           - "uORF": Upstream ORF (stop < tran_start)
+           - "CDS": Coding Sequence (start == tran_start and stop == tran_stop)
+           - "dORF": Downstream ORF (start > tran_stop)
+           - "uoORF": Upstream Overlapping ORF (start < tran_start and stop >= tran_start)
+           - "doORF": Downstream Overlapping ORF (start <= tran_stop and stop > tran_stop)
+           - "iORF": Internal ORF (start >= tran_start and stop <= tran_stop)
+           - "eoORF": Encapsulated Overlapping ORF (start < tran_start and stop > tran_stop)
+           - "extORF": Extended ORF (start < tran_start and stop == tran_stop)
+           - "Unexpected": Indicates unexpected conditions where none of the above criteria are met.
+
+    This function categorizes an ORF based on its positional relationship with the transcript start (`tran_start`)
+    and stop (`tran_stop`) sites. It evaluates the relative positions of 'start' and 'stop' compared to
+    'tran_start' and 'tran_stop' to determine the appropriate classification.
+
+    If the relative position does not match any expected categories, an "Unexpected" classification is printed
+    with the values of 'start', 'stop', 'tran_start', and 'tran_stop', and "Unexpected" is returned.
+
+    Note: This function assumes the input `row` contains numerical values for 'start', 'stop', 'tran_start',
+    and 'tran_stop', typically retrieved from a Pandas DataFrame or similar data structure.
+    """
+    if row["stop"] < row["tran_start"]:
+        return "uORF"
+    elif row["start"] == row["tran_start"] and row["stop"] == row["tran_stop"]:
+        return "CDS"
+    elif row["start"] > row["tran_stop"]:
+        return "dORF"
+    elif row["start"] < row["tran_start"] and row["stop"] >= row["tran_start"]:
+        return "uoORF"
+    elif row["start"] <= row["tran_stop"] and row["stop"] > row["tran_stop"]:
+        return "doORF"
+    elif row["start"] >= row["tran_start"] and row["stop"] <= row["tran_stop"]:
+        return "iORF"
+    elif row["start"] < row["tran_start"] and row["stop"] > row["tran_stop"]:
+        return "eoORF"
+    elif row["start"] < row["tran_start"] and row["stop"] == row["tran_stop"]:
+        return "extORF"
+    else:
+        print(
+            "unexpected", row["start"], row["stop"], row["tran_start"], row["tran_stop"]
+        )
+        return "Unexpected"

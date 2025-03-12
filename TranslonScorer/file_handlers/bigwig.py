@@ -7,6 +7,7 @@ including conversion to other formats and coordinate transformations.
 
 import polars as pl
 import pyBigWig as bw
+from ..core.orffinder import orfrelativeposition
 from ..utils.logging import log_info, log_warning, log_error
 from ..core.scoring import oldscoring, newscoring, globalscores, existingscore, assigningscore
 

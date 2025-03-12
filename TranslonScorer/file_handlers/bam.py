@@ -172,7 +172,7 @@ def getexons_and_cds(annotation_file, tran=[]):
 def get_bam_tran(bam_df, exon_df):
     """
     Map BAM reads to transcript coordinates using exon information.
-    Uses interval-based filtering to efficiently find overlaps.
+    Uses binary search for efficient overlap detection.
 
     Parameters:
     - bam_df (DataFrame): DataFrame containing BAM file data with chromosome positions
@@ -181,19 +181,12 @@ def get_bam_tran(bam_df, exon_df):
     Returns:
     - DataFrame: BAM data with added transcript coordinates
     """
-    # Ensure chromosome types match (both categorical)
-    if exon_df["chr"].dtype != pl.Categorical:
-        exon_df = exon_df.with_columns(pl.col("chr").cast(pl.Categorical))
-    
-    # Sort both DataFrames by start position for efficient overlap checking
-    bam_df = bam_df.sort("start")
+    # Sort exons by start position for binary search
     exon_df = exon_df.sort("start")
     
-    # Create overlapping windows for efficient filtering
-    window_size = 10000  # 10kb windows
+    # Process each chromosome separately
     results = []
     
-    # Process in windows to avoid memory issues
     for chr in bam_df["chr"].unique():
         bam_with_chr = bam_df.filter(pl.col("chr") == chr)
         exon_with_chr = exon_df.filter(pl.col("chr") == chr)
@@ -201,71 +194,76 @@ def get_bam_tran(bam_df, exon_df):
         if exon_with_chr.is_empty() or bam_with_chr.is_empty():
             continue
             
-        chr_min = bam_with_chr["start"].min()
-        chr_max = bam_with_chr["stop"].max()
+        # Convert exon data to numpy arrays for faster binary search
+        exon_starts = exon_with_chr["start"].to_numpy()
+        exon_stops = exon_with_chr["stop"].to_numpy()
+        exon_tran_starts = exon_with_chr["tran_start"].to_numpy()
+        exon_tran_stops = exon_with_chr["tran_stop"].to_numpy()
+        exon_tran_ids = exon_with_chr["tran_id"].to_numpy()
         
-        for start in range(chr_min, chr_max, window_size):
-            end = start + window_size
+        # Process reads in chunks to manage memory
+        chunk_size = 10000
+        for i in range(0, len(bam_with_chr), chunk_size):
+            chunk = bam_with_chr.slice(i, chunk_size)
+            chunk_results = []
             
-            # Get reads and exons in this window
-            window_reads = bam_with_chr.filter(
-                (pl.col("start") >= start) & (pl.col("start") < end)
-            )
-            if window_reads.is_empty():
-                continue
+            # For each read in the chunk
+            for read in chunk.iter_rows(named=True):
+                read_start = read["start"]
+                read_stop = read["stop"]
                 
-            window_exons = exon_with_chr.filter(
-                (pl.col("start") < end) & (pl.col("stop") > start)
-            )
-            if window_exons.is_empty():
-                continue
-            
-            # Find overlaps within the window using a more efficient join
-            overlaps = window_reads.join(
-                window_exons,
-                on="chr",
-                how="inner"
-            ).filter(
-                (pl.col("start") >= pl.col("start_right")) &
-                (pl.col("stop") <= pl.col("stop_right"))
-            )
-            
-            if not overlaps.is_empty():
-                # Calculate transcript coordinates
-                mapped = overlaps.with_columns([
-                    (pl.col("tran_start") + (pl.col("start") - pl.col("start_right")))
-                    .alias("tran_start_bam"),
-                    (pl.col("tran_stop") - (pl.col("stop_right") - pl.col("stop")))
-                    .alias("tran_stop_bam")
-                ]).select(
-                    pl.all().exclude("start_right", "stop_right", "tran_start", "tran_stop")
-                )
-                results.append(mapped)
+                # Binary search for overlapping exons
+                # Find leftmost exon that could overlap
+                left = 0
+                right = len(exon_starts) - 1
+                overlap_start = len(exon_starts)  # Default to length if no overlap found
                 
+                while left <= right:
+                    mid = (left + right) // 2
+                    if exon_stops[mid] <= read_start:
+                        left = mid + 1
+                    else:
+                        overlap_start = mid
+                        right = mid - 1
+                
+                # Check each potentially overlapping exon
+                for j in range(overlap_start, len(exon_starts)):
+                    if exon_starts[j] > read_stop:
+                        break
+                        
+                    if (exon_starts[j] <= read_start and 
+                        exon_stops[j] >= read_stop):
+                        # Found an overlapping exon
+                        tran_start = int(exon_tran_starts[j] + (read_start - exon_starts[j]))
+                        tran_stop = int(exon_tran_stops[j] - (exon_stops[j] - read_stop))
+                        
+                        chunk_results.append({
+                            "chr": read["chr"],
+                            "start": read_start,
+                            "stop": read_stop,
+                            "length": read["length"],
+                            "strand": read["strand"],
+                            "count": read["count"],
+                            "tran_id": exon_tran_ids[j],
+                            "tran_start_bam": tran_start,
+                            "tran_stop_bam": tran_stop
+                        })
+            
+            if chunk_results:
+                results.append(pl.DataFrame(chunk_results))
+            
             # Clear memory
-            del window_reads
-            del window_exons
-            if 'overlaps' in locals():
-                del overlaps
-            if 'mapped' in locals():
-                del mapped
+            del chunk
+            del chunk_results
     
     if not results:
         return pl.DataFrame()
     
-    # Concatenate results in chunks to avoid memory issues
-    chunk_size = 100
-    final_results = []
-    for i in range(0, len(results), chunk_size):
-        chunk = pl.concat(results[i:i + chunk_size])
-        chunk = chunk.unique(
-            subset=['chr', 'start', 'stop', 'length', 'strand', 'count', 'tran_id'],
-            maintain_order=True
-        )
-        final_results.append(chunk)
-        del chunk
-    
-    return pl.concat(final_results)
+    # Concatenate results
+    return pl.concat(results).unique(
+        subset=['chr', 'start', 'stop', 'length', 'strand', 'count', 'tran_id'],
+        maintain_order=True
+    )
 
 
 @profile(precision=4)

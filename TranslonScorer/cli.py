@@ -113,7 +113,7 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
        - Skip BAM processing
        - Find and score ORFs
        - Generate visualizations
-       
+    
     3. If both BAM and BigWig are provided:
        - Use the BigWig file directly
        - Find and score ORFs
@@ -168,12 +168,16 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
             log_info("Both BAM and BigWig provided. Using BigWig directly.")
             bigwig_path = bigwig
     
-    # Get exons and CDS for ORF finding
-    log_info("Finding ORFs...")
-    cds_df, exon_df = bam.getexons_and_cds(annotation)
+    # Ensure transcriptomic input for ORF finding
+    log_info("Ensuring transcriptomic input for ORF finding...")
+    transcript_fasta = sequence
+    if not sequence.endswith('_transcripts.fa'):
+        log_info("Generating transcript sequences from genomic FASTA and GTF annotation...")
+        transcript_fasta = gettranscripts(sequence, annotation, outfile)
     
     # Find ORFs
-    orf_df = orffinder.preporfs(sequence, start_codons.split(","), stop_codons.split(","), min_len, max_len)
+    log_info("Finding ORFs...")
+    orf_df = orffinder.preporfs(transcript_fasta, start_codons.split(","), stop_codons.split(","), min_len, max_len)
     
     # Score ORFs
     log_info("Scoring ORFs...")

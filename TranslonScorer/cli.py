@@ -12,6 +12,7 @@ from pathlib import Path
 from memory_profiler import profile
 
 from .core import scoring, coordinates
+from .core import orffinder
 from .file_handlers import bam, bed, bigwig
 from .utils.logging import setup_logging, log_info, log_error
 from .visualization import plots
@@ -137,7 +138,7 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
     
     # Step 2: Find ORFs
     print("Finding ORFs...")
-    orf_df = coordinates.preporfs(sequence, start_codons.split(","), stop_codons.split(","), min_len, max_len)
+    orf_df = orffinder.preporfs(sequence, start_codons.split(","), stop_codons.split(","), min_len, max_len)
     
     # Step 3: Score ORFs
     print("Scoring ORFs...")
@@ -239,7 +240,7 @@ def find_orfs(sequence: str, annotation: str, bigwig: str, outfile: str,
     3. Scores them using Ribo-seq coverage
     """
     print("Finding ORFs...")
-    orf_df = coordinates.preporfs(sequence, start_codons.split(","), stop_codons.split(","), min_len, max_len)
+    orf_df = orffinder.preporfs(sequence, start_codons.split(","), stop_codons.split(","), min_len, max_len)
     
     # Get exons and CDS
     cds_df, exon_df = bam.getexons_and_cds(annotation)

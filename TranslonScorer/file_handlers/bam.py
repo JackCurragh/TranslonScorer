@@ -360,17 +360,23 @@ def bamtranscript(bam_df, exon_df):
 
 def process_transcriptomic_bam(df_namesplit, cds_df):
     """
-    Process a transcriptomic BAM file where reads are already aligned to transcripts.
+    Process a transcriptomic BAM file or output from bamtranscript where reads are mapped to transcripts.
     
     Parameters:
-    - df_namesplit (DataFrame): BAM DataFrame with transcript alignments
+    - df_namesplit (DataFrame): BAM DataFrame with transcript alignments, either:
+        - From transcriptomic BAM: 'chr' column contains transcript IDs
+        - From bamtranscript: has both 'chr' and 'tran_id' columns
     - cds_df (DataFrame): CDS DataFrame with transcript information
     
     Returns:
     - DataFrame: Processed BAM data ready for A-site calculation
     """
-    # Rename chr column to tran_id since it contains transcript IDs
-    df_with_tran = df_namesplit.rename({"chr": "tran_id"})
+    # Check if this is output from bamtranscript (has both chr and tran_id)
+    if "tran_id" in df_namesplit.columns:
+        df_with_tran = df_namesplit
+    else:
+        # For direct transcriptomic BAM, rename chr to tran_id
+        df_with_tran = df_namesplit.rename({"chr": "tran_id"})
     
     # Filter for transcripts present in CDS annotation
     bam_to_cds = (
@@ -381,7 +387,7 @@ def process_transcriptomic_bam(df_namesplit, cds_df):
     
     # Calculate position relative to CDS start
     tran_dict = cds_df.to_dict(as_series=False)
-    start_dict = dict(zip(tran_dict["tran_id"], tran_dict["tran_start"]))
+    start_dict = dict(zip(tran_dict["tran_id"], tran_dict["start"]))
     
     bam_to_cds = bam_to_cds.with_columns(
         [

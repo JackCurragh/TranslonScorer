@@ -108,8 +108,12 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
     # Process BAM data
     bam_type, _ = bam.detect_bam_type(bam_df, exon_df)
     if bam_type == 'genomic':
+        # First convert genomic coordinates to transcript coordinates
         bam_df = bam.bamtranscript(bam_df, exon_df)
+        # Then calculate positions relative to CDS
+        bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
     else:
+        # For transcriptomic BAM, just calculate CDS positions
         bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
     
     # Calculate A-site positions
@@ -174,8 +178,12 @@ def process_bam(bam: str, chromsizes: str, annotation: str,
     # Process BAM data
     bam_type, _ = bam.detect_bam_type(bam_df, exon_df)
     if bam_type == 'genomic':
+        # First convert genomic coordinates to transcript coordinates
         bam_df = bam.bamtranscript(bam_df, exon_df)
+        # Then calculate positions relative to CDS
+        bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
     else:
+        # For transcriptomic BAM, just calculate CDS positions
         bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
     
     # Calculate A-site positions

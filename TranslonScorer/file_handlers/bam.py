@@ -128,8 +128,9 @@ def getexons_and_cds(annotation_file, tran=[]):
         cds_df.group_by("tran_id")
         .agg([
             pl.col("chr").first(),
-            pl.col("start").sort(),
-            pl.col("stop").sort(),
+            # Take first start position (5' most for + strand, 3' most for - strand)
+            pl.col("start").sort().first().alias("start"),
+            pl.col("stop").sort().first().alias("stop"),
             pl.col("strand").first(),
         ])
     )
@@ -385,17 +386,17 @@ def process_transcriptomic_bam(df_namesplit, cds_df):
         .select(pl.all().exclude("shared"))
     )
     
-    # Calculate position relative to CDS start
-    tran_dict = cds_df.to_dict(as_series=False)
-    start_dict = dict(zip(tran_dict["tran_id"], tran_dict["start"]))
-    
-    bam_to_cds = bam_to_cds.with_columns(
-        [
-            pl.struct(["tran_id", "start"])
-            .apply(lambda x: calculate_differences(x["start"], start_dict[x["tran_id"]]))
-            .alias("bamcds_start")
-        ]
+    # Join with CDS DataFrame to get start positions
+    bam_to_cds = bam_to_cds.join(
+        cds_df.select(["tran_id", "start"]).rename({"start": "cds_start"}),
+        on="tran_id",
+        how="left"
     )
+    
+    # Calculate position relative to CDS start
+    bam_to_cds = bam_to_cds.with_columns(
+        bamcds_start=pl.col("start") - pl.col("cds_start")
+    ).drop("cds_start")
     
     return bam_to_cds
 

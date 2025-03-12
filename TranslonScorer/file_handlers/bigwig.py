@@ -107,6 +107,10 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
     orf_df =orfs 
     # = pl.read_csv(orfs, has_header=True, separator=",")
 
+    # Determine the relative position of ORFs to CDS
+    orf_df, exon_coords = orfrelativeposition(annotation, orf_df, cds_df)
+
+    # Proceed with scoring
     counter = 0
     orfscores = []
     total_transcripts = len(orf_df["tran_id"].unique())

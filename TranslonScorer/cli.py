@@ -129,6 +129,7 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
     offsets = coordinates.change_point_analysis(bam_df)
     bed_df = bed.asitecalc(bam_df, offsets)
     
+    log_info(f"A-site positions calculated for {len(bed_df)} transcripts")
     # Convert to BigWig
     bedgraph_path = f"{outfile}.bedGraph"
     bed_df.write_csv(bedgraph_path, separator="\t", include_header=False)

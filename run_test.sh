@@ -15,6 +15,17 @@ check_status() {
     fi
 }
 
+# Function to check if a file exists and is readable
+check_file() {
+    if [ -r "$1" ]; then
+        echo "✓ Found $2: $1"
+        return 0
+    else
+        echo "✗ $2 not found: $1"
+        return 1
+    fi
+}
+
 # Activate micromamba environment
 echo "Activating TranslonScorer environment..."
 eval "$(micromamba shell hook --shell bash)"
@@ -28,17 +39,12 @@ if [[ -n $(git status -s) ]]; then
     
     # Stage and commit changes with detailed message
     git add .
-    git commit -m "fix(memory): optimize offset analysis and fix profiling
+    git commit -m "refactor: make pipeline more flexible
 
-- Process read lengths in chunks of 10 instead of all at once
-- Filter DataFrame for each chunk to reduce memory footprint
-- Add explicit memory cleanup after processing each length
-- Clean up chunk DataFrames after processing
-- Fix memory profiling command to use built-in decorators
-- Remove problematic memory_profiler direct execution
-- Improve progress logging for better monitoring
-- Previous memory usage: ~1.5GB before OOM kill
-- Expected improvement: Process larger datasets without memory overflow"
+- Update test script to handle both BAM and BigWig inputs
+- Add automatic input detection and pipeline selection
+- Improve error handling and file validation
+- Add progress tracking and status checks"
     check_status "Git commit"
     
     # Push changes
@@ -79,33 +85,57 @@ check_status "User version test"
 # If all tests pass, proceed with the actual run
 echo "All installation tests passed. Proceeding with analysis..."
 
-# Check if required files exist
+# Define file paths
 BAM_FILE=~/Processed_test/star_align/bam/SRR25602018.Aligned.sortedByCoord.out.bam
+BIGWIG_FILE=test_output/test.bw
 CHROM_SIZES=data/chrom.sizes
 GENOME_FA=data/genome.fa
 GTF_FILE=data/MANE.gtf
-OUTPUT_PREFIX=test_output/test
-
-# Check input files
-for file in "$BAM_FILE" "$CHROM_SIZES" "$GENOME_FA" "$GTF_FILE"; do
-    if [ ! -f "$file" ]; then
-        echo "Error: Required file not found: $file"
-        exit 1
-    fi
-done
+OUTPUT_PREFIX=test_output/test_orfs
 
 # Create output directory if it doesn't exist
 OUTPUT_DIR=$(dirname "$OUTPUT_PREFIX")
 mkdir -p "$OUTPUT_DIR"
 
-echo "Running TranslonScorer with memory monitoring..."
-# Run with memory profiling enabled but using the module directly
-PROFILE=1 translonscorer all \
-    --bam_path "$BAM_FILE" \
-    --chromsizes "$CHROM_SIZES" \
-    --sequence "$GENOME_FA" \
-    --annotation "$GTF_FILE" \
-    --outfile "$OUTPUT_PREFIX"
+# Check which files exist and determine pipeline path
+echo "Checking available input files..."
+
+BAM_EXISTS=0
+BIGWIG_EXISTS=0
+check_file "$BAM_FILE" "BAM file" && BAM_EXISTS=1
+check_file "$BIGWIG_FILE" "BigWig file" && BIGWIG_EXISTS=1
+check_file "$GENOME_FA" "Genome FASTA" || exit 1
+check_file "$GTF_FILE" "GTF annotation" || exit 1
+
+if [ $BIGWIG_EXISTS -eq 1 ]; then
+    echo "BigWig file found, using direct ORF finding path..."
+    echo "Running TranslonScorer with memory monitoring..."
+    PROFILE=1 translonscorer all \
+        --sequence "$GENOME_FA" \
+        --annotation "$GTF_FILE" \
+        --bigwig "$BIGWIG_FILE" \
+        --outfile "$OUTPUT_PREFIX" \
+        --scoring-method modern \
+        --sru-range 15
+elif [ $BAM_EXISTS -eq 1 ]; then
+    if ! check_file "$CHROM_SIZES" "Chromosome sizes"; then
+        echo "Error: Chromosome sizes file required for BAM processing"
+        exit 1
+    fi
+    echo "BAM file found, using full pipeline path..."
+    echo "Running TranslonScorer with memory monitoring..."
+    PROFILE=1 translonscorer all \
+        --bam_path "$BAM_FILE" \
+        --chromsizes "$CHROM_SIZES" \
+        --sequence "$GENOME_FA" \
+        --annotation "$GTF_FILE" \
+        --outfile "$OUTPUT_PREFIX" \
+        --scoring-method modern \
+        --sru-range 15
+else
+    echo "Error: Neither BAM nor BigWig file found"
+    exit 1
+fi
 
 echo "Script completed successfully!"
 echo "Output files can be found with prefix: $OUTPUT_PREFIX"

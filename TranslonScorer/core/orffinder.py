@@ -196,6 +196,201 @@ def extract_transcript_id(attr_str):
     return ""
 
 
+def exontranscriptcoords(df: pl.DataFrame, posstrand=True) -> pl.DataFrame:
+    """
+    Calculates transcript-level coordinates for exons.
+
+    This function takes a DataFrame containing exon coordinates and calculates
+    the transcript-level coordinates for each exon. For exons on the positive strand,
+    the transcript coordinates start from 0 and increase. For exons on the negative
+    strand, the transcript coordinates are calculated in reverse order.
+
+    Parameters:
+        df (polars.DataFrame): DataFrame containing exon coordinates.
+        posstrand (bool): Flag indicating whether the exons are on the positive strand.
+                          If True, transcript coordinates are calculated assuming exons
+                          are on the positive strand. If False, transcript coordinates
+                          are calculated assuming exons are on the negative strand.
+                          Default is True.
+
+    Returns:
+        polars.DataFrame: DataFrame containing transcript-level exon coordinates.
+
+    Example:
+        exon_transcript_coords = exontranscriptcoords(exon_df, posstrand=True)
+    """
+    # Initialize new columns
+    new_column_1 = []
+    new_column_2 = []
+    # Iterate over rows
+    start_column = "start"
+    end_column = "stop"
+
+    for i in range(len(df)):
+        start_values = (
+            df[start_column][i]
+            if posstrand
+            else sorted(df[start_column][i], reverse=True)
+        )
+        end_values = (
+            df[end_column][i] if posstrand else sorted(df[end_column][i], reverse=True)
+        )
+        new_start_values = []  # Starting value is 0
+        new_stop_values = []
+        for j in range(len(start_values)):
+            if j == 0:
+                new_start = 0
+            else:
+                new_start = new_stop_values[j - 1] + 1
+            # Calculate stop coordinate
+            stop_coordinate = end_values[j] - start_values[j]
+            new_start_values.append(new_start)
+            new_stop_values.append(new_start + stop_coordinate)
+        new_column_1.append(new_start_values)
+        new_column_2.append(new_stop_values)
+
+    # Add new columns to the dataframe
+    df = df.with_columns((pl.Series(new_column_1)).alias("tran_start"))
+    df = df.with_columns((pl.Series(new_column_2)).alias("tran_stop"))
+    return df
+
+
+def gettranscriptcoords(cds_df, exon_df, posstrand=True):
+    """
+    Calculates transcript-level coordinates for coding sequences (CDS).
+
+    This function takes a DataFrame containing CDS coordinates and a DataFrame
+    containing exon coordinates. It then calculates the transcript-level coordinates
+    for the CDS based on the exon coordinates.
+
+    Parameters:
+        cds_df (polars.DataFrame): DataFrame containing CDS coordinates.
+        exon_df (polars.DataFrame): DataFrame containing exon coordinates.
+
+    Returns:
+        polars.DataFrame: DataFrame containing transcript-level CDS coordinates.
+
+    Example:
+        transcript_cds_coords = gettranscriptcoords(cds_df, exon_df)
+    """
+    # Explode exon start and stop lists to individual rows
+    exploded_exon_df = exon_df.explode(["start", "stop", "tran_start", "tran_stop"])
+    exploded_cds_df = cds_df.explode(["start", "stop"])
+    # Join the DataFrames on the transcript ID
+    combined_df = exploded_cds_df.join(exploded_exon_df, on="tran_id", how="inner")
+    # Calculate transcript-level start and stop coordinates
+    if posstrand:
+        combined_df = combined_df.with_columns(
+            [
+                (
+                    pl.when(
+                        (pl.col("start") >= pl.col("start_right"))
+                        & (pl.col("start") <= pl.col("stop_right"))
+                    )
+                    .then(
+                        pl.col("tran_start") + (pl.col("start") - pl.col("start_right"))
+                    )
+                    .otherwise(None)
+                ).alias("tran_start_cd"),
+                (
+                    pl.when(
+                        (pl.col("stop") >= pl.col("start_right"))
+                        & (pl.col("stop") <= pl.col("stop_right"))
+                    )
+                    .then(pl.col("tran_stop") - (pl.col("stop_right") - pl.col("stop")))
+                    .otherwise(None)
+                ).alias("tran_stop_cd"),
+            ]
+        )
+    else:
+        combined_df = combined_df.with_columns(
+            [
+                (
+                    pl.when(
+                        (pl.col("start") >= pl.col("start_right"))
+                        & (pl.col("start") <= pl.col("stop_right"))
+                    )
+                    .then(
+                        pl.col("tran_stop") - (pl.col("start") - pl.col("start_right"))
+                    )
+                    .otherwise(None)
+                ).alias("tran_stop_cd"),
+                (
+                    pl.when(
+                        (pl.col("stop") >= pl.col("start_right"))
+                        & (pl.col("stop") <= pl.col("stop_right"))
+                    )
+                    .then(
+                        pl.col("tran_start") + (pl.col("stop_right") - pl.col("stop"))
+                    )
+                    .otherwise(None)
+                ).alias("tran_start_cd"),
+            ]
+        )
+    # Drop rows with None values in calculated columns
+    combined_df = combined_df.drop_nulls(["tran_start_cd", "tran_stop_cd"])
+    combined_df = combined_df.group_by("tran_id").agg(
+        pl.min("tran_start_cd"), pl.max("tran_stop_cd")
+    )
+    # Select and rename relevant columns
+    result_df = combined_df.select(
+        [
+            pl.col("tran_id"),
+            pl.col("tran_start_cd").alias("tran_start"),
+            pl.col("tran_stop_cd").alias("tran_stop"),
+        ]
+    )
+
+    return result_df
+
+
+def procesexons(df):
+    """
+    Processes exon data by separating them based on strand orientation.
+
+    This function takes a DataFrame containing exon data and separates the exons
+    based on their strand orientation (positive or negative). It groups the exons
+    by transcript ID and aggregates the start, stop, strand, and chromosome information
+    for each group.
+
+    Parameters:
+        df (polars.DataFrame): DataFrame containing exon data.
+
+    Returns:
+        tuple: A tuple containing two polars DataFrames:
+               - The first DataFrame contains exons on the positive strand.
+               - The second DataFrame contains exons on the negative strand.
+
+    Example:
+        pos_exons, neg_exons = procesexons(exon_df)
+    """
+    exonplus = df.filter((pl.col("strand") == "+"))
+    exonneg = df.filter((pl.col("strand") == "-"))
+
+    groupedexonspos = (
+        exonplus.group_by("tran_id")
+        .agg([
+            pl.col("start"),
+            pl.col("stop"),
+            pl.col("strand"),
+            # Take first chromosome as they should all be the same for a transcript
+            pl.col("chr").first().alias("chr")
+        ])
+        .select(["chr", "tran_id", "start", "stop", "strand"])
+    )
+    groupedexonsneg = (
+        exonneg.group_by("tran_id")
+        .agg([
+            pl.col("start"),
+            pl.col("stop"),
+            pl.col("strand"),
+            # Take first chromosome as they should all be the same for a transcript
+            pl.col("chr").first().alias("chr")
+        ])
+        .select(["chr", "tran_id", "start", "stop", "strand"])
+    )
+    return groupedexonspos, groupedexonsneg
+
 
 def getexons_and_cds(annotation_file, tran=[]):
     """

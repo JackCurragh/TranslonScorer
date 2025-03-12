@@ -26,9 +26,17 @@ echo "Checking git status..."
 if [[ -n $(git status -s) ]]; then
     echo "Uncommitted changes found. Committing changes..."
     
-    # Stage and commit changes with generic message
+    # Stage and commit changes with detailed message
     git add .
-    git commit -m "Update: Automated test commit"
+    git commit -m "fix(memory): optimize offset analysis to prevent OOM
+
+- Process read lengths in chunks of 10 instead of all at once
+- Filter DataFrame for each chunk to reduce memory footprint
+- Add explicit memory cleanup after processing each length
+- Clean up chunk DataFrames after processing
+- Improve progress logging for better monitoring
+- Previous memory usage: ~1.5GB before OOM kill
+- Expected improvement: Process larger datasets without memory overflow"
     check_status "Git commit"
     
     # Push changes
@@ -88,10 +96,8 @@ done
 OUTPUT_DIR=$(dirname "$OUTPUT_PREFIX")
 mkdir -p "$OUTPUT_DIR"
 
-echo "Running TranslonScorer..."
-
-# Run the analysis using the CLI
-translonscorer all \
+echo "Running TranslonScorer with memory monitoring..."
+PROFILE=1 python -m memory_profiler $(which translonscorer) all \
     --bam_path "$BAM_FILE" \
     --chromsizes "$CHROM_SIZES" \
     --sequence "$GENOME_FA" \

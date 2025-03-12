@@ -20,52 +20,70 @@ def change_point_analysis(offset_df):
     Returns:
         dict: Dictionary mapping read lengths to their optimal offsets
     """
-    log_info(f"Processing offset analysis for {len(offset_df['length'].unique())} different read lengths")
+    # Get unique lengths and process in chunks
+    unique_lengths = offset_df["length"].unique().sort()
+    total_lengths = len(unique_lengths)
+    log_info(f"Processing offset analysis for {total_lengths} different read lengths")
     
     offset_dict = {}
-    total_lengths = len(offset_df["length"].unique())
+    chunk_size = 10  # Process 10 lengths at a time
     
-    for idx, length in enumerate(offset_df["length"].unique(), 1):
-        if idx % 10 == 0 or idx == total_lengths:
-            log_info(f"Processing length {length} ({idx}/{total_lengths})")
-            
-        # Get data for this length and sort
-        offset_df_len = offset_df.filter(pl.col("length") == length).sort("bamcds_start")
+    for chunk_start in range(0, total_lengths, chunk_size):
+        chunk_end = min(chunk_start + chunk_size, total_lengths)
+        chunk_lengths = unique_lengths[chunk_start:chunk_end]
         
-        if offset_df_len.is_empty():
-            log_warning(f"No data found for length {length}, using default offset of 15")
-            offset_dict[length] = 15  # default offset
-            continue
-            
-        # Pre-calculate all positions we need
-        positions = list(range(-30, 11))
-        max_shift = 0
-        max_shift_position = None
+        # Filter DataFrame for current chunk of lengths
+        chunk_df = offset_df.filter(pl.col("length").is_in(chunk_lengths))
         
-        # Create a lookup dictionary for counts at each position
-        count_dict = dict(zip(
-            offset_df_len["bamcds_start"].to_list(),
-            offset_df_len["count"].to_list()
-        ))
-        
-        # Vectorized calculation of shifts
-        for i in positions:
-            left_positions = range(i - 3, i + 1)
-            right_positions = range(i + 1, i + 5)
+        for length in chunk_lengths:
+            # Get data for this length and sort
+            offset_df_len = chunk_df.filter(pl.col("length") == length).sort("bamcds_start")
             
-            # Get counts, defaulting to 0 for missing positions
-            left_counts = [count_dict.get(pos, 0) for pos in left_positions]
-            right_counts = [count_dict.get(pos, 0) for pos in right_positions]
+            if offset_df_len.is_empty():
+                log_warning(f"No data found for length {length}, using default offset of 15")
+                offset_dict[length] = 15  # default offset
+                continue
+                
+            # Pre-calculate all positions we need
+            positions = list(range(-30, 11))
+            max_shift = 0
+            max_shift_position = None
             
-            mean_left = sum(left_counts) / 4
-            mean_right = sum(right_counts) / 4
-            shift = abs(mean_right - mean_left)
+            # Create a lookup dictionary for counts at each position
+            count_dict = dict(zip(
+                offset_df_len["bamcds_start"].to_list(),
+                offset_df_len["count"].to_list()
+            ))
             
-            if shift > max_shift:
-                max_shift = shift
-                max_shift_position = i
-        
-        offset_dict[length] = max_shift_position if max_shift_position is not None else 15
+            # Vectorized calculation of shifts
+            for i in positions:
+                left_positions = range(i - 3, i + 1)
+                right_positions = range(i + 1, i + 5)
+                
+                # Get counts, defaulting to 0 for missing positions
+                left_counts = [count_dict.get(pos, 0) for pos in left_positions]
+                right_counts = [count_dict.get(pos, 0) for pos in right_positions]
+                
+                mean_left = sum(left_counts) / 4
+                mean_right = sum(right_counts) / 4
+                shift = abs(mean_right - mean_left)
+                
+                if shift > max_shift:
+                    max_shift = shift
+                    max_shift_position = i
+            
+            offset_dict[length] = max_shift_position if max_shift_position is not None else 15
+            
+            # Clean up memory
+            del offset_df_len
+            del count_dict
+            
+        # Log progress
+        if chunk_end % 10 == 0 or chunk_end == total_lengths:
+            log_info(f"Processed lengths up to {chunk_end}/{total_lengths}")
+            
+        # Clean up chunk memory
+        del chunk_df
     
     log_info("Offset analysis complete")
     return offset_dict

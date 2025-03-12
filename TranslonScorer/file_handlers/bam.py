@@ -305,20 +305,24 @@ def bamtranscript(bam_df, exon_df):
         if bam_has_chr != exon_has_chr:
             if exon_has_chr:
                 log_info("Adding 'chr' prefix to BAM chromosomes")
-                # More efficient chromosome normalization using Polars expressions
+                # Use Polars' native concatenation
                 bam_df = bam_df.with_columns([
-                    pl.when(pl.col("chr").str.contains("^chr"))
+                    pl.when(pl.col("chr").cast(pl.Utf8).str.contains("^chr"))
                     .then(pl.col("chr"))
-                    .otherwise(pl.concat_str([pl.lit("chr"), pl.col("chr")]))
+                    .otherwise(pl.concat_list([
+                        pl.Series("chr", ["chr"]),
+                        pl.col("chr")
+                    ]).list.join(""))
                     .alias("chr")
                 ])
-                uniquechr_bam = set(bam_df["chr"].unique().cast(pl.Utf8))
             else:
                 log_info("Removing 'chr' prefix from BAM chromosomes")
                 bam_df = bam_df.with_columns([
-                    pl.col("chr").str.replace("chr", "").alias("chr")
+                    pl.col("chr").cast(pl.Utf8).str.slice(3).alias("chr")
                 ])
-                uniquechr_bam = set(bam_df["chr"].unique().cast(pl.Utf8))
+            
+            # Update unique chromosomes after normalization
+            uniquechr_bam = set(bam_df["chr"].unique())
             
             # Try matching again after normalization
             common_chr = uniquechr_bam.intersection(uniquechr_exon)

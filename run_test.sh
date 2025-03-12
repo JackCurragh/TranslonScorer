@@ -91,7 +91,7 @@ mkdir -p "$OUTPUT_DIR"
 echo "Running TranslonScorer..."
 
 # Run the analysis using the CLI
-mprof translonscorer all \
+mprof run translonscorer all \
     --bam_path "$BAM_FILE" \
     --chromsizes "$CHROM_SIZES" \
     --sequence "$GENOME_FA" \

@@ -510,7 +510,6 @@ def classify_orf(row):
     Note: This function assumes the input `row` contains numerical values for 'start', 'stop', 'tran_start',
     and 'tran_stop', typically retrieved from a Pandas DataFrame or similar data structure.
     """
-    print(row)
     if row['tran_start'] == None and row['tran_stop'] == None:
         return "Non Coding"
     elif row["stop"] < row["tran_start"]:

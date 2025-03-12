@@ -60,14 +60,16 @@ def process_bam_file(bam_path, annotation_file):
 
 @profile(precision=4)
 @cli.command()
-@click.option('--bam_path', '-b', required=True,
-              help='Input BAM file from Ribo-seq data. Supports both genomic and transcriptomic alignments (required)')
-@click.option('--chromsizes', '-c', required=True,
-              help='Chromosome sizes file (required for bigWig conversion)')
+@click.option('--bam_path', '-b',
+              help='Input BAM file from Ribo-seq data. Required if not providing bigwig')
+@click.option('--chromsizes', '-c',
+              help='Chromosome sizes file (required if processing BAM)')
 @click.option('--sequence', '-s', required=True,
               help='Input FASTA file (genomic or transcriptomic)')
 @click.option('--annotation', '-a', required=True,
               help='GTF annotation file (required)')
+@click.option('--bigwig', '-bw',
+              help='BigWig file containing Ribo-seq coverage. If provided, skips BAM processing')
 @click.option('--offsets', '-off',
               help='File containing read length-specific offsets for A-site calculation')
 @click.option('--start-codons', default="ATG",
@@ -91,68 +93,98 @@ def process_bam_file(bam_path, annotation_file):
 @click.option('--log-level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']),
               default='INFO', help='Set the logging level (default: INFO)')
 def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
-        outfile: str, offsets: Optional[str] = None,
+        bigwig: str, outfile: str, offsets: Optional[str] = None,
         start_codons: str = "ATG", stop_codons: str = "TAA,TAG,TGA",
         min_len: int = 0, max_len: int = 1000000,
         sru_range: int = 15, scoring_method: str = 'modern',
         plot_range: int = 30, log_file: Optional[str] = None,
         log_level: str = 'INFO'):
-    """Run the complete TranslonScorer pipeline end-to-end.
+    """Run the TranslonScorer pipeline, automatically determining stages based on input.
     
-    This command runs all steps of the pipeline in sequence:
-    1. Process Ribo-seq BAM file to generate coverage tracks
-    2. Extract transcripts
-    3. Find and score potential ORFs
-    4. Generate visualization reports
+    This command intelligently determines which pipeline stages to run based on provided inputs:
+    
+    1. If BAM file is provided:
+       - Process BAM file to generate coverage tracks
+       - Convert to BigWig
+       - Find and score ORFs
+       - Generate visualizations
+       
+    2. If BigWig file is provided:
+       - Skip BAM processing
+       - Find and score ORFs
+       - Generate visualizations
+       
+    3. If both BAM and BigWig are provided:
+       - Use the BigWig file directly
+       - Find and score ORFs
+       - Generate visualizations
     
     Required files:
-    - BAM file: Ribo-seq reads aligned to either genome or transcriptome
-    - Chromosome sizes: Tab-separated file with chr\tsize
+    - Either BAM file or BigWig file
     - Sequence: FASTA file (genomic or transcriptomic)
     - Annotation: GTF file with transcript annotations
+    - Chromosome sizes (only if processing BAM)
     
-    Example:
+    Example with BAM:
     translonscorer all -b ribo.bam -c chrom.sizes -s genome.fa -a anno.gtf -o output
+    
+    Example with BigWig:
+    translonscorer all -bw coverage.bw -s genome.fa -a anno.gtf -o output
     """
     # Configure logging
     setup_logging(level=getattr(logging, log_level))
     
-    # Step 1: Process BAM file
-    print("Processing BAM file....")
-    location = os.path.abspath(bam_path)
-    if not os.path.isfile(location):
-        raise click.BadParameter(f"BAM file not found: {bam_path}")
+    # Validate inputs
+    if not bam_path and not bigwig:
+        raise click.BadParameter("Either BAM file (-b) or BigWig file (-bw) must be provided")
     
-    # Process BAM and get annotations
-    bam_df, exon_df = process_bam_file(location, annotation)
+    if bam_path and not chromsizes:
+        raise click.BadParameter("Chromosome sizes file (-c) is required when processing BAM files")
     
-    # Calculate A-site positions
-    offsets = coordinates.change_point_analysis(bam_df)
-    bed_df = bed.asitecalc(bam_df, offsets)
+    # Determine pipeline stages
+    bigwig_path = bigwig
+    if bam_path:
+        if not bigwig:
+            log_info("BAM file provided without BigWig. Will process BAM to generate coverage.")
+            location = os.path.abspath(bam_path)
+            if not os.path.isfile(location):
+                raise click.BadParameter(f"BAM file not found: {bam_path}")
+            
+            # Process BAM and get annotations
+            bam_df, exon_df = process_bam_file(location, annotation)
+            
+            # Calculate A-site positions
+            offsets = coordinates.change_point_analysis(bam_df)
+            bed_df = bed.asitecalc(bam_df, offsets)
+            
+            log_info(f"A-site positions calculated for {len(bed_df)} transcripts")
+            
+            # Convert to BigWig
+            bedgraph_path = f"{outfile}.bedGraph"
+            bed_df.write_csv(bedgraph_path, separator="\t", include_header=False)
+            bigwig_path = f"{outfile}.bw"
+            bed.bedtobigwig(bedgraph_path, chromsizes, bigwig_path)
+        else:
+            log_info("Both BAM and BigWig provided. Using BigWig directly.")
+            bigwig_path = bigwig
     
-    log_info(f"A-site positions calculated for {len(bed_df)} transcripts")
-    # Convert to BigWig
-    bedgraph_path = f"{outfile}.bedGraph"
-    bed_df.write_csv(bedgraph_path, separator="\t", include_header=False)
-    bed.bedtobigwig(bedgraph_path, chromsizes, outfile)
+    # Get exons and CDS for ORF finding
+    log_info("Finding ORFs...")
+    cds_df, exon_df = bam.getexons_and_cds(annotation)
     
-    # Step 2: Find ORFs
-    print("Finding ORFs...")
+    # Find ORFs
     orf_df = orffinder.preporfs(sequence, start_codons.split(","), stop_codons.split(","), min_len, max_len)
     
-    # Step 3: Score ORFs
-    print("Scoring ORFs...")
-    bigwig_path = f"{outfile}.bw"
+    # Score ORFs
+    log_info("Scoring ORFs...")
     scored_orfs = bigwig.scoring(bigwig_path, exon_df, orf_df, scoring_method == 'classic', sru_range)
-    
-    # Save results
     scored_orfs.write_csv(f"{outfile}_orfs_scored.csv")
     
-    # Step 4: Generate plots
-    print("Generating plots...")
+    # Generate plots
+    log_info("Generating plots...")
     plots.plottop10(f"{outfile}_orfs_scored.csv", bigwig_path, exon_df, plot_range, outfile)
     
-    print("Pipeline completed successfully!")
+    log_info("Pipeline completed successfully!")
 
 @cli.command()
 @click.option('--bam', '-b', required=True,

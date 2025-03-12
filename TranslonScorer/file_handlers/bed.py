@@ -37,6 +37,7 @@ def saveorfsandexons(orf_df, exon_df, filename):
 def asitecalc(df, offsets):
     """
     Calculates A-site positions and aggregates counts based on offset values.
+    Uses streaming processing to minimize memory usage.
 
     Parameters:
     - df (DataFrame): Input DataFrame containing 'length' and 'pos' columns for A-site calculation.
@@ -45,25 +46,44 @@ def asitecalc(df, offsets):
     Returns:
     - df_bed (DataFrame): DataFrame containing aggregated information of A-site positions, their counts, and chromosome information.
     """
-    # GROUP TO CALCULATE A-SITE
-    y = []
-    for value, data in df.group_by("length"):
-        x = (
-            df.filter(pl.col("length") == value)
-            .with_columns((pl.col("start") + offsets[value]).alias("A-site"))
-            .select(
-                pl.all().exclude("start", "stop", "length", "tran_id", "bamcds_start")
+    # Process each length in streaming fashion
+    results = []
+    for length in df["length"].unique().sort():
+        if length not in offsets:
+            continue
+            
+        # Process one length at a time
+        length_result = (
+            df.filter(pl.col("length") == length)
+            .with_columns(
+                pl.col("start").add(offsets[length]).alias("A-site")
             )
-            .to_dict(as_series=False)
+            .select(["chr", "A-site", "count"])
+            # Group and aggregate counts immediately
+            .group_by(["chr", "A-site"])
+            .agg(pl.col("count").sum())
         )
-        y.append(x)
-    df_asite = pl.from_dicts(y)
-    df_asite = df_asite.explode(["chr", "count", "A-site"])
-    # GROUP ON A-SITE
-    df_asite = df_asite.group_by("chr", "A-site").agg(pl.col("count").sum())
-    df_asite = df_asite.with_columns((pl.col("A-site") + 1).alias("stop"))
-    df_bed = df_asite.sort(["chr", "A-site"]).select(["chr", "A-site", "stop", "count"])
-    return df_bed
+        
+        if not length_result.is_empty():
+            results.append(length_result)
+        
+        # Clear memory
+        del length_result
+    
+    if not results:
+        return pl.DataFrame()
+    
+    # Combine results and calculate final positions
+    return (
+        pl.concat(results)
+        .group_by(["chr", "A-site"])
+        .agg(pl.col("count").sum())
+        .with_columns(
+            pl.col("A-site").add(1).alias("stop")
+        )
+        .sort(["chr", "A-site"])
+        .select(["chr", "A-site", "stop", "count"])
+    )
 
 
 def bedtobigwig(bedfile, chromsize, filename):

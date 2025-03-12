@@ -113,7 +113,7 @@ if [ $BIGWIG_EXISTS -eq 1 ]; then
     PROFILE=1 translonscorer all \
         --sequence "$GENOME_FA" \
         --annotation "$GTF_FILE" \
-        --bigwig-path "$BIGWIG_FILE" \
+        --bigwig_path "$BIGWIG_FILE" \
         --outfile "$OUTPUT_PREFIX" \
         --scoring-method modern \
         --sru-range 15

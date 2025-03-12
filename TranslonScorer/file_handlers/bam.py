@@ -335,28 +335,11 @@ def bamtranscript(bam_df, exon_df):
         if exon_with_chr.is_empty() or bam_with_chr.is_empty():
             log_warning(f"No data found for chromosome {chr}")
             continue
-            
-        min_val = min(exon_with_chr["start"])
-        max_val = max(exon_with_chr["stop"])
-        total_chunks = (max_val - min_val) // 225000 + 1
         
-        if total_chunks > 100:  # Only show chunk progress for larger chromosomes
-            log_info(f"  Processing {total_chunks} chunks for chromosome {chr}")
-        
-        for chunk_idx, i in enumerate(range(min_val, max_val, 225000), 1):
-            if total_chunks > 100 and (chunk_idx % 50 == 0 or chunk_idx == total_chunks):
-                log_info(f"    Chunk {chunk_idx}/{total_chunks}")
-                
-            rng = i + 225000
-            exon_chr = exon_with_chr.filter(
-                (pl.col("start") >= i) & (pl.col("stop") <= rng)
-            )
-            bam_chr = bam_with_chr.filter(
-                (pl.col("start") >= i) & (pl.col("stop") <= rng)
-            )
-            if not exon_chr.is_empty() and not bam_chr.is_empty():
-                result_dict = get_bam_tran(bam_chr, exon_chr)
-                results.append(result_dict)
+        # Process this chromosome's data
+        result_df = get_bam_tran(bam_with_chr, exon_with_chr)
+        if not result_df.is_empty():
+            results.append(result_df)
 
     if not results:
         error_msg = (
@@ -370,21 +353,9 @@ def bamtranscript(bam_df, exon_df):
         raise ValueError(error_msg)
 
     log_info("\nCreating final BAM transcript DataFrame")
-    bam_df = pl.from_dicts(results)
-    bam_df = bam_df.explode(
-        [
-            "count",
-            "chr",
-            "start",
-            "stop",
-            "length",
-            "tran_id",
-            "tran_start_bam",
-            "tran_stop_bam",
-        ]
-    )
+    final_df = pl.concat(results)
     log_info("BAM transcript conversion complete")
-    return bam_df
+    return final_df
 
 
 def process_transcriptomic_bam(df_namesplit, cds_df):

@@ -176,55 +176,82 @@ def get_bam_tran(bam_df, exon_df):
     exon_df = exon_df.sort("start")
     
     # Create overlapping windows for efficient filtering
-    window_size = 100000  # 100kb windows
+    window_size = 10000  # 10kb windows
     results = []
     
     # Process in windows to avoid memory issues
-    for start in range(bam_df["start"].min(), bam_df["stop"].max(), window_size):
-        end = start + window_size
+    for chr in bam_df["chr"].unique():
+        bam_with_chr = bam_df.filter(pl.col("chr") == chr)
+        exon_with_chr = exon_df.filter(pl.col("chr") == chr)
         
-        # Get reads and exons in this window
-        window_reads = bam_df.filter(
-            (pl.col("start") >= start) & (pl.col("start") < end)
-        )
-        if window_reads.is_empty():
+        if exon_with_chr.is_empty() or bam_with_chr.is_empty():
             continue
             
-        window_exons = exon_df.filter(
-            (pl.col("start") < end) & (pl.col("stop") > start)
-        )
-        if window_exons.is_empty():
-            continue
+        chr_min = bam_with_chr["start"].min()
+        chr_max = bam_with_chr["stop"].max()
         
-        # Find overlaps within the window
-        overlaps = window_reads.join(
-            window_exons,
-            on="chr",
-            how="inner"
-        ).filter(
-            (pl.col("start") >= pl.col("start_right")) &
-            (pl.col("stop") <= pl.col("stop_right"))
-        )
-        
-        if not overlaps.is_empty():
-            # Calculate transcript coordinates
-            mapped = overlaps.with_columns([
-                (pl.col("tran_start") + (pl.col("start") - pl.col("start_right")))
-                .alias("tran_start_bam"),
-                (pl.col("tran_stop") - (pl.col("stop_right") - pl.col("stop")))
-                .alias("tran_stop_bam")
-            ]).select(
-                pl.all().exclude("start_right", "stop_right", "tran_start", "tran_stop")
+        for start in range(chr_min, chr_max, window_size):
+            end = start + window_size
+            
+            # Get reads and exons in this window
+            window_reads = bam_with_chr.filter(
+                (pl.col("start") >= start) & (pl.col("start") < end)
             )
-            results.append(mapped)
+            if window_reads.is_empty():
+                continue
+                
+            window_exons = exon_with_chr.filter(
+                (pl.col("start") < end) & (pl.col("stop") > start)
+            )
+            if window_exons.is_empty():
+                continue
+            
+            # Find overlaps within the window using a more efficient join
+            overlaps = window_reads.join(
+                window_exons,
+                on="chr",
+                how="inner"
+            ).filter(
+                (pl.col("start") >= pl.col("start_right")) &
+                (pl.col("stop") <= pl.col("stop_right"))
+            )
+            
+            if not overlaps.is_empty():
+                # Calculate transcript coordinates
+                mapped = overlaps.with_columns([
+                    (pl.col("tran_start") + (pl.col("start") - pl.col("start_right")))
+                    .alias("tran_start_bam"),
+                    (pl.col("tran_stop") - (pl.col("stop_right") - pl.col("stop")))
+                    .alias("tran_stop_bam")
+                ]).select(
+                    pl.all().exclude("start_right", "stop_right", "tran_start", "tran_stop")
+                )
+                results.append(mapped)
+                
+            # Clear memory
+            del window_reads
+            del window_exons
+            if 'overlaps' in locals():
+                del overlaps
+            if 'mapped' in locals():
+                del mapped
     
     if not results:
         return pl.DataFrame()
     
-    return pl.concat(results).unique(
-        subset=['chr', 'start', 'stop', 'length', 'strand', 'count', 'tran_id'],
-        maintain_order=True
-    )
+    # Concatenate results in chunks to avoid memory issues
+    chunk_size = 100
+    final_results = []
+    for i in range(0, len(results), chunk_size):
+        chunk = pl.concat(results[i:i + chunk_size])
+        chunk = chunk.unique(
+            subset=['chr', 'start', 'stop', 'length', 'strand', 'count', 'tran_id'],
+            maintain_order=True
+        )
+        final_results.append(chunk)
+        del chunk
+    
+    return pl.concat(final_results)
 
 
 def bamtranscript(bam_df, exon_df):
@@ -244,8 +271,7 @@ def bamtranscript(bam_df, exon_df):
     - ValueError: If no overlapping regions are found between BAM and exon coordinates
     """
     log_info("Starting BAM to transcript conversion")
-    exon_flattened = exon_df.with_columns(pl.col("chr"))
-
+    
     # Get unique chromosomes and check overlap
     uniquechr_bam = set(bam_df["chr"].unique().cast(pl.Utf8))
     uniquechr_exon = set(exon_df["chr"].unique().cast(pl.Utf8))
@@ -299,48 +325,38 @@ def bamtranscript(bam_df, exon_df):
                 log_error(error_msg)
                 raise ValueError(error_msg)
 
-    # Filter to matching chromosomes
-    bam_df = (
-        bam_df.with_columns(shared=pl.col("chr").is_in(uniquechr_exon))
-        .filter(pl.col("shared") == True)
-        .select(pl.all().exclude("shared"))
-    )
-    exon_flattened = (
-        exon_flattened.with_columns(shared=pl.col("chr").is_in(uniquechr_bam))
-        .filter(pl.col("shared") == True)
-        .select(pl.all().exclude("shared"))
-        .explode(["start", "stop", "tran_start", "tran_stop"])
-    )
-    
-    if bam_df.is_empty():
-        error_msg = (
-            "No overlapping chromosomes found between BAM and annotation after name normalization.\n"
-            f"BAM chromosomes: {sorted(uniquechr_bam)}\n"
-            f"Annotation chromosomes: {sorted(uniquechr_exon)}"
-        )
-        log_error(error_msg)
-        raise ValueError(error_msg)
-    
     # Process matching chromosomes
     results = []
-    total_chr = len(set(bam_df["chr"].unique()))
+    total_chr = len(common_chr)
     log_info(f"\nProcessing {total_chr} chromosomes")
     
-    for idx, chr in enumerate(set(bam_df["chr"].unique()), 1):
+    for idx, chr in enumerate(sorted(common_chr), 1):
         if idx % 5 == 0 or idx == total_chr:
             log_info(f"Processing chromosome {chr} ({idx}/{total_chr})")
-            
-        bam_with_chr = bam_df.filter(pl.col("chr") == chr)
-        exon_with_chr = exon_flattened.filter(pl.col("chr") == chr)
         
-        if exon_with_chr.is_empty() or bam_with_chr.is_empty():
-            log_warning(f"No data found for chromosome {chr}")
+        # Filter BAM data for this chromosome
+        bam_with_chr = bam_df.filter(pl.col("chr") == chr)
+        if bam_with_chr.is_empty():
+            continue
+            
+        # Get and flatten exon data for this chromosome
+        exon_with_chr = (
+            exon_df.filter(pl.col("chr") == chr)
+            .explode(["start", "stop", "tran_start", "tran_stop"])
+        )
+        if exon_with_chr.is_empty():
             continue
         
         # Process this chromosome's data
         result_df = get_bam_tran(bam_with_chr, exon_with_chr)
         if not result_df.is_empty():
             results.append(result_df)
+            
+        # Clear memory
+        del bam_with_chr
+        del exon_with_chr
+        if 'result_df' in locals():
+            del result_df
 
     if not results:
         error_msg = (
@@ -353,8 +369,16 @@ def bamtranscript(bam_df, exon_df):
         log_error(error_msg)
         raise ValueError(error_msg)
 
+    # Concatenate results in chunks to avoid memory issues
+    chunk_size = 100
+    final_results = []
+    for i in range(0, len(results), chunk_size):
+        chunk = pl.concat(results[i:i + chunk_size])
+        final_results.append(chunk)
+        del chunk
+    
     log_info("\nCreating final BAM transcript DataFrame")
-    final_df = pl.concat(results)
+    final_df = pl.concat(final_results)
     log_info("BAM transcript conversion complete")
     return final_df
 

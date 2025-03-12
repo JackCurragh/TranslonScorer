@@ -10,7 +10,17 @@ import polars as pl
 import oxbow as ox
 from ..utils.logging import log_info, log_error, log_warning
 import os
-from memory_profiler import profile
+import sys
+
+# Only import memory_profiler if PROFILE environment variable is set
+PROFILE = os.environ.get('PROFILE', '0') == '1'
+if PROFILE:
+    from memory_profiler import profile
+else:
+    def profile(precision=None):  # Dummy decorator when not profiling
+        def wrapper(func):
+            return func
+        return wrapper
 
 
 @profile(precision=4)
@@ -295,19 +305,18 @@ def bamtranscript(bam_df, exon_df):
         if bam_has_chr != exon_has_chr:
             if exon_has_chr:
                 log_info("Adding 'chr' prefix to BAM chromosomes")
-                # Convert to strings temporarily for the operation
+                # More efficient chromosome normalization using Polars expressions
                 bam_df = bam_df.with_columns([
-                    pl.col("chr").cast(pl.Utf8).map_elements(
-                        lambda x: f"chr{x}" if not x.startswith("chr") else x
-                    ).cast(pl.Categorical).alias("chr")
+                    pl.when(pl.col("chr").str.contains("^chr"))
+                    .then(pl.col("chr"))
+                    .otherwise(pl.concat_str([pl.lit("chr"), pl.col("chr")]))
+                    .alias("chr")
                 ])
                 uniquechr_bam = set(bam_df["chr"].unique().cast(pl.Utf8))
             else:
                 log_info("Removing 'chr' prefix from BAM chromosomes")
                 bam_df = bam_df.with_columns([
-                    pl.col("chr").cast(pl.Utf8).map_elements(
-                        lambda x: x.replace("chr", "")
-                    ).cast(pl.Categorical).alias("chr")
+                    pl.col("chr").str.replace("chr", "").alias("chr")
                 ])
                 uniquechr_bam = set(bam_df["chr"].unique().cast(pl.Utf8))
             

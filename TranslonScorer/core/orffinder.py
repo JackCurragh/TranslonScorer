@@ -27,10 +27,10 @@ def find_all_positions(sequence, automaton):
     frames = {0: [], 1: [], 2: []}
     codons = {}
     
-    for i, (order, codon) in automaton.iter(sequence):
+    for end_pos, (value, pattern) in automaton.iter(sequence):
         # position of last nucleotide of codon returned
-        frames[(i - 2) % 3].append(i)
-        codons[i] = codon
+        frames[(end_pos - 2) % 3].append(end_pos)
+        codons[end_pos] = pattern
         
     return frames, codons
 

@@ -60,7 +60,7 @@ def process_bam_file(bam_path, annotation_file):
 
 @profile(precision=4)
 @cli.command()
-@click.option('--bam_path', '-b',
+@click.option('--bam-path', '-b',
               help='Input BAM file from Ribo-seq data. Required if not providing bigwig')
 @click.option('--chromsizes', '-c',
               help='Chromosome sizes file (required if processing BAM)')
@@ -68,7 +68,7 @@ def process_bam_file(bam_path, annotation_file):
               help='Input FASTA file (genomic or transcriptomic)')
 @click.option('--annotation', '-a', required=True,
               help='GTF annotation file (required)')
-@click.option('--bigwig', '-bw',
+@click.option('--bigwig-path', '-bw',
               help='BigWig file containing Ribo-seq coverage. If provided, skips BAM processing')
 @click.option('--offsets', '-off',
               help='File containing read length-specific offsets for A-site calculation')
@@ -135,16 +135,16 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
     setup_logging(level=getattr(logging, log_level))
     
     # Validate inputs
-    if not bam_path and not bigwig:
+    if not bam_path and not bigwig_path:
         raise click.BadParameter("Either BAM file (-b) or BigWig file (-bw) must be provided")
     
     if bam_path and not chromsizes:
         raise click.BadParameter("Chromosome sizes file (-c) is required when processing BAM files")
     
     # Determine pipeline stages
-    bigwig_path = bigwig
+    bigwig_path = bigwig_path
     if bam_path:
-        if not bigwig:
+        if not bigwig_path:
             log_info("BAM file provided without BigWig. Will process BAM to generate coverage.")
             location = os.path.abspath(bam_path)
             if not os.path.isfile(location):

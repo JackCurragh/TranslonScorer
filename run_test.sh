@@ -28,12 +28,14 @@ if [[ -n $(git status -s) ]]; then
     
     # Stage and commit changes with detailed message
     git add .
-    git commit -m "fix(memory): optimize offset analysis to prevent OOM
+    git commit -m "fix(memory): optimize offset analysis and fix profiling
 
 - Process read lengths in chunks of 10 instead of all at once
 - Filter DataFrame for each chunk to reduce memory footprint
 - Add explicit memory cleanup after processing each length
 - Clean up chunk DataFrames after processing
+- Fix memory profiling command to use built-in decorators
+- Remove problematic memory_profiler direct execution
 - Improve progress logging for better monitoring
 - Previous memory usage: ~1.5GB before OOM kill
 - Expected improvement: Process larger datasets without memory overflow"
@@ -97,7 +99,8 @@ OUTPUT_DIR=$(dirname "$OUTPUT_PREFIX")
 mkdir -p "$OUTPUT_DIR"
 
 echo "Running TranslonScorer with memory monitoring..."
-PROFILE=1 python -m memory_profiler $(which translonscorer) all \
+# Run with memory profiling enabled but using the module directly
+PROFILE=1 translonscorer all \
     --bam_path "$BAM_FILE" \
     --chromsizes "$CHROM_SIZES" \
     --sequence "$GENOME_FA" \

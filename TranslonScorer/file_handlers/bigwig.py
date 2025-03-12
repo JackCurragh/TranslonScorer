@@ -97,10 +97,10 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
 
     # Split and convert to integers
     exon_df = exon_df.with_columns([
-        pl.col("start").apply(lambda x: [int(i) for i in x.split(",")]),
-        pl.col("stop").apply(lambda x: [int(i) for i in x.split(",")]),
-        pl.col("tran_start").apply(lambda x: [int(i) for i in x.split(",")]),
-        pl.col("tran_stop").apply(lambda x: [int(i) for i in x.split(",")])
+        pl.col("start").apply(lambda x: [int(i) for i in x.split(",")] if isinstance(x, str) else x),
+        pl.col("stop").apply(lambda x: [int(i) for i in x.split(",")] if isinstance(x, str) else x),
+        pl.col("tran_start").apply(lambda x: [int(i) for i in x.split(",")] if isinstance(x, str) else x),
+        pl.col("tran_stop").apply(lambda x: [int(i) for i in x.split(",")] if isinstance(x, str) else x)
     ])
     orf_df = pl.read_csv(orfs, has_header=True, separator=",")
 

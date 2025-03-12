@@ -60,7 +60,7 @@ def process_bam_file(bam_path, annotation_file):
 
 @profile(precision=4)
 @cli.command()
-@click.option('--bam-path', '-b',
+@click.option('--bam_path', '-b',
               help='Input BAM file from Ribo-seq data. Required if not providing bigwig')
 @click.option('--chromsizes', '-c',
               help='Chromosome sizes file (required if processing BAM)')
@@ -68,7 +68,7 @@ def process_bam_file(bam_path, annotation_file):
               help='Input FASTA file (genomic or transcriptomic)')
 @click.option('--annotation', '-a', required=True,
               help='GTF annotation file (required)')
-@click.option('--bigwig-path', '-bw',
+@click.option('--bigwig_path', '-bw',
               help='BigWig file containing Ribo-seq coverage. If provided, skips BAM processing')
 @click.option('--offsets', '-off',
               help='File containing read length-specific offsets for A-site calculation')

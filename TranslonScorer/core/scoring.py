@@ -375,9 +375,9 @@ def orfrelativeposition(annotation, df, cds_df):
     if not "cdsdf" in globals():
         cds_df, exon_coords = getexons_and_cds(annotation, list(df["tran_id"].unique()))
 
-    print("Typing ORFS")
     tranids = cds_df["tran_id"].unique().to_list()
 
+    print(df.head())
     # Vectorized operation to classify ORFs
     df = df.with_columns(
         pl.when(pl.col("tran_id").is_in(tranids))

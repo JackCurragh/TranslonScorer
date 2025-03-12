@@ -511,7 +511,9 @@ def classify_orf(row):
     and 'tran_stop', typically retrieved from a Pandas DataFrame or similar data structure.
     """
     print(row)
-    if row["stop"] < row["tran_start"]:
+    if row['tran_start'] == None and row['tran_stop'] == None:
+        return "Non Coding"
+    elif row["stop"] < row["tran_start"]:
         return "uORF"
     elif row["start"] == row["tran_start"] and row["stop"] == row["tran_stop"]:
         return "CDS"

@@ -343,4 +343,74 @@ def assigningscore(df, scoredict, typeorf):
         return df
     except Exception as e:
         log_error(f"Error assigning scores: {str(e)}")
-        return pl.DataFrame() 
+        return pl.DataFrame()
+
+
+def orfrelativeposition(annotation, df, cds_df):
+    """
+    Determines the relative position of ORFs to coding sequences (CDS).
+
+    This function takes a genome annotation file and a DataFrame containing ORF coordinates,
+    and determines the relative position of each ORF with respect to coding sequences (CDS).
+    It classifies each ORF into different categories based on its relationship with CDS.
+
+    Parameters:
+        annotation (str): Path to the genome annotation file in BED/GFF/GTF format.
+        df (polars.DataFrame): DataFrame containing ORF coordinates. It must have columns
+                               'tran_id', 'pos', and 'end' representing transcript ID, start
+                               position, and end position of each ORF respectively.
+
+    Returns:
+        tuple: A tuple containing two polars DataFrames:
+               - The first DataFrame contains ORF coordinates with an additional column
+                 'type' indicating the relative position of each ORF to CDS.
+               - The second DataFrame contains exon coordinates.
+
+    Example:
+        orf_df, exon_coords = orfrelativeposition("annotation.gff", orf_df)
+    """
+    orflist = []
+    if not "cdsdf" in globals():
+        cds_df, exon_coords = getexons_and_cds(annotation, list(df["tran_id"].unique()))
+
+    print("Typing ORFS")
+    tranids = list(cds_df["tran_id"].unique())
+    # TYPING ORFS
+    codingorfs = (
+        df.with_columns(shared=pl.col("tran_id").is_in(tranids))
+        .filter(pl.col("shared") == True)
+        .select(pl.all().exclude("shared"))
+    )
+
+    codingorfs = codingorfs.join(cds_df, on="tran_id")
+    codingorfs = (
+        codingorfs.with_columns(
+            pl.struct(["start", "stop", "tran_start", "tran_stop"])
+            .apply(lambda row: classify_orf(row))
+            .alias("type")
+        )
+        .select(pl.all().exclude("tran_start", "tran_stop"))
+        .to_dict(as_series=False)
+    )
+    orflist.append(codingorfs)
+
+    # NON CODING ORFS
+    noncodingorfs = (
+        df.with_columns(shared=pl.col("tran_id").is_in(tranids))
+        .filter(pl.col("shared") == False)
+        .select(pl.all().exclude("shared"))
+    )
+
+    noncodingorfs = noncodingorfs.with_columns(type=pl.lit("Non Coding")).to_dict(
+        as_series=False
+    )
+    orflist.append(noncodingorfs)
+    # MAKE ONE DF
+    df = pl.from_dicts(orflist).explode(
+        "tran_id", "start", "stop", "length", "startorf", "stoporf", "type"
+    )
+
+    cdslist = df.filter(pl.col("type") == "CDS")
+    cdslist = list(cdslist["tran_id"].unique())
+
+    return df, exon_coords 

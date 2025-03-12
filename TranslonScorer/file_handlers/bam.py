@@ -172,7 +172,7 @@ def getexons_and_cds(annotation_file, tran=[]):
 def get_bam_tran(bam_df, exon_df):
     """
     Map BAM reads to transcript coordinates using exon information.
-    Uses chunked vectorized operations for memory efficiency.
+    Uses interval-based filtering to efficiently find overlaps.
 
     Parameters:
     - bam_df (DataFrame): DataFrame containing BAM file data with chromosome positions
@@ -181,26 +181,39 @@ def get_bam_tran(bam_df, exon_df):
     Returns:
     - DataFrame: BAM data with added transcript coordinates
     """
-    # Process in chunks to manage memory
-    chunk_size = 50000  # Process 50k reads at a time
-    results = []
-    
     # Ensure chromosome types match (both categorical)
     if exon_df["chr"].dtype != pl.Categorical:
         exon_df = exon_df.with_columns(pl.col("chr").cast(pl.Categorical))
     if bam_df["chr"].dtype != pl.Categorical:
         bam_df = bam_df.with_columns(pl.col("chr").cast(pl.Categorical))
     
-    # Pre-sort exons for more efficient filtering
-    exon_df = exon_df.sort("start")
+    # Create overlapping windows for efficient filtering
+    window_size = 225000  # 225kb windows
+    results = []
     
-    # Process BAM reads in chunks
-    for i in range(0, len(bam_df), chunk_size):
-        chunk = bam_df.slice(i, chunk_size)
+    # Process in windows to avoid memory issues
+    chr_min = bam_df["start"].min()
+    chr_max = bam_df["stop"].max()
+    
+    for start in range(chr_min, chr_max, window_size):
+        end = start + window_size
         
-        # Find overlaps using vectorized operations
-        overlaps = chunk.join(
-            exon_df,
+        # Get reads and exons in this window
+        window_reads = bam_df.filter(
+            (pl.col("start") >= start) & (pl.col("start") < end)
+        )
+        if window_reads.is_empty():
+            continue
+            
+        window_exons = exon_df.filter(
+            (pl.col("start") < end) & (pl.col("stop") > start)
+        )
+        if window_exons.is_empty():
+            continue
+        
+        # Find overlaps within the window using a more efficient join
+        overlaps = window_reads.join(
+            window_exons,
             on="chr",
             how="inner"
         ).filter(
@@ -218,11 +231,11 @@ def get_bam_tran(bam_df, exon_df):
             ]).select(
                 pl.all().exclude("start_right", "stop_right", "tran_start", "tran_stop")
             )
-            
             results.append(mapped)
         
         # Clear memory
-        del chunk
+        del window_reads
+        del window_exons
         if 'overlaps' in locals():
             del overlaps
         if 'mapped' in locals():
@@ -231,7 +244,7 @@ def get_bam_tran(bam_df, exon_df):
     if not results:
         return pl.DataFrame()
     
-    # Concatenate and deduplicate results
+    # Concatenate results
     return pl.concat(results).unique(
         subset=['chr', 'start', 'stop', 'length', 'strand', 'count', 'tran_id'],
         maintain_order=True

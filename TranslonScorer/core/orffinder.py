@@ -168,6 +168,35 @@ def preporfs(sequence_input, start_codons=None, stop_codons=None, minlength=0, m
     
     return pl.DataFrame(all_orfs) 
 
+def extract_transcript_id(attr_str):
+    """
+    Extracts transcript ID from a GTF/GFF attribute string.
+
+    This function takes a string representing attributes in GTF/GFF format
+    and extracts the transcript ID from it. The transcript ID is typically
+    found in attributes such as 'Parent=transcript:', 'ID=transcript:',
+    'transcript_id=', or ' transcript_id '.
+
+    Parameters:
+        attr_str (str): A string containing attributes in GTF/GFF format.
+
+    Returns:
+        str: The extracted transcript ID, or an empty string if not found.
+
+    Example:
+        transcript_id = extract_transcript_id('gene_id="ENSG00000223972"; transcript_id="ENST00000456328"; ')
+    """
+    for attr in attr_str.split(";"):
+        if attr.startswith("Parent=transcript:") or attr.startswith("ID=transcript:"):
+            return attr.split(":")[1]
+        elif attr.startswith("transcript_id="):
+            return attr.split("=")[1]
+        elif attr.startswith(" transcript_id "):
+            return attr.split(" ")[2].replace('"', "")
+    return ""
+
+
+
 def getexons_and_cds(annotation_file, tran=[]):
     """
     Extracts CDS and exon coordinates from an annotation file.

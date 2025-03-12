@@ -182,7 +182,7 @@ def get_bam_tran(bam_df, exon_df):
     - DataFrame: BAM data with added transcript coordinates
     """
     # Process in chunks to manage memory
-    chunk_size = 100000  # Process 100k reads at a time
+    chunk_size = 50000  # Process 50k reads at a time
     results = []
     
     # Ensure chromosome types match (both categorical)

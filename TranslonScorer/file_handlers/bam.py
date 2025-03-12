@@ -202,8 +202,8 @@ def bamtranscript(bam_df, exon_df):
     exon_flattened = exon_df.with_columns(pl.col("chr"))
 
     # Get unique chromosomes and check overlap
-    uniquechr_bam = set(bam_df["chr"].unique())
-    uniquechr_exon = set(exon_flattened["chr"].unique())
+    uniquechr_bam = set(bam_df["chr"].unique().cast(pl.Utf8))
+    uniquechr_exon = set(exon_df["chr"].unique().cast(pl.Utf8))
     
     log_info(f"Found {len(uniquechr_bam)} unique chromosomes in BAM and {len(uniquechr_exon)} in annotation")
     
@@ -219,19 +219,21 @@ def bamtranscript(bam_df, exon_df):
         if bam_has_chr != exon_has_chr:
             if exon_has_chr:
                 log_info("Adding 'chr' prefix to BAM chromosomes")
-                bam_df = bam_df.with_columns(
-                    pl.when(pl.col("chr").str.starts_with("chr"))
-                    .then(pl.col("chr"))
-                    .otherwise(pl.concat_str([pl.lit("chr"), pl.col("chr")]))
-                    .alias("chr")
-                )
-                uniquechr_bam = set(bam_df["chr"].unique())
+                # Convert to strings temporarily for the operation
+                bam_df = bam_df.with_columns([
+                    pl.col("chr").cast(pl.Utf8).map_elements(
+                        lambda x: f"chr{x}" if not x.startswith("chr") else x
+                    ).cast(pl.Categorical).alias("chr")
+                ])
+                uniquechr_bam = set(bam_df["chr"].unique().cast(pl.Utf8))
             else:
                 log_info("Removing 'chr' prefix from BAM chromosomes")
-                bam_df = bam_df.with_columns(
-                    pl.col("chr").str.replace("^chr", "").alias("chr")
-                )
-                uniquechr_bam = set(bam_df["chr"].unique())
+                bam_df = bam_df.with_columns([
+                    pl.col("chr").cast(pl.Utf8).map_elements(
+                        lambda x: x.replace("chr", "")
+                    ).cast(pl.Categorical).alias("chr")
+                ])
+                uniquechr_bam = set(bam_df["chr"].unique().cast(pl.Utf8))
             
             # Try matching again after normalization
             common_chr = uniquechr_bam.intersection(uniquechr_exon)

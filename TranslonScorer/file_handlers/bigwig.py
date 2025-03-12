@@ -102,6 +102,8 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
         pl.col("tran_start").apply(lambda x: [int(i) for i in x.split(",")] if isinstance(x, str) else x),
         pl.col("tran_stop").apply(lambda x: [int(i) for i in x.split(",")] if isinstance(x, str) else x)
     ])
+
+    print(orfs)
     orf_df = pl.read_csv(orfs, has_header=True, separator=",")
 
     counter = 0

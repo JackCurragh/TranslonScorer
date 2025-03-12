@@ -103,17 +103,17 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
         pl.col("tran_stop").apply(lambda x: [int(i) for i in x.split(",")] if isinstance(x, str) else x)
     ])
 
-    orf_df =orfs 
+    orf_df = orfs 
 
     # Proceed with scoring
     counter = 0
     orfscores = []
     total_transcripts = len(orf_df["tran_id"].unique())
-    log_info(f"Processing {total_transcripts} transcripts")
+    log_info(f"Scoring {total_transcripts} transcripts")
 
     for tran in orf_df["tran_id"].unique():
         if counter % 1000 == 0:
-            log_info(f"Processed {counter}/{total_transcripts} transcripts")
+            log_info(f"Scored {counter}/{total_transcripts} transcripts")
 
         exons = exon_df.filter(pl.col("tran_id") == tran)
         orfs = orf_df.filter(pl.col("tran_id") == tran)
@@ -131,6 +131,9 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
                     orfs_filtered = oldscoring(
                         orfs_filtered, tran_reads, sru_range, typeorf
                     )
+                    # Ensure orfs_filtered is a DataFrame
+                    if isinstance(orfs_filtered, dict):
+                        orfs_filtered = pl.DataFrame(orfs_filtered)  # Convert dict to DataFrame
                     orfscores.append(orfs_filtered)
                 else:
                     emptyscore_df = existingscore(orfs_filtered, typeorf, {"rise_up": {}, "step_down": {}})
@@ -142,6 +145,9 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
                             orfs_filtered, scoredict, typeorf
                         )
                         orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
+                        # Ensure orfs_filtered is a DataFrame
+                        if isinstance(orfs_filtered, dict):
+                            orfs_filtered = pl.DataFrame(orfs_filtered)  # Convert dict to DataFrame
                         orfscores.append(orfs_filtered)
         counter += 1
 

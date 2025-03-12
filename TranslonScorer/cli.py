@@ -141,6 +141,9 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
     if bam_path and not chromsizes:
         raise click.BadParameter("Chromosome sizes file (-c) is required when processing BAM files")
     
+    # Initialize exon_df
+    exon_df = None
+
     # Determine pipeline stages
     bigwig_path = bigwig_path
     if bam_path:
@@ -167,6 +170,11 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
         else:
             log_info("Both BAM and BigWig provided. Using BigWig directly.")
             bigwig_path = bigwig
+    
+    # Ensure exon_df is set when using BigWig directly
+    if exon_df is None:
+        log_info("Loading exon data from annotation file...")
+        _, exon_df = bam.getexons_and_cds(annotation)
     
     # Ensure transcriptomic input for ORF finding
     log_info("Ensuring transcriptomic input for ORF finding...")

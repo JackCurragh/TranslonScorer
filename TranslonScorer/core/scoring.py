@@ -10,6 +10,9 @@ This module contains all functions related to scoring ORFs, including:
 
 import polars as pl
 from ..utils.logging import log_info, log_warning, log_error
+from .orf_classification import classify_orf
+from .orf_classification import getexons_and_cds
+
 
 
 def sru_score(position, tran_reads, sru_range, direction):

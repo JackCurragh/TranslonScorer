@@ -93,7 +93,7 @@ def process_bam_file(bam_path, annotation_file):
 @click.option('--log-level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']),
               default='INFO', help='Set the logging level (default: INFO)')
 def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
-        bigwig: str, outfile: str, offsets: Optional[str] = None,
+        bigwig_path: str, outfile: str, offsets: Optional[str] = None,
         start_codons: str = "ATG", stop_codons: str = "TAA,TAG,TGA",
         min_len: int = 0, max_len: int = 1000000,
         sru_range: int = 15, scoring_method: str = 'modern',

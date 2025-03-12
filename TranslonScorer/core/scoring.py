@@ -368,9 +368,6 @@ def orfrelativeposition(annotation, df, cds_df):
                - The first DataFrame contains ORF coordinates with an additional column
                  'type' indicating the relative position of each ORF to CDS.
                - The second DataFrame contains exon coordinates.
-
-    Example:
-        orf_df, exon_coords = orfrelativeposition("annotation.gff", orf_df)
     """
     if not "cdsdf" in globals():
         cds_df, exon_coords = getexons_and_cds(annotation, list(df["tran_id"].unique()))
@@ -379,11 +376,15 @@ def orfrelativeposition(annotation, df, cds_df):
 
     print(cds_df.head())
     print(df.head())
+
+    # Join df with cds_df to include cds_start and cds_stop
+    df = df.join(cds_df.select(["tran_id", "cds_start", "cds_stop"]), on="tran_id", how="left")
+
     # Vectorized operation to classify ORFs
     df = df.with_columns(
         pl.when(pl.col("tran_id").is_in(tranids))
         .then(
-            pl.struct(["start", "stop", "tran_start", "tran_stop"])
+            pl.struct(["start", "stop", "cds_start", "cds_stop"])
             .apply(lambda row: classify_orf(row))
         )
         .otherwise(pl.lit("Non Coding"))

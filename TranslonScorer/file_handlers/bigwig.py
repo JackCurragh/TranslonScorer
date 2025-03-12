@@ -7,7 +7,6 @@ including conversion to other formats and coordinate transformations.
 
 import polars as pl
 import pyBigWig as bw
-from ..core.scoring import orfrelativeposition
 from ..utils.logging import log_info, log_warning, log_error
 from ..core.scoring import oldscoring, newscoring, globalscores, existingscore, assigningscore
 
@@ -104,12 +103,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
         pl.col("tran_stop").apply(lambda x: [int(i) for i in x.split(",")] if isinstance(x, str) else x)
     ])
 
-    print(orfs)
     orf_df =orfs 
-    # = pl.read_csv(orfs, has_header=True, separator=",")
-
-    # Determine the relative position of ORFs to CDS
-    orf_df, exon_coords = orfrelativeposition(annotation, orf_df, cds_df)
 
     # Proceed with scoring
     counter = 0

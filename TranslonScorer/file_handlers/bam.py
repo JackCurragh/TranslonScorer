@@ -185,6 +185,12 @@ def get_bam_tran(bam_df, exon_df):
     chunk_size = 100000  # Process 100k reads at a time
     results = []
     
+    # Ensure chromosome types match (both categorical)
+    if exon_df["chr"].dtype != pl.Categorical:
+        exon_df = exon_df.with_columns(pl.col("chr").cast(pl.Categorical))
+    if bam_df["chr"].dtype != pl.Categorical:
+        bam_df = bam_df.with_columns(pl.col("chr").cast(pl.Categorical))
+    
     # Pre-sort exons for more efficient filtering
     exon_df = exon_df.sort("start")
     

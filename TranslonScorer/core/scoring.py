@@ -384,7 +384,7 @@ def orfrelativeposition(annotation, df, cds_df):
     df = df.with_columns(
         pl.when(pl.col("tran_id").is_in(tranids))
         .then(
-            pl.struct(["start", "stop", "tran_start", "trans_stop"])
+            pl.struct(["start", "stop", "tran_start", "tran_stop"])
             .apply(lambda row: classify_orf(row))
         )
         .otherwise(pl.lit("Non Coding"))

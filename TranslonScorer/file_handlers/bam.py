@@ -10,8 +10,10 @@ import polars as pl
 import oxbow as ox
 from ..utils.logging import log_info, log_error, log_warning
 import os
+from memory_profiler import profile
 
 
+@profile(precision=4)
 def readbam(bampath):
     """
     Reads a given BAM file, extracts relevant information, and returns it as a DataFrame.
@@ -76,6 +78,7 @@ def readbam(bampath):
     return df
 
 
+@profile(precision=4)
 def getexons_and_cds(annotation_file, tran=[]):
     """
     Extract CDS and exon coordinates from an annotation file.
@@ -155,6 +158,7 @@ def getexons_and_cds(annotation_file, tran=[]):
     return cds_df, exon_df
 
 
+@profile(precision=4)
 def get_bam_tran(bam_df, exon_df):
     """
     Map BAM reads to transcript coordinates using exon information.
@@ -254,6 +258,7 @@ def get_bam_tran(bam_df, exon_df):
     return pl.concat(final_results)
 
 
+@profile(precision=4)
 def bamtranscript(bam_df, exon_df):
     """
     Filter BAM and exon DataFrames based on shared chromosome information and flatten exon annotations.
@@ -383,6 +388,7 @@ def bamtranscript(bam_df, exon_df):
     return final_df
 
 
+@profile(precision=4)
 def process_transcriptomic_bam(df_namesplit, cds_df):
     """
     Process a transcriptomic BAM file or output from bamtranscript where reads are mapped to transcripts.

@@ -9,6 +9,7 @@ import pysam
 import polars as pl
 import oxbow as ox
 from ..utils.logging import log_info, log_error, log_warning
+import os
 
 
 def readbam(bampath):
@@ -22,9 +23,13 @@ def readbam(bampath):
     - df (DataFrame): Polars DataFrame containing the extracted information from the BAM file.
                      Contains columns: chr, start, stop, length, strand, count
     """
-    log_info("Indexing BAM file")
-    pysam.index(bampath)
-    log_info("BAM file indexed successfully")
+    # Check if index exists
+    if not (os.path.exists(f"{bampath}.bai") or os.path.exists(bampath.replace(".bam", ".bai"))):
+        log_info("BAM index not found, creating index...")
+        pysam.index(bampath)
+        log_info("BAM file indexed successfully")
+    else:
+        log_info("Using existing BAM index")
     
     # Read BAM file using oxbow for speed
     bamfile = ox.read_bam(bampath)
@@ -151,35 +156,74 @@ def getexons_and_cds(annotation_file, tran=[]):
 
 def get_bam_tran(bam_df, exon_df):
     """
-    Merge BAM and exon DataFrames based on chromosome alignment and calculate transcript coordinates in BAM.
+    Map BAM reads to transcript coordinates using exon information.
+    Uses interval-based filtering to efficiently find overlaps.
 
     Parameters:
-    - bam_df (DataFrame): DataFrame containing BAM file data with chromosome positions.
-    - exon_df (DataFrame): DataFrame containing exon annotations with chromosome positions.
+    - bam_df (DataFrame): DataFrame containing BAM file data with chromosome positions
+    - exon_df (DataFrame): DataFrame containing exon annotations with chromosome positions
 
     Returns:
-    - dict: A dictionary where keys are column names and values are lists of corresponding values,
-            representing transcript coordinates aligned with BAM data.
+    - DataFrame: BAM data with added transcript coordinates
     """
-    df_joined = bam_df.join(exon_df, on="chr")
-    df_filtered = df_joined.filter(
-        (pl.col("start") >= pl.col("start_right"))
-        & (pl.col("stop") <= pl.col("stop_right"))
-    )
-    df_filtered = df_filtered.with_columns(
-        (pl.col("tran_start") + (pl.col("start") - pl.col("start_right"))).alias(
-            "tran_start_bam"
+    # Ensure chromosome types match (both categorical)
+    if exon_df["chr"].dtype != pl.Categorical:
+        exon_df = exon_df.with_columns(pl.col("chr").cast(pl.Categorical))
+    
+    # Sort both DataFrames by start position for efficient overlap checking
+    bam_df = bam_df.sort("start")
+    exon_df = exon_df.sort("start")
+    
+    # Create overlapping windows for efficient filtering
+    window_size = 100000  # 100kb windows
+    results = []
+    
+    # Process in windows to avoid memory issues
+    for start in range(bam_df["start"].min(), bam_df["stop"].max(), window_size):
+        end = start + window_size
+        
+        # Get reads and exons in this window
+        window_reads = bam_df.filter(
+            (pl.col("start") >= start) & (pl.col("start") < end)
         )
-    )
-
-    df_filtered = df_filtered.with_columns(
-        (pl.col("tran_stop") - (pl.col("stop_right") - pl.col("stop"))).alias(
-            "tran_stop_bam"
+        if window_reads.is_empty():
+            continue
+            
+        window_exons = exon_df.filter(
+            (pl.col("start") < end) & (pl.col("stop") > start)
         )
-    ).select(pl.all().exclude("stop_right", "start_right", "tran_start", "tran_stop"))
-    bam_tran_dict = df_filtered.to_dict(as_series=False)
-
-    return bam_tran_dict
+        if window_exons.is_empty():
+            continue
+        
+        # Find overlaps within the window
+        overlaps = window_reads.join(
+            window_exons,
+            on="chr",
+            how="inner"
+        ).filter(
+            (pl.col("start") >= pl.col("start_right")) &
+            (pl.col("stop") <= pl.col("stop_right"))
+        )
+        
+        if not overlaps.is_empty():
+            # Calculate transcript coordinates
+            mapped = overlaps.with_columns([
+                (pl.col("tran_start") + (pl.col("start") - pl.col("start_right")))
+                .alias("tran_start_bam"),
+                (pl.col("tran_stop") - (pl.col("stop_right") - pl.col("stop")))
+                .alias("tran_stop_bam")
+            ]).select(
+                pl.all().exclude("start_right", "stop_right", "tran_start", "tran_stop")
+            )
+            results.append(mapped)
+    
+    if not results:
+        return pl.DataFrame()
+    
+    return pl.concat(results).unique(
+        subset=['chr', 'start', 'stop', 'length', 'strand', 'count', 'tran_id'],
+        maintain_order=True
+    )
 
 
 def bamtranscript(bam_df, exon_df):

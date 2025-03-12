@@ -378,13 +378,13 @@ def orfrelativeposition(annotation, df, cds_df):
     print(df.head())
 
     # Join df with cds_df to include cds_start and cds_stop
-    df = df.join(cds_df.select(["tran_id", "cds_start", "cds_stop"]), on="tran_id", how="left")
+    df = df.join(cds_df.select(["tran_id", "tran_start", "tran_stop"]), on="tran_id", how="left")
 
     # Vectorized operation to classify ORFs
     df = df.with_columns(
         pl.when(pl.col("tran_id").is_in(tranids))
         .then(
-            pl.struct(["start", "stop", "cds_start", "cds_stop"])
+            pl.struct(["start", "stop", "tran_start", "trans_stop"])
             .apply(lambda row: classify_orf(row))
         )
         .otherwise(pl.lit("Non Coding"))

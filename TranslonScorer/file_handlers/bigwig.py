@@ -70,7 +70,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
     
     Args:
         bigwig (str): Path to bigwig file
-        exon (str): Path to exon file
+        exon (str or DataFrame): Path to exon file or DataFrame
         orfs (str): Path to ORFs file
         old_scoring (bool): Whether to use old scoring method
         sru_range (int): Range for SRU score calculation
@@ -87,7 +87,14 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range):
         raise ValueError(error_msg)
 
     log_info("Loading exon and ORF data")
-    exon_df = pl.read_csv(exon, has_header=True, separator=",")
+    # Check if exon is a file path or a DataFrame
+    if isinstance(exon, str):
+        log_info(f"Reading exon data from file: {exon}")
+        exon_df = pl.read_csv(exon, has_header=True, separator=",")
+    else:
+        log_info("Using provided exon DataFrame")
+        exon_df = exon
+
     # Split and convert to integers
     exon_df = exon_df.with_columns([
         pl.col("start").apply(lambda x: [int(i) for i in x.split(",")]),

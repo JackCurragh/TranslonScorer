@@ -88,7 +88,6 @@ def find_orfs(sequence, tran_id, startautomaton, stopautomaton, minlength=0, max
             if minlength < orf_data["length"] < maxlength:
                 orf_list.append(orf_data)
 
-    log_info(f"Found {len(orf_list)} ORFs in transcript {tran_id}")
     return orf_list
 
 

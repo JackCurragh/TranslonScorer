@@ -369,48 +369,24 @@ def orfrelativeposition(annotation, df, cds_df):
     Example:
         orf_df, exon_coords = orfrelativeposition("annotation.gff", orf_df)
     """
-    orflist = []
     if not "cdsdf" in globals():
         cds_df, exon_coords = getexons_and_cds(annotation, list(df["tran_id"].unique()))
 
     print("Typing ORFS")
-    tranids = list(cds_df["tran_id"].unique())
-    # TYPING ORFS
-    codingorfs = (
-        df.with_columns(shared=pl.col("tran_id").is_in(tranids))
-        .filter(pl.col("shared") == True)
-        .select(pl.all().exclude("shared"))
-    )
+    tranids = cds_df["tran_id"].unique().to_list()
 
-    codingorfs = codingorfs.join(cds_df, on="tran_id")
-    codingorfs = (
-        codingorfs.with_columns(
+    # Vectorized operation to classify ORFs
+    df = df.with_columns(
+        pl.when(pl.col("tran_id").is_in(tranids))
+        .then(
             pl.struct(["start", "stop", "tran_start", "tran_stop"])
             .apply(lambda row: classify_orf(row))
-            .alias("type")
         )
-        .select(pl.all().exclude("tran_start", "tran_stop"))
-        .to_dict(as_series=False)
-    )
-    orflist.append(codingorfs)
-
-    # NON CODING ORFS
-    noncodingorfs = (
-        df.with_columns(shared=pl.col("tran_id").is_in(tranids))
-        .filter(pl.col("shared") == False)
-        .select(pl.all().exclude("shared"))
+        .otherwise(pl.lit("Non Coding"))
+        .alias("type")
     )
 
-    noncodingorfs = noncodingorfs.with_columns(type=pl.lit("Non Coding")).to_dict(
-        as_series=False
-    )
-    orflist.append(noncodingorfs)
-    # MAKE ONE DF
-    df = pl.from_dicts(orflist).explode(
-        "tran_id", "start", "stop", "length", "startorf", "stoporf", "type"
-    )
-
-    cdslist = df.filter(pl.col("type") == "CDS")
-    cdslist = list(cdslist["tran_id"].unique())
+    # Filter CDS
+    cdslist = df.filter(pl.col("type") == "CDS")["tran_id"].unique().to_list()
 
     return df, exon_coords 

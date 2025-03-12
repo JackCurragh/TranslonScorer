@@ -6,8 +6,6 @@ import polars as pl
 import warnings
 import logging
 from typing import List, Optional
-import pysam
-import oxbow as ox
 from pathlib import Path
 from memory_profiler import profile
 
@@ -188,6 +186,7 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
     log_info("Finding ORFs...")
     orf_df = orffinder.preporfs(transcript_fasta, start_codons.split(","), stop_codons.split(","), min_len, max_len)
     
+    log_info("Determining relative position of ORFs to CDS...")
     # Determine the relative position of ORFs to CDS
     orf_df, exon_coords = orfrelativeposition(annotation, orf_df, cds_df)
 

@@ -38,9 +38,7 @@ def readbam(bampath):
     column_mapping = {
         'rname': 'chr',
         'pos': 'start',
-        'end': 'stop',
-        'qlen': 'length',
-        'flag': 'flag'  # We'll use this to determine strand
+        'end': 'stop'
     }
     
     # Rename columns that exist
@@ -48,18 +46,21 @@ def readbam(bampath):
         if old_name in df.columns:
             df = df.rename({old_name: new_name})
     
-    # Add strand based on SAM flag (0x10 is the reverse strand bit)
-    if 'flag' in df.columns:
-        df = df.with_columns(
-            pl.when(pl.col('flag') & 0x10 > 0)
-            .then(pl.lit('-'))
-            .otherwise(pl.lit('+'))
-            .alias('strand')
-        ).drop('flag')
+    # Calculate length from sequence
+    df = df.with_columns(
+        pl.col('seq').str.lengths().alias('length')
+    )
     
-    # Add count column if not present
-    if 'count' not in df.columns:
-        df = df.with_columns(count=pl.lit(1))
+    # Add strand based on SAM flag (0x10 is the reverse strand bit)
+    df = df.with_columns(
+        pl.when(pl.col('flag') & 0x10 > 0)
+        .then(pl.lit('-'))
+        .otherwise(pl.lit('+'))
+        .alias('strand')
+    ).drop('flag')
+    
+    # Keep only needed columns and add count
+    df = df.select(['chr', 'start', 'stop', 'length', 'strand']).with_columns(count=pl.lit(1))
         
     # Group by position to get counts
     df = df.group_by(['chr', 'start', 'stop', 'length', 'strand']).agg(

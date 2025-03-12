@@ -9,6 +9,7 @@ from typing import List, Optional
 import pysam
 import oxbow as ox
 from pathlib import Path
+from memory_profiler import profile
 
 from .core import scoring, coordinates
 from .file_handlers import bam, bed, bigwig
@@ -34,6 +35,29 @@ def cli():
     """
     pass
 
+@profile(precision=4)
+def process_bam_file(bam_path, annotation_file):
+    """Process BAM file and get exons/CDS."""
+    log_info('Processing BAM file...')
+    bam_df = bam.readbam(bam_path)
+    
+    # Get exons and CDS
+    cds_df, exon_df = bam.getexons_and_cds(annotation_file)
+    
+    # Process BAM data
+    bam_type, _ = bam.detect_bam_type(bam_df, exon_df)
+    if bam_type == 'genomic':
+        # First convert genomic coordinates to transcript coordinates
+        bam_df = bam.bamtranscript(bam_df, exon_df)
+        # Then calculate positions relative to CDS
+        bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
+    else:
+        # For transcriptomic BAM, just calculate CDS positions
+        bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
+    
+    return bam_df, exon_df
+
+@profile(precision=4)
 @cli.command()
 @click.option('--bam_path', '-b', required=True,
               help='Input BAM file from Ribo-seq data. Supports both genomic and transcriptomic alignments (required)')
@@ -98,23 +122,8 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
     if not os.path.isfile(location):
         raise click.BadParameter(f"BAM file not found: {bam_path}")
     
-    # Read BAM file
-    log_info('Processing BAM file...')
-    bam_df = bam.readbam(location)
-    
-    # Get exons and CDS
-    cds_df, exon_df = bam.getexons_and_cds(annotation)
-    
-    # Process BAM data
-    bam_type, _ = bam.detect_bam_type(bam_df, exon_df)
-    if bam_type == 'genomic':
-        # First convert genomic coordinates to transcript coordinates
-        bam_df = bam.bamtranscript(bam_df, exon_df)
-        # Then calculate positions relative to CDS
-        bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
-    else:
-        # For transcriptomic BAM, just calculate CDS positions
-        bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
+    # Process BAM and get annotations
+    bam_df, exon_df = process_bam_file(location, annotation)
     
     # Calculate A-site positions
     offsets = coordinates.change_point_analysis(bam_df)

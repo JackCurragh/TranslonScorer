@@ -91,14 +91,12 @@ mkdir -p "$OUTPUT_DIR"
 echo "Running TranslonScorer..."
 
 # Run the analysis using the CLI
-mprof run translonscorer all \
+translonscorer all \
     --bam_path "$BAM_FILE" \
     --chromsizes "$CHROM_SIZES" \
     --sequence "$GENOME_FA" \
     --annotation "$GTF_FILE" \
     --outfile "$OUTPUT_PREFIX"
-mprof plot
-check_status "TranslonScorer execution"
 
 echo "Script completed successfully!"
 echo "Output files can be found with prefix: $OUTPUT_PREFIX"

@@ -7,6 +7,8 @@ using Aho-Corasick pattern matching for efficient codon identification.
 
 import ahocorasick
 from ..utils.logging import log_info, log_warning
+from pyfaidx import Fasta
+import polars as pl
 
 
 def find_all_positions(sequence, automaton):
@@ -109,24 +111,36 @@ def build_codon_automaton(codons):
     return automaton
 
 
-def preporfs(sequence_dict, start_codons=None, stop_codons=None, minlength=0, maxlength=1000000):
+def preporfs(sequence_input, start_codons=None, stop_codons=None, minlength=0, maxlength=1000000):
     """
     Predict ORFs from transcript sequences.
 
     Args:
-        sequence_dict (dict): Dictionary mapping transcript IDs to sequences
+        sequence_input (str or dict): Either a path to a FASTA file or a dictionary mapping transcript IDs to sequences
         start_codons (list, optional): List of start codon sequences. Defaults to ["ATG"]
         stop_codons (list, optional): List of stop codon sequences. Defaults to ["TAA", "TAG", "TGA"]
         minlength (int, optional): Minimum ORF length. Defaults to 0
         maxlength (int, optional): Maximum ORF length. Defaults to 1000000
 
     Returns:
-        list: List of predicted ORFs across all transcripts
+        DataFrame: DataFrame containing predicted ORFs with their coordinates
     """
+    # Set default codons if not provided
     if start_codons is None:
         start_codons = ["ATG"]
     if stop_codons is None:
         stop_codons = ["TAA", "TAG", "TGA"]
+    
+    # Handle input type
+    if isinstance(sequence_input, str):
+        # Input is a file path, read FASTA
+        fasta = Fasta(sequence_input)
+        sequence_dict = {name: str(seq) for name, seq in fasta.items()}
+    elif isinstance(sequence_input, dict):
+        # Input is already a dictionary
+        sequence_dict = sequence_input
+    else:
+        raise ValueError("sequence_input must be either a file path (str) or a dictionary")
 
     # Build automata
     start_automaton = build_codon_automaton(start_codons)
@@ -143,5 +157,14 @@ def preporfs(sequence_dict, start_codons=None, stop_codons=None, minlength=0, ma
             maxlength=maxlength
         )
         all_orfs.extend(orfs)
-
-    return all_orfs 
+    
+    if not all_orfs:
+        return pl.DataFrame(schema={
+            'tran_id': pl.Utf8,
+            'start': pl.Int64,
+            'stop': pl.Int64,
+            'length': pl.Int64,
+            'sequence': pl.Utf8
+        })
+    
+    return pl.DataFrame(all_orfs) 

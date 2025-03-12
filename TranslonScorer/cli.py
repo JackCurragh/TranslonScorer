@@ -14,6 +14,7 @@ from memory_profiler import profile
 from .core import scoring, coordinates
 from .core import orffinder
 from .file_handlers import bam, bed, bigwig
+from .core.scoring import orfrelativeposition
 from .utils.logging import setup_logging, log_info, log_error
 from .visualization import plots
 
@@ -187,7 +188,9 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
     log_info("Finding ORFs...")
     orf_df = orffinder.preporfs(transcript_fasta, start_codons.split(","), stop_codons.split(","), min_len, max_len)
     
-    # Score ORFs
+    # Determine the relative position of ORFs to CDS
+    orf_df, exon_coords = orfrelativeposition(annotation, orf_df, cds_df)
+
     log_info("Scoring ORFs...")
     scored_orfs = bigwig.scoring(bigwig_path, exon_df, orf_df, scoring_method == 'classic', sru_range)
     scored_orfs.write_csv(f"{outfile}_orfs_scored.csv")

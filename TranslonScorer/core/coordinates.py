@@ -190,3 +190,72 @@ def orfrelativeposition(annotation, df, cds_df=None):
     
     log_info(f"Classified {len(orf_df)} ORFs")
     return orf_df, exon_df 
+
+def gettranscripts(seq, annotation, outfilename):
+    """
+    Extracts transcript sequences from a genome annotation file.
+
+    This function takes a genome sequence file and a genome annotation file,
+    extracts transcript sequences from the annotation file, and saves them
+    to a FASTA file.
+
+    Parameters:
+        seq (str): Path to the genome sequence file in FASTA format.
+        annotation (str): Path to the genome annotation file in BED/GFF/GTF format.
+        outfile (str): Path to save the output transcript sequences in FASTA format.
+                       Default is 'transcripts.fa'.
+
+    Returns:
+        str: Path to the output FASTA file containing transcript sequences.
+
+    Example:
+        output_file = gettranscripts("genome.fa", "annotation.gff", outfile="transcripts.fa")
+    """
+    # First, get available chromosomes from the genome.fa file
+    log_info("Reading genome file to get available chromosomes")
+    genome = Fasta(seq)
+    available_chroms = set(genome.keys())
+    log_info(f"Found {len(available_chroms)} chromosomes in genome file")
+    
+    # Read and filter annotation data
+    log_info("Reading annotation file")
+    ann = pr.read_gff(annotation, ignore_bad=True)
+    transcripts = ann[ann.Feature == "exon"]
+    
+    # Get unique chromosomes from annotation
+    ann_chroms = set(transcripts.Chromosome.unique())
+    log_info(f"Found {len(ann_chroms)} chromosomes in annotation")
+    
+    # Find chromosomes that exist in both genome and annotation
+    common_chroms = available_chroms.intersection(ann_chroms)
+    if not common_chroms:
+        # Try without 'chr' prefix
+        ann_chroms_no_chr = {c.replace('chr', '') for c in ann_chroms}
+        available_chroms_no_chr = {c.replace('chr', '') for c in available_chroms}
+        common_chroms = available_chroms_no_chr.intersection(ann_chroms_no_chr)
+        
+        if not common_chroms:
+            raise ValueError(
+                "No matching chromosomes found between genome and annotation files.\n"
+                f"Genome chromosomes: {sorted(list(available_chroms))[:5]}\n"
+                f"Annotation chromosomes: {sorted(list(ann_chroms))[:5]}"
+            )
+    
+    log_info(f"Found {len(common_chroms)} common chromosomes")
+    
+    # Filter transcripts to only include those on common chromosomes
+    transcripts = transcripts[transcripts.Chromosome.isin(common_chroms)]
+    
+    # Get transcript sequences
+    log_info("Extracting transcript sequences")
+    tran_seq = transcripts.get_transcript_sequence(
+        transcript_id="transcript_id", path=seq
+    )
+    
+    # Write output
+    log_info("Writing transcript sequences to file")
+    with open(f"{outfilename}_transcripts.fa", "w") as fw:
+        for index, id, seq in tran_seq.itertuples():
+            fw.write(f">{id}\n{seq}\n")
+
+    return f"{outfilename}_transcripts.fa"

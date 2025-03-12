@@ -173,7 +173,7 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
     transcript_fasta = sequence
     if not sequence.endswith('_transcripts.fa'):
         log_info("Generating transcript sequences from genomic FASTA and GTF annotation...")
-        transcript_fasta = gettranscripts(sequence, annotation, outfile)
+        transcript_fasta = coordinates.gettranscripts(sequence, annotation, outfile)
     
     # Find ORFs
     log_info("Finding ORFs...")

@@ -377,6 +377,7 @@ def orfrelativeposition(annotation, df, cds_df):
 
     tranids = cds_df["tran_id"].unique().to_list()
 
+    print(cds_df.head())
     print(df.head())
     # Vectorized operation to classify ORFs
     df = df.with_columns(

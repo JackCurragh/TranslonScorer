@@ -174,7 +174,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
     for col in string_columns:
         if col in exon_df.columns:
             conversions.append(
-                pl.when(pl.col(col).is_string())
+                pl.when(pl.col(col).str.is_utf8())
                 .then(pl.col(col).str.split(",").map_elements(lambda x: [int(i) for i in x]))
                 .otherwise(pl.col(col))
                 .alias(col)

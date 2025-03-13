@@ -70,7 +70,7 @@ def transcriptreads(bwfile, exon_df):
 
 
 
-def process_transcript(tran, exon_partitions, orf_partitions, bwfile, old_scoring, sru_range):
+def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_scoring, sru_range):
     """
     Process a single transcript.
     
@@ -78,7 +78,7 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile, old_scorin
         tran: Transcript ID
         exon_partitions: List of DataFrames for exons
         orf_partitions: List of DataFrames for ORFs
-        bwfile: BigWig file handle
+        bwfile_path: Path to the BigWig file
         old_scoring: Whether to use old scoring method
         sru_range: Range for SRU score calculation
         
@@ -94,7 +94,10 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile, old_scorin
         log_warning(f"No exon data found for transcript {tran}")
         return transcript_results
     
-    tran_reads = transcriptreads(bwfile, exons)
+    # Open the BigWig file within this function
+    with bw.open(bwfile_path) as bwfile:
+        tran_reads = transcriptreads(bwfile, exons)
+    
     if tran_reads.is_empty():
         return transcript_results
         
@@ -226,7 +229,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
             process_transcript, 
             exon_partitions=exon_partitions,  # Pass the list of partitions
             orf_partitions=orf_partitions,     # Pass the list of partitions
-            bwfile=bwfile, 
+            bwfile_path=bigwig,                # Pass the path to the BigWig file
             old_scoring=old_scoring, 
             sru_range=sru_range
         )

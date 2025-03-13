@@ -349,7 +349,7 @@ def assigningscore(df, scoredict, typeorf):
         return pl.DataFrame()
 
 
-def orfrelativeposition(annotation, df, cds_df):
+def orfrelativeposition(annotation, df, cds_df=None):
     """
     Determines the relative position of ORFs to coding sequences (CDS).
 
@@ -369,7 +369,7 @@ def orfrelativeposition(annotation, df, cds_df):
                  'type' indicating the relative position of each ORF to CDS.
                - The second DataFrame contains exon coordinates.
     """
-    if not "cdsdf" in globals():
+    if cds_df is None:
         cds_df, exon_coords = getexons_and_cds(annotation, list(df["tran_id"].unique()))
 
     tranids = cds_df["tran_id"].unique().to_list()

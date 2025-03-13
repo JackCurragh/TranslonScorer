@@ -170,15 +170,18 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
     # Optimize string conversions - more efficient batch approach
     string_columns = ["start", "stop", "tran_start", "tran_stop"]
     conversions = []
-    
     for col in string_columns:
         if col in exon_df.columns:
-            conversions.append(
-                pl.when(pl.col(col).dtype == pl.Utf8)  # Check if the column is of string type
-                .then(pl.col(col).str.split(",").map_elements(lambda x: [int(i) for i in x]))
-                .otherwise(pl.col(col))
-                .alias(col)
-            )
+            # Get the column's dtype from the DataFrame schema
+            col_dtype = exon_df.schema[col]
+            if col_dtype == pl.Utf8:  # Check if the column is string type
+                # Convert string to list of integers
+                conversions.append(
+                    pl.col(col)
+                    .str.split(",")
+                    .map_elements(lambda x: [int(i) for i in x])
+                    .alias(col)
+                )
     
     # Apply all conversions in one operation if any exist
     if conversions:

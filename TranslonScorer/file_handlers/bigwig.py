@@ -70,14 +70,14 @@ def transcriptreads(bwfile, exon_df):
 
 
 
-def process_transcript(tran, exon_dict, orf_dict, bwfile, old_scoring, sru_range):
+def process_transcript(tran, exon_partitions, orf_partitions, bwfile, old_scoring, sru_range):
     """
     Process a single transcript.
     
     Args:
         tran: Transcript ID
-        exon_dict: Dictionary mapping transcript IDs to exon DataFrames
-        orf_dict: Dictionary mapping transcript IDs to ORF DataFrames
+        exon_partitions: List of DataFrames for exons
+        orf_partitions: List of DataFrames for ORFs
         bwfile: BigWig file handle
         old_scoring: Whether to use old scoring method
         sru_range: Range for SRU score calculation
@@ -85,8 +85,8 @@ def process_transcript(tran, exon_dict, orf_dict, bwfile, old_scoring, sru_range
     Returns:
         List of scored ORF DataFrames for this transcript
     """
-    exons = exon_dict.get(tran, pl.DataFrame())
-    orfs = orf_dict.get(tran, pl.DataFrame())
+    exons = next((df for df in exon_partitions if df["tran_id"].unique() == tran), pl.DataFrame())
+    orfs = next((df for df in orf_partitions if df["tran_id"].unique() == tran), pl.DataFrame())
     
     transcript_results = []
     
@@ -158,7 +158,6 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
     # Check if exon is a file path or a DataFrame
     if isinstance(exon, str):
         log_info(f"Reading exon data from file: {exon}")
-        # Use scan_csv for lazy evaluation if file is large
         if os.path.getsize(exon) > 1e9:  # 1 GB
             exon_df = pl.scan_csv(exon, has_header=True, separator=",").collect()
         else:
@@ -167,15 +166,13 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
         log_info("Using provided exon DataFrame")
         exon_df = exon
 
-    # Optimize string conversions - more efficient batch approach
+    # Optimize string conversions
     string_columns = ["start", "stop", "tran_start", "tran_stop"]
     conversions = []
     for col in string_columns:
         if col in exon_df.columns:
-            # Get the column's dtype from the DataFrame schema
             col_dtype = exon_df.schema[col]
             if col_dtype == pl.Utf8:  # Check if the column is string type
-                # Convert string to list of integers
                 conversions.append(
                     pl.col(col)
                     .str.split(",")
@@ -205,8 +202,8 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
     
     # Pre-group data for faster access
     log_info("Pre-grouping data for faster access")
-    exon_dict = {group[0]: group[1] for group in exon_df.partition_by("tran_id")}
-    orf_dict = {group[0]: group[1] for group in orf_df.partition_by("tran_id")}
+    exon_partitions = exon_df.partition_by("tran_id")
+    orf_partitions = orf_df.partition_by("tran_id")
     
     # Process in batches to manage memory
     all_results = []
@@ -227,8 +224,8 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
         # Create partial function with fixed arguments
         process_func = partial(
             process_transcript, 
-            exon_dict=exon_dict, 
-            orf_dict=orf_dict, 
+            exon_partitions=exon_partitions,  # Pass the list of partitions
+            orf_partitions=orf_partitions,     # Pass the list of partitions
             bwfile=bwfile, 
             old_scoring=old_scoring, 
             sru_range=sru_range
@@ -247,16 +244,6 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
                         batch_results.extend(transcript_results)
                 except Exception as exc:
                     log_error(f"Transcript {tran} generated an exception: {exc}")
-        
-        # Combine batch results and free memory periodically
-        if batch_results:
-            try:
-                combined_batch = pl.concat(batch_results)
-                all_results.append(combined_batch)
-                # Free memory
-                del batch_results
-            except Exception as exc:
-                log_error(f"Error combining batch results: {exc}")
     
     # Close BigWig file when done with all processing
     bwfile.close()

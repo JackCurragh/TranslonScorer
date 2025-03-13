@@ -152,22 +152,26 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_s
     orfs = next((df for df in orf_partitions if df["tran_id"].unique() == tran), pl.DataFrame())
     
     transcript_results = []
-    
+    log_info(f"Processing transcript {tran}")
     if exons.is_empty():
         log_warning(f"No exon data found for transcript {tran}")
         return transcript_results
     
+    log_info(f"Exon data found for transcript {tran}")
     # Open the BigWig file within this function
     with bw.open(bwfile_path) as bwfile:
+        log_info(f"BigWig file opened for transcript {tran}")
         tran_reads = transcriptreads(bwfile, exons)
-    
+        log_info(f"Transcript reads calculated for transcript {tran}")
+
     if tran_reads.is_empty():
         log_warning(f"No transcript reads found for {tran}")
         return transcript_results
         
+    log_info(f"Transcript reads found for transcript {tran}")
     for typeorf in orfs["type"].unique():
         orfs_filtered = orfs.filter(pl.col("type") == typeorf)
-        
+        log_info(f"Filtered ORFs for type {typeorf}: {orfs_filtered}")
         # Debugging: Log the filtered ORFs
         log_info(f"Filtered ORFs for type {typeorf}: {orfs_filtered}")
 
@@ -186,13 +190,17 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_s
         else:
             emptyscore_df = existingscore(orfs_filtered, typeorf, {"rise_up": {}, "step_down": {}})
             if not emptyscore_df.is_empty():
+                log_info(f"Scoring ORFs for type {typeorf} in transcript {tran}")
                 scoredict = newscoring(
                     emptyscore_df, tran_reads, sru_range, typeorf, {"rise_up": {}, "step_down": {}}
                 )
+                log_info(f"Assigned scores for type {typeorf} in transcript {tran}")
                 orfs_filtered = assigningscore(
                     orfs_filtered, scoredict, typeorf
                 )
+                log_info(f"Global scores assigned for type {typeorf} in transcript {tran}")
                 orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
+                log_info(f"Global scores calculated for type {typeorf} in transcript {tran}")
                 # Ensure orfs_filtered is a DataFrame
                 if isinstance(orfs_filtered, dict):
                     orfs_filtered = pl.DataFrame(orfs_filtered)

@@ -309,12 +309,14 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
         # Process batch in parallel
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
             future_to_tran = {executor.submit(process_func, tran): tran for tran in batch_transcripts}
-            log_info(f"Processing batch {batch_start//batch_size + 1}/{(total_transcripts + batch_size - 1)//batch_size}: "
-                 f"transcripts {batch_start+1} to {batch_end}")
+
             for future in concurrent.futures.as_completed(future_to_tran):
+
                 tran = future_to_tran[future]
                 try:
                     transcript_results = future.result()
+                    log_info(f"Transcript {tran}: "
+                             f"Scored {len(transcript_results)} ORFs")
                     if transcript_results:
                         batch_results.extend(transcript_results)
                 except Exception as exc:

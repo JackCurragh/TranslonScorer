@@ -5,62 +5,125 @@ This module contains functions for reading and processing BigWig files,
 including conversion to other formats and coordinate transformations.
 """
 
+from typing import Dict, List, Optional, Union, Tuple
 import polars as pl
 import pyBigWig as bw
 from ..utils.logging import log_info, log_warning, log_error
 from ..core.scoring import oldscoring, newscoring, globalscores, existingscore, assigningscore
 
-
 import concurrent.futures
 from functools import partial
 import os
+from dataclasses import dataclass
+from contextlib import contextmanager
 
-def transcriptreads(bwfile, exon_df):
+@dataclass
+class ProcessingConfig:
+    """Configuration for transcript processing."""
+    max_workers: int
+    batch_size: int
+    sru_range: int
+
+@contextmanager
+def open_bigwig(path: str):
+    """Safely open and close a BigWig file."""
+    bw_file = None
+    try:
+        bw_file = bw.open(path)
+        if not bw_file.isBigWig():
+            raise ValueError(f"File {path} is not a valid bigWig file")
+        yield bw_file
+    finally:
+        if bw_file:
+            bw_file.close()
+
+def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     """
     Converts a BigWig file to a DataFrame based on provided exon annotation.
 
     Parameters:
-    - bigwig (str): Path to the BigWig file.
-    - exon (str): Path to the exon annotation file.
+    ----------
+    bwfile : pyBigWig.pyBigWig
+        An open BigWig file handle
+    exon_df : polars.DataFrame
+        DataFrame containing exon annotations with columns: chr, start, stop
 
     Returns:
-    - df_tran (DataFrame): DataFrame containing transcript information derived from the BigWig file.
+    -------
+    polars.DataFrame
+        DataFrame containing transcript information with columns: tran_start, counts
 
     Raises:
-    - RuntimeError: If there are issues reading values from the bigWig file
-    - ValueError: If no reads could be extracted from any chromosome
+    ------
+    ValueError
+        If exon_df is empty or no reads could be extracted
+    RuntimeError
+        If there are issues reading values from the bigWig file
     """
-    reads = []
-    # Explode the lists into rows and sort by chromosome and start position
-    exon_exploded = exon_df.with_columns([
-        pl.col("start").alias("start_list"),
-        pl.col("stop").alias("stop_list")
-    ]).explode(["start_list", "stop_list"])
+    if not isinstance(bwfile, bw.pyBigWig):
+        raise TypeError("bwfile must be a pyBigWig handle")
     
-    # Sort by chromosome and start position
-    exon_exploded = exon_exploded.sort(["chr", "start_list"])
-    # Process each chromosome separately to maintain order
-    for chrom in exon_exploded["chr"].unique():
-        chrom_data = exon_exploded.filter(pl.col("chr") == chrom)
+    if exon_df.is_empty():
+        raise ValueError("Empty exon DataFrame provided")
         
-        # Get sorted positions for this chromosome
-        starts = chrom_data["start_list"].to_list()
-        stops = chrom_data["stop_list"].to_list()
+    if not all(col in exon_df.columns for col in ["chr", "start", "stop"]):
+        raise ValueError("Exon DataFrame missing required columns (chr, start, stop)")
+
+    reads: List[float] = []
+    processed_regions = 0
+    failed_regions = 0
+    
+    # Explode the lists into rows and sort by chromosome and start position
+    try:
+        exon_exploded = exon_df.with_columns([
+            pl.col("start").alias("start_list"),
+            pl.col("stop").alias("stop_list")
+        ]).explode(["start_list", "stop_list"])
         
-        try:
-            # Get values for all positions in this chromosome
+        # Sort by chromosome and start position
+        exon_exploded = exon_exploded.sort(["chr", "start_list"])
+        
+        # Process each chromosome separately to maintain order
+        for chrom in exon_exploded["chr"].unique():
+            chrom_data = exon_exploded.filter(pl.col("chr") == chrom)
+            
+            # Get sorted positions for this chromosome
+            starts = chrom_data["start_list"].to_list()
+            stops = chrom_data["stop_list"].to_list()
+            
+            # Validate chromosome exists in bigwig file
+            if not bwfile.chroms().get(chrom):
+                log_warning(f"Chromosome {chrom} not found in bigWig file")
+                continue
+                
+            # Process regions for this chromosome
             for start, stop in zip(starts, stops):
                 try:
+                    if start >= stop:
+                        log_warning(f"Invalid region {chrom}:{start}-{stop} (start >= stop)")
+                        failed_regions += 1
+                        continue
+                        
                     values = bwfile.values(chrom, start, stop)
-                    if values:
-                        reads.extend(values)
+                    if values and any(v is not None for v in values):
+                        reads.extend(v if v is not None else 0.0 for v in values)
+                        processed_regions += 1
+                    else:
+                        failed_regions += 1
                 except RuntimeError as e:
                     log_error(f"Could not read values for {chrom}:{start}-{stop}: {str(e)}")
-        except Exception as e:
-            log_error(f"Error processing chromosome {chrom}: {str(e)}")
+                    failed_regions += 1
+                    
+    except Exception as e:
+        log_error(f"Error processing exon data: {str(e)}")
+        raise
     
     if not reads:
-        log_error("No reads could be extracted from any chromosome", exception_type=ValueError)
+        msg = f"No reads extracted. Processed: {processed_regions}, Failed: {failed_regions}"
+        log_error(msg, exception_type=ValueError)
+        raise ValueError(msg)
+        
+    log_info(f"Successfully processed {processed_regions} regions, {failed_regions} failed")
         
     return pl.DataFrame({
         "tran_start": range(len(reads)),
@@ -70,23 +133,23 @@ def transcriptreads(bwfile, exon_df):
 
 
 
-def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_scoring, sru_range):
+def process_transcript(tran, exon_dict, orf_dict, bwfile, old_scoring, sru_range):
     """
     Process a single transcript.
     
     Args:
         tran: Transcript ID
-        exon_partitions: List of DataFrames for exons
-        orf_partitions: List of DataFrames for ORFs
-        bwfile_path: Path to the BigWig file
+        exon_dict: Dictionary mapping transcript IDs to exon DataFrames
+        orf_dict: Dictionary mapping transcript IDs to ORF DataFrames
+        bwfile: BigWig file handle
         old_scoring: Whether to use old scoring method
         sru_range: Range for SRU score calculation
         
     Returns:
         List of scored ORF DataFrames for this transcript
     """
-    exons = next((df for df in exon_partitions if df["tran_id"].unique() == tran), pl.DataFrame())
-    orfs = next((df for df in orf_partitions if df["tran_id"].unique() == tran), pl.DataFrame())
+    exons = exon_dict.get(tran, pl.DataFrame())
+    orfs = orf_dict.get(tran, pl.DataFrame())
     
     transcript_results = []
     
@@ -94,10 +157,7 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_s
         log_warning(f"No exon data found for transcript {tran}")
         return transcript_results
     
-    # Open the BigWig file within this function
-    with bw.open(bwfile_path) as bwfile:
-        tran_reads = transcriptreads(bwfile, exons)
-    
+    tran_reads = transcriptreads(bwfile, exons)
     if tran_reads.is_empty():
         return transcript_results
         
@@ -161,6 +221,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
     # Check if exon is a file path or a DataFrame
     if isinstance(exon, str):
         log_info(f"Reading exon data from file: {exon}")
+        # Use scan_csv for lazy evaluation if file is large
         if os.path.getsize(exon) > 1e9:  # 1 GB
             exon_df = pl.scan_csv(exon, has_header=True, separator=",").collect()
         else:
@@ -169,13 +230,15 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
         log_info("Using provided exon DataFrame")
         exon_df = exon
 
-    # Optimize string conversions
+    # Optimize string conversions - more efficient batch approach
     string_columns = ["start", "stop", "tran_start", "tran_stop"]
     conversions = []
     for col in string_columns:
         if col in exon_df.columns:
+            # Get the column's dtype from the DataFrame schema
             col_dtype = exon_df.schema[col]
             if col_dtype == pl.Utf8:  # Check if the column is string type
+                # Convert string to list of integers
                 conversions.append(
                     pl.col(col)
                     .str.split(",")
@@ -205,8 +268,8 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
     
     # Pre-group data for faster access
     log_info("Pre-grouping data for faster access")
-    exon_partitions = exon_df.partition_by("tran_id")
-    orf_partitions = orf_df.partition_by("tran_id")
+    exon_dict = {group[0]: group[1] for group in exon_df.partition_by("tran_id")}
+    orf_dict = {group[0]: group[1] for group in orf_df.partition_by("tran_id")}
     
     # Process in batches to manage memory
     all_results = []
@@ -227,9 +290,9 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
         # Create partial function with fixed arguments
         process_func = partial(
             process_transcript, 
-            exon_partitions=exon_partitions,  # Pass the list of partitions
-            orf_partitions=orf_partitions,     # Pass the list of partitions
-            bwfile_path=bigwig,                # Pass the path to the BigWig file
+            exon_dict=exon_dict, 
+            orf_dict=orf_dict, 
+            bwfile=bwfile, 
             old_scoring=old_scoring, 
             sru_range=sru_range
         )
@@ -247,6 +310,16 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
                         batch_results.extend(transcript_results)
                 except Exception as exc:
                     log_error(f"Transcript {tran} generated an exception: {exc}")
+        
+        # Combine batch results and free memory periodically
+        if batch_results:
+            try:
+                combined_batch = pl.concat(batch_results)
+                all_results.append(combined_batch)
+                # Free memory
+                del batch_results
+            except Exception as exc:
+                log_error(f"Error combining batch results: {exc}")
     
     # Close BigWig file when done with all processing
     bwfile.close()

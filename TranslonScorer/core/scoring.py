@@ -273,14 +273,14 @@ def existingscore(df, typeorf, scoredict):
         if typeorf == "uoORF":
             df = (
                 df["start"]
-                .map_elements(lambda x: x if not x in scoredict["rise_up"] else None)
+                .map_elements(lambda x: x if x not in scoredict["rise_up"] else None)
                 .drop_nulls()
             )
             return df
         elif typeorf == "doORF":
             df = (
                 df["stop"]
-                .map_elements(lambda x: x if not x in scoredict["step_down"] else None)
+                .map_elements(lambda x: x if x not in scoredict["step_down"] else None)
                 .drop_nulls()
             )
             return df
@@ -288,12 +288,12 @@ def existingscore(df, typeorf, scoredict):
             df = df.select(["start", "stop"]).with_columns(
                 (
                     pl.col("start")
-                    .apply(lambda x: x if not x in scoredict["rise_up"] else None)
+                    .apply(lambda x: x if x not in scoredict["rise_up"] else None)
                     .alias("in_ru")
                 ),
                 (
                     pl.col("stop")
-                    .apply(lambda x: x if not x in scoredict["step_down"] else None)
+                    .apply(lambda x: x if x not in scoredict["step_down"] else None)
                     .alias("in_sd")
                 ),
             )

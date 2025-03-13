@@ -205,8 +205,8 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
     
     # Pre-group data for faster access
     log_info("Pre-grouping data for faster access")
-    exon_dict = dict(exon_df.partition_by("tran_id"))
-    orf_dict = dict(orf_df.partition_by("tran_id"))
+    exon_dict = {group[0]: group[1] for group in exon_df.partition_by("tran_id")}
+    orf_dict = {group[0]: group[1] for group in orf_df.partition_by("tran_id")}
     
     # Process in batches to manage memory
     all_results = []

@@ -162,12 +162,17 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_s
         tran_reads = transcriptreads(bwfile, exons)
     
     if tran_reads.is_empty():
+        log_warning(f"No transcript reads found for {tran}")
         return transcript_results
         
     for typeorf in orfs["type"].unique():
         orfs_filtered = orfs.filter(pl.col("type") == typeorf)
         
+        # Debugging: Log the filtered ORFs
+        log_info(f"Filtered ORFs for type {typeorf}: {orfs_filtered}")
+
         if orfs_filtered.is_empty():
+            log_warning(f"No ORFs found for type {typeorf} in transcript {tran}")
             continue
             
         if old_scoring:

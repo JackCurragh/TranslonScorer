@@ -304,6 +304,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
             old_scoring=old_scoring, 
             sru_range=sru_range
         )
+        log_info(f"Processing batch {batch_start//batch_size + 1}/{(total_transcripts + batch_size - 1)//batch_size}: "
         
         batch_results = []
         # Process batch in parallel

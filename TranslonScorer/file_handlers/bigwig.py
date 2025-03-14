@@ -152,62 +152,40 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_s
     orfs = next((df for df in orf_partitions if tran in df["tran_id"].unique()), pl.DataFrame())
     
     transcript_results = []
-    log_info(f"Processing transcript {tran}")
     
     if exons.is_empty():
         log_warning(f"No exon data found for transcript {tran}")
         return transcript_results
     
-    log_info(f"Exon data found for transcript {tran}")
-    
     with bw.open(bwfile_path) as bwfile:
-        log_info(f"BigWig file opened for transcript {tran}")
         tran_reads = transcriptreads(bwfile, exons)
-        log_info(f"Transcript reads calculated for transcript {tran}")
 
     if tran_reads.is_empty():
         log_warning(f"No transcript reads found for {tran}")
         return transcript_results
-        
-    log_info(f"Transcript reads found for transcript {tran}")
     
     for typeorf in orfs["type"].unique():
         orfs_filtered = orfs.filter(pl.col("type") == typeorf)
-        log_info(f"Filtered ORFs for type {typeorf}: {orfs_filtered}")
 
-        # Debugging: Check if orfs_filtered is empty
         if orfs_filtered.is_empty():
             log_warning(f"No ORFs found for type {typeorf} in transcript {tran}")
             continue
-        
-        # Log the contents of orfs_filtered
-        log_info(f"ORFs filtered for type {typeorf}: {orfs_filtered}")
 
         if old_scoring:
             orfs_filtered = oldscoring(
                 orfs_filtered, tran_reads, sru_range, typeorf
             )
-            # Ensure orfs_filtered is a DataFrame
-            if isinstance(orfs_filtered, dict):
-                orfs_filtered = pl.DataFrame(orfs_filtered)
             transcript_results.append(orfs_filtered)
         else:
             emptyscore_df = existingscore(orfs_filtered, typeorf, {"rise_up": {}, "step_down": {}})
             if not emptyscore_df.is_empty():
-                log_info(f"Scoring ORFs for type {typeorf} in transcript {tran}")
                 scoredict = newscoring(
                     emptyscore_df, tran_reads, sru_range, typeorf, {"rise_up": {}, "step_down": {}}
                 )
-                log_info(f"Assigned scores for type {typeorf} in transcript {tran}")
                 orfs_filtered = assigningscore(
                     orfs_filtered, scoredict, typeorf
                 )
-                log_info(f"Global scores assigned for type {typeorf} in transcript {tran}")
                 orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
-                log_info(f"Global scores calculated for type {typeorf} in transcript {tran}")
-                # Ensure orfs_filtered is a DataFrame
-                if isinstance(orfs_filtered, dict):
-                    orfs_filtered = pl.DataFrame(orfs_filtered)
                 transcript_results.append(orfs_filtered)
     
     return transcript_results
@@ -227,40 +205,31 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=1000):
     Returns:
         DataFrame: Scored ORFs
     """
-    log_info("Opening bigWig file")
     bwfile_path = bigwig  # Store the path instead of opening it here
-    
-    log_info("Loading exon and ORF data")
     
     # Check if exon is a file path or a DataFrame
     if isinstance(exon, str):
-        log_info(f"Reading exon data from file: {exon}")
         if os.path.getsize(exon) > 1e9:  # 1 GB
             exon_df = pl.scan_csv(exon, has_header=True, separator=",").collect()
         else:
             exon_df = pl.read_csv(exon, has_header=True, separator=",")
     else:
-        log_info("Using provided exon DataFrame")
         exon_df = exon
 
     # Similar check for ORFs
     if isinstance(orfs, str):
-        log_info(f"Reading ORFs data from file: {orfs}")
         if os.path.getsize(orfs) > 1e9:  # 1 GB
             orf_df = pl.scan_csv(orfs, has_header=True, separator=",").collect()
         else:
             orf_df = pl.read_csv(orfs, has_header=True, separator=",")
     else:
-        log_info("Using provided ORFs DataFrame")
         orf_df = orfs
 
     # Get unique transcripts
     unique_transcripts = orf_df["tran_id"].unique()
     total_transcripts = len(unique_transcripts)
-    log_info(f"Scoring {total_transcripts} transcripts")
     
     # Pre-group data for faster access
-    log_info("Pre-grouping data for faster access")
     exon_partitions = exon_df.partition_by("tran_id")
     orf_partitions = orf_df.partition_by("tran_id")
     
@@ -270,9 +239,6 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=1000):
     for batch_start in range(0, total_transcripts, batch_size):
         batch_end = min(batch_start + batch_size, total_transcripts)
         batch_transcripts = unique_transcripts[batch_start:batch_end]
-        
-        log_info(f"Processing batch {batch_start//batch_size + 1}/{(total_transcripts + batch_size - 1)//batch_size}: "
-                 f"transcripts {batch_start+1} to {batch_end}")
         
         for tran in batch_transcripts:
             # Call process_transcript directly for each transcript
@@ -293,9 +259,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=1000):
         return pl.DataFrame()
     
     try:
-        log_info("Combining all scored ORFs")
         final_df = pl.concat(all_results)
-        log_info(f"Scored {len(final_df)} ORFs in total")
         return final_df
     except Exception as exc:
         log_error(f"Error combining all results: {exc}")

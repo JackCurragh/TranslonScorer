@@ -312,7 +312,7 @@ def globalscores(df, tran_reads, typeorf):
         DataFrame: DataFrame with calculated global scores
     """
     try:
-        batch_size = 100  # Process in small batches
+        batch_size = 5  # Process in small batches
         total_rows = len(df)
         
         # Initialize result lists
@@ -339,6 +339,7 @@ def globalscores(df, tran_reads, typeorf):
             
             # Clean up
             gc.collect()
+            log_info(f"Processing batch from index {i} to {end} with {end - i} rows.")
         
         # Add score columns to the DataFrame
         result_df = df.with_columns([
@@ -496,7 +497,7 @@ def orfrelativeposition(annotation, df, cds_df):
     df = df.join(cds_df.select(["tran_id", "tran_start", "tran_stop"]), on="tran_id", how="left")
 
     # Process in batches for memory efficiency
-    batch_size = 100
+    batch_size = 1000
     total_rows = len(df)
     type_values = [""] * total_rows
     

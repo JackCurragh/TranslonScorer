@@ -153,12 +153,13 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_s
     
     transcript_results = []
     log_info(f"Processing transcript {tran}")
+    
     if exons.is_empty():
         log_warning(f"No exon data found for transcript {tran}")
         return transcript_results
     
     log_info(f"Exon data found for transcript {tran}")
-    # Open the BigWig file within this function
+    
     with bw.open(bwfile_path) as bwfile:
         log_info(f"BigWig file opened for transcript {tran}")
         tran_reads = transcriptreads(bwfile, exons)
@@ -169,16 +170,19 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_s
         return transcript_results
         
     log_info(f"Transcript reads found for transcript {tran}")
+    
     for typeorf in orfs["type"].unique():
         orfs_filtered = orfs.filter(pl.col("type") == typeorf)
         log_info(f"Filtered ORFs for type {typeorf}: {orfs_filtered}")
-        # Debugging: Log the filtered ORFs
-        log_info(f"Filtered ORFs for type {typeorf}: {orfs_filtered}")
 
+        # Debugging: Check if orfs_filtered is empty
         if orfs_filtered.is_empty():
             log_warning(f"No ORFs found for type {typeorf} in transcript {tran}")
             continue
-            
+        
+        # Log the contents of orfs_filtered
+        log_info(f"ORFs filtered for type {typeorf}: {orfs_filtered}")
+
         if old_scoring:
             orfs_filtered = oldscoring(
                 orfs_filtered, tran_reads, sru_range, typeorf

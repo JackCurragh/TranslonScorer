@@ -20,8 +20,8 @@ def sru_score(position, tran_reads, sru_range, direction):
         float: Calculated SRU score
     """
     try:
-        # Convert to lazy if not already
-        lazy_reads = tran_reads.lazy() if not tran_reads.is_lazy() else tran_reads
+        # Convert to lazy - use to_lazy() as is_lazy() doesn't exist
+        lazy_reads = tran_reads.lazy()
         
         if direction == 0:
             # Calculate rise up score - more efficient lazy filtering
@@ -74,8 +74,8 @@ def calculate_scores(start, stop, tran_reads):
         tuple: (HRF score, average score, non-zero coverage score)
     """
     try:
-        # Convert to lazy if not already
-        lazy_reads = tran_reads.lazy() if not tran_reads.is_lazy() else tran_reads
+        # Convert to lazy - use to_lazy() directly instead of checking is_lazy()
+        lazy_reads = tran_reads.lazy()
         
         # Filter the region using lazy evaluation
         region_counts = lazy_reads.filter(
@@ -118,8 +118,8 @@ def process_orf_chunk(chunk, tran_reads, sru_range, typeorf):
     Returns:
         DataFrame: Processed ORF DataFrame with scores
     """
-    # Convert to lazy for memory efficiency
-    lazy_tran_reads = tran_reads.lazy() if not tran_reads.is_lazy() else tran_reads
+    # Convert to lazy for memory efficiency - no is_lazy() check
+    lazy_tran_reads = tran_reads.lazy()
     
     # Initialize result lists
     rise_up_values = []
@@ -236,8 +236,8 @@ def batch_cache_positions(positions, tran_reads, sru_range, direction, scoredict
     Returns:
         dict: Updated score dictionary
     """
-    # Convert to lazy for memory efficiency
-    lazy_tran_reads = tran_reads.lazy() if not tran_reads.is_lazy() else tran_reads
+    # Convert to lazy for memory efficiency - no is_lazy() check
+    lazy_tran_reads = tran_reads.lazy()
     
     # Filter positions not in cache
     new_positions = [pos for pos in positions if pos not in scoredict[key]]
@@ -360,8 +360,8 @@ def process_global_scores_chunk(chunk, tran_reads, typeorf):
     Returns:
         DataFrame: Processed ORF DataFrame with global scores
     """
-    # Convert to lazy for memory efficiency
-    lazy_tran_reads = tran_reads.lazy() if not tran_reads.is_lazy() else tran_reads
+    # Convert to lazy for memory efficiency - no is_lazy() check
+    lazy_tran_reads = tran_reads.lazy()
     
     # Initialize result lists
     hrf_values = []
@@ -403,7 +403,6 @@ def process_global_scores_chunk(chunk, tran_reads, typeorf):
         )
     
     return result
-
 
 def globalscores(df, tran_reads, typeorf):
     """

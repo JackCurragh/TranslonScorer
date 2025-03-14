@@ -525,7 +525,7 @@ def orfrelativeposition(annotation, df, cds_df):
         gc.collect()
     
     # Add type column
-    df = df.with_column(pl.Series("type", type_values))
+    df = df.with_columns(pl.Series("type", type_values))
 
     # Filter CDS
     cdslist = df.filter(pl.col("type") == "CDS")["tran_id"].unique().to_list()

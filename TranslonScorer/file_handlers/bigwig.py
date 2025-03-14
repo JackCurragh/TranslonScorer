@@ -5,7 +5,7 @@ This module contains functions for reading and processing BigWig files,
 including conversion to other formats and coordinate transformations.
 """
 
-from typing import Dict, List, Optional, Union, Tuple
+from typing import Dict, List, Optional, Union, Tuple, Any
 import polars as pl
 import pyBigWig as bw
 from ..utils.logging import log_info, log_warning, log_error
@@ -44,6 +44,17 @@ def open_bigwig(path: str):
             bw_file.close()
 
 
+def _flatten_list_or_value(value: Any) -> List:
+    """
+    Helper function to flatten a value that might be a list or a single value.
+    Returns a list in either case.
+    """
+    if isinstance(value, list):
+        return value
+    else:
+        return [value]
+
+
 def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     """
     Converts a BigWig file to a DataFrame based on provided exon annotation.
@@ -54,6 +65,7 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
         An open BigWig file handle
     exon_df : polars.DataFrame
         DataFrame containing exon annotations with columns: chr, start, stop
+        The start and stop columns may contain lists of positions
         
     Returns:
     -------
@@ -81,59 +93,73 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     start_time = time.time()
     
     try:
-        # Extract values as simple Python lists for safer processing
-        chroms = exon_df["chr"].to_list()
-        starts = exon_df["start"].to_list()
-        stops = exon_df["stop"].to_list()
-        
-        # Process each region
-        for i in range(len(chroms)):
-            chrom = chroms[i]
-            start = int(starts[i]) if not isinstance(starts[i], int) else starts[i]
-            stop = int(stops[i]) if not isinstance(stops[i], int) else stops[i]
+        # Process each row in the exon dataframe
+        for row in exon_df.iter_rows(named=True):
+            chrom = row["chr"]
             
             if chrom not in valid_chroms:
                 log_warning(f"Chromosome {chrom} not found in bigWig file")
                 continue
-                
-            if start >= stop:
-                log_warning(f"Invalid region {chrom}:{start}-{stop} (start >= stop)")
+            
+            # Handle both single values and lists for start/stop
+            starts = _flatten_list_or_value(row["start"])
+            stops = _flatten_list_or_value(row["stop"])
+            
+            # Make sure we have matching start/stop pairs
+            if len(starts) != len(stops):
+                log_warning(f"Mismatched start/stop lists for {chrom}: {len(starts)} starts, {len(stops)} stops")
                 failed_regions += 1
                 continue
             
-            # Check if region is too large
-            region_size = stop - start
-            if region_size > config.max_region_size:
-                log_warning(f"Very large region detected: {chrom}:{start}-{stop} ({region_size} bp). Chunking.")
+            # Process each start/stop pair
+            for start, stop in zip(starts, stops):
+                # Ensure start and stop are integers
+                try:
+                    start = int(start)
+                    stop = int(stop)
+                except (ValueError, TypeError) as e:
+                    log_warning(f"Invalid start/stop values for {chrom}: {start}, {stop} - {str(e)}")
+                    failed_regions += 1
+                    continue
                 
-                # Process in chunks to avoid memory issues
-                for chunk_start in range(start, stop, config.chunk_size):
-                    chunk_end = min(chunk_start + config.chunk_size, stop)
+                if start >= stop:
+                    log_warning(f"Invalid region {chrom}:{start}-{stop} (start >= stop)")
+                    failed_regions += 1
+                    continue
+                
+                # Check if region is too large
+                region_size = stop - start
+                if region_size > config.max_region_size:
+                    log_warning(f"Very large region detected: {chrom}:{start}-{stop} ({region_size} bp). Chunking.")
                     
+                    # Process in chunks to avoid memory issues
+                    for chunk_start in range(start, stop, config.chunk_size):
+                        chunk_end = min(chunk_start + config.chunk_size, stop)
+                        
+                        try:
+                            values = bwfile.values(chrom, chunk_start, chunk_end)
+                            if values and any(v is not None for v in values):
+                                reads.extend(v if v is not None else 0.0 for v in values)
+                            else:
+                                reads.extend([0.0] * (chunk_end - chunk_start))
+                        except Exception as e:
+                            log_error(f"Error processing chunk {chrom}:{chunk_start}-{chunk_end}: {str(e)}")
+                            reads.extend([0.0] * (chunk_end - chunk_start))
+                    
+                    processed_regions += 1
+                else:
+                    # Process the whole region at once
                     try:
-                        values = bwfile.values(chrom, chunk_start, chunk_end)
+                        values = bwfile.values(chrom, start, stop)
                         if values and any(v is not None for v in values):
                             reads.extend(v if v is not None else 0.0 for v in values)
+                            processed_regions += 1
                         else:
-                            reads.extend([0.0] * (chunk_end - chunk_start))
+                            reads.extend([0.0] * (stop - start))
+                            processed_regions += 1
                     except Exception as e:
-                        log_error(f"Error processing chunk {chrom}:{chunk_start}-{chunk_end}: {str(e)}")
-                        reads.extend([0.0] * (chunk_end - chunk_start))
-                
-                processed_regions += 1
-            else:
-                # Process the whole region at once
-                try:
-                    values = bwfile.values(chrom, start, stop)
-                    if values and any(v is not None for v in values):
-                        reads.extend(v if v is not None else 0.0 for v in values)
-                        processed_regions += 1
-                    else:
-                        reads.extend([0.0] * (stop - start))
-                        processed_regions += 1
-                except Exception as e:
-                    log_error(f"Could not read values for {chrom}:{start}-{stop}: {str(e)}")
-                    failed_regions += 1
+                        log_error(f"Could not read values for {chrom}:{start}-{stop}: {str(e)}")
+                        failed_regions += 1
                     
     except Exception as e:
         log_error(f"Error processing exon data: {str(e)}")
@@ -148,8 +174,7 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     rate = processed_regions / max(0.001, duration)
     log_info(f"Successfully processed {processed_regions} regions ({rate:.2f} regions/sec), {failed_regions} failed")
     
-    # Create DataFrame safely using Python lists instead of numpy arrays
-    # This avoids array size issues that were causing crashes
+    # Create DataFrame safely
     return pl.DataFrame({
         "tran_start": list(range(len(reads))),
         "counts": reads

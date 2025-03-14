@@ -83,27 +83,41 @@ def calculate_scores(start, stop, tran_reads):
             (pl.col("tran_start") <= stop)
         ).select("counts")
         
-        # Compute all metrics in a single query
-        metrics = region_counts.select([
-            pl.col("counts").max().alias("hrf"),
-            pl.col("counts").mean().alias("avg"),
-            (pl.col("counts") > 0).sum() / pl.count().alias("nzc")
-        ]).collect()
-        
-        if metrics.height == 0:
+        # Calculate metrics separately to avoid issues with nzc calculation
+        try:
+            # Compute max and mean
+            basic_metrics = region_counts.select([
+                pl.col("counts").max().alias("hrf"),
+                pl.col("counts").mean().alias("avg")
+            ]).collect()
+            
+            if basic_metrics.height == 0:
+                return (0.0, 0.0, 0.0)
+                
+            # Extract results
+            hrf = basic_metrics.get_column("hrf")[0] if basic_metrics.get_column("hrf")[0] is not None else 0.0
+            avg = basic_metrics.get_column("avg")[0] if basic_metrics.get_column("avg")[0] is not None else 0.0
+            
+            # Calculate nzc separately with proper error handling
+            nzc_counts = region_counts.select([
+                (pl.col("counts") > 0).sum().alias("nonzero_count"),
+                pl.count().alias("total_count")
+            ]).collect()
+            
+            nonzero_count = nzc_counts.get_column("nonzero_count")[0] if nzc_counts.get_column("nonzero_count")[0] is not None else 0
+            total_count = nzc_counts.get_column("total_count")[0] if nzc_counts.get_column("total_count")[0] is not None else 1
+            
+            # Avoid division by zero
+            nzc = nonzero_count / total_count if total_count > 0 else 0.0
+        except Exception as e:
+            log_error(f"Error calculating specific metric: {str(e)}")
             return (0.0, 0.0, 0.0)
-        
-        # Extract results
-        hrf = metrics.get_column("hrf")[0] if metrics.get_column("hrf")[0] is not None else 0.0
-        avg = metrics.get_column("avg")[0] if metrics.get_column("avg")[0] is not None else 0.0
-        nzc = metrics.get_column("nzc")[0] if metrics.get_column("nzc")[0] is not None else 0.0
         
         return (hrf, avg, nzc)
         
     except Exception as e:
         log_error(f"Error calculating region scores: {str(e)}")
         return (0.0, 0.0, 0.0)
-
 
 def process_orf_chunk(chunk, tran_reads, sru_range, typeorf):
     """

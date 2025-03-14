@@ -251,59 +251,39 @@ def globalscores(df, tran_reads, typeorf):
 
 def existingscore(df, typeorf, scoredict):
     """
-    Filters the DataFrame to exclude rows with existing scores in the scoring dictionary.
+    Optimized version to filter out ORFs that already have scores in the cache.
 
-    This function filters out 'start' and 'stop' values from the DataFrame `df` that already have
-    corresponding scores in the `scoredict`. The filtering behavior depends on the type of ORF (`typeorf`).
-
-    Parameters:
-    df (pl.DataFrame): The input DataFrame containing 'start' and 'stop' columns.
-    typeorf (str): Type of ORF, can be 'uoORF', 'doORF', or any other value for different processing.
-    scoredict (dict): Dictionary containing the existing scores for 'rise_up' and 'step_down'.
+    Args:
+        df (DataFrame): Input DataFrame with ORF information
+        typeorf (str): Type of ORF ('uoORF', 'doORF', or other)
+        scoredict (dict): Dictionary of cached scores
 
     Returns:
-    pl.DataFrame or pl.Series: A filtered DataFrame or Series excluding rows with existing scores.
-
-    Notes:
-    - For 'uoORF', filters out 'start' values that exist in `scoredict['rise_up']`.
-    - For 'doORF', filters out 'stop' values that exist in `scoredict['step_down']`.
-    - For other types, filters out rows where either 'start' is in `scoredict['rise_up']` or
-      'stop' is in `scoredict['step_down']`, and retains rows where at least one of these conditions is met.
+        DataFrame/Series: Filtered data containing only ORFs needing scoring
     """
     try:
+        # Convert dict keys to sets for faster membership testing
+        rise_up_keys = set(scoredict["rise_up"].keys())
+        step_down_keys = set(scoredict["step_down"].keys())
+        
         if typeorf == "uoORF":
-            df = (
-                df["start"]
-                .map_elements(lambda x: x if not x in scoredict["rise_up"] else None)
-                .drop_nulls()
-            )
-            return df
+            # Filter in one vectorized operation
+            return df.filter(~pl.col("start").is_in(rise_up_keys))
+            
         elif typeorf == "doORF":
-            df = (
-                df["stop"]
-                .map_elements(lambda x: x if not x in scoredict["step_down"] else None)
-                .drop_nulls()
-            )
-            return df
+            # Filter in one vectorized operation
+            return df.filter(~pl.col("stop").is_in(step_down_keys))
+            
         else:
-            df = df.select(["start", "stop"]).with_columns(
-                (
-                    pl.col("start")
-                    .apply(lambda x: x if not x in scoredict["rise_up"] else None)
-                    .alias("in_ru")
-                ),
-                (
-                    pl.col("stop")
-                    .apply(lambda x: x if not x in scoredict["step_down"] else None)
-                    .alias("in_sd")
-                ),
+            # For mixed types, check both start and stop
+            filtered_df = df.filter(
+                (~pl.col("start").is_in(rise_up_keys)) | 
+                (~pl.col("stop").is_in(step_down_keys))
             )
-            df = df.filter(
-                (pl.col("in_ru").is_not_null()) | (pl.col("in_sd").is_not_null())
-            ).select(["start", "stop"])
-            return df
+            return filtered_df
+            
     except Exception as e:
-        log_error(f"Error checking existing scores: {str(e)}")
+        log_error(f"Error in optimized existing score check: {str(e)}")
         return pl.DataFrame()
 
 

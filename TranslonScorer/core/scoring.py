@@ -31,7 +31,7 @@ def _precompute_tran_reads(tran_reads):
     return positions, counts, total_positions
 
 
-def sru_score_vectorized(positions, tran_reads_data, sru_range, direction=0):
+def sru_score(positions, tran_reads_data, sru_range, direction=0):
     """
     Vectorized version of SRU score calculation for multiple positions at once.
     
@@ -77,7 +77,7 @@ def sru_score_vectorized(positions, tran_reads_data, sru_range, direction=0):
         return [0.0] * len(positions)
 
 
-def calculate_scores_vectorized(starts, stops, tran_reads_data):
+def calculate_scores(starts, stops, tran_reads_data):
     """
     Vectorized version to calculate HRF, average, and non-zero coverage scores for multiple regions.
     

@@ -351,47 +351,53 @@ def existingscore(df, typeorf, scoredict):
 
 def assigningscore(df, scoredict, typeorf):
     """
-    Optimized version to assign cached scores to ORFs using vectorized operations.
+    Assigns scores from a dictionary to a DataFrame based on the type of ORF.
 
-    Args:
-        df (DataFrame): Input DataFrame with ORF information
-        scoredict (dict): Dictionary of cached scores
-        typeorf (str): Type of ORF ('uoORF', 'doORF', or other)
+    This function updates the DataFrame `df` by assigning scores from the `scoredict` to the
+    'rise_up' and 'step_down' columns based on the 'start' and 'stop' values. The type of ORF (`typeorf`)
+    determines which scores are assigned.
+
+    Parameters:
+    df (pl.DataFrame): The input DataFrame containing 'start' and 'stop' columns.
+    scoredict (dict): Dictionary containing the scores for 'rise_up' and 'step_down'.
+    typeorf (str): Type of ORF, can be 'uoORF', 'doORF', or any other value for different processing.
 
     Returns:
-        DataFrame: DataFrame with scores assigned from cache
+    pl.DataFrame: The modified DataFrame with assigned scores.
+
+    Notes:
+    - For 'uoORF', assigns 'rise_up' scores from `scoredict` based on 'start' values and sets 'step_down' to 0.0.
+    - For 'doORF', assigns 'step_down' scores from `scoredict` based on 'stop' values and sets 'rise_up' to 0.0.
+    - For other types, assigns both 'rise_up' and 'step_down' scores from `scoredict` based on 'start' and 'stop' values.
     """
     try:
-        # Convert dictionaries to Series for faster lookups
-        rise_up_series = pl.Series(list(scoredict["rise_up"].keys()), 
-                                  list(scoredict["rise_up"].values()))
-        step_down_series = pl.Series(list(scoredict["step_down"].keys()), 
-                                    list(scoredict["step_down"].values()))
-        
-        # Create lookup expressions
         if typeorf == "uoORF":
-            result_df = df.with_columns([
-                # Use map_dict for faster lookups
-                pl.col("start").map_dict(scoredict["rise_up"], default=0.0).alias("rise_up"),
-                pl.lit(0.0).alias("step_down")
-            ])
-            
+            df = df.with_columns(
+                (pl.col("start").apply(lambda x: scoredict["rise_up"].get(x, 0.0)).alias("rise_up")),
+                (pl.lit(0.0).alias("step_down")),
+            )
+
         elif typeorf == "doORF":
-            result_df = df.with_columns([
-                pl.lit(0.0).alias("rise_up"),
-                pl.col("stop").map_dict(scoredict["step_down"], default=0.0).alias("step_down")
-            ])
-            
+            df = df.with_columns(
+                (
+                    pl.col("stop")
+                    .apply(lambda x: scoredict["step_down"].get(x, 0.0))
+                    .alias("step_down")
+                ),
+                (pl.lit(0.0).alias("rise_up")),
+            )
         else:
-            result_df = df.with_columns([
-                pl.col("start").map_dict(scoredict["rise_up"], default=0.0).alias("rise_up"),
-                pl.col("stop").map_dict(scoredict["step_down"], default=0.0).alias("step_down")
-            ])
-            
-        return result_df
-        
+            df = df.with_columns(
+                (pl.col("start").apply(lambda x: scoredict["rise_up"].get(x, 0.0)).alias("rise_up")),
+                (
+                    pl.col("stop")
+                    .apply(lambda x: scoredict["step_down"].get(x, 0.0))
+                    .alias("step_down")
+                ),
+            )
+        return df
     except Exception as e:
-        log_error(f"Error in optimized score assignment: {str(e)}")
+        log_error(f"Error assigning scores: {str(e)}")
         return pl.DataFrame()
 
 

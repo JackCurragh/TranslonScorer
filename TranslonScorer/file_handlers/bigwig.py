@@ -239,6 +239,11 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=1000, max_wor
             chrom_exons = exon_df.filter(pl.col("chr") == chrom)
             starts = chrom_exons["start"].to_list()
             stops = chrom_exons["stop"].to_list()
+
+            # Ensure starts and stops are numeric
+            starts = [int(start) for start in starts]
+            stops = [int(stop) for stop in stops]
+
             all_reads[chrom] = bwfile.values(chrom, starts, stops)
 
     # Process transcripts in parallel

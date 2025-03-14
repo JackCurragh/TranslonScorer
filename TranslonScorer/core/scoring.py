@@ -214,7 +214,7 @@ def newscoring(df, tran_reads, sru_range, typeorf, scoredict):
         dict: Updated score dictionary
     """
     try:
-        batch_size = 50  # Process in small batches
+        batch_size = 5  # Process in small batches
         
         if not typeorf == "doORF":
             if not isinstance(df, pl.Series):
@@ -491,14 +491,12 @@ def orfrelativeposition(annotation, df, cds_df):
 
     tranids = cds_df["tran_id"].unique().to_list()
 
-    print(cds_df.head())
-    print(df.head())
 
     # Join df with cds_df to include cds_start and cds_stop
     df = df.join(cds_df.select(["tran_id", "tran_start", "tran_stop"]), on="tran_id", how="left")
 
     # Process in batches for memory efficiency
-    batch_size = 1000
+    batch_size = 100
     total_rows = len(df)
     type_values = [""] * total_rows
     

@@ -130,9 +130,6 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
         "counts": reads
     })
 
-
-
-
 def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_scoring, sru_range):
     """
     Process a single transcript.
@@ -190,7 +187,7 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_s
     
     return transcript_results
 
-def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=1000):
+def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=1000, max_workers=None):
     """
     Score ORFs using bigwig coverage data with optimized performance.
     
@@ -201,6 +198,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=1000):
         old_scoring (bool): Whether to use old scoring method
         sru_range (int): Range for SRU score calculation
         batch_size (int): Size of transcript batches for processing
+        max_workers (int, optional): Maximum number of worker processes
         
     Returns:
         DataFrame: Scored ORFs
@@ -236,22 +234,27 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=1000):
     # Process in batches to manage memory
     all_results = []
     
-    for batch_start in range(0, total_transcripts, batch_size):
-        batch_end = min(batch_start + batch_size, total_transcripts)
-        batch_transcripts = unique_transcripts[batch_start:batch_end]
+    if max_workers is None:
+        max_workers = os.cpu_count() or 4  # Default to number of CPUs if not specified
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
         
-        for tran in batch_transcripts:
-            # Call process_transcript directly for each transcript
-            transcript_results = process_transcript(
-                tran, 
-                exon_partitions, 
-                orf_partitions, 
-                bwfile_path, 
-                old_scoring, 
-                sru_range
-            )
-            if transcript_results:
-                all_results.extend(transcript_results)
+        for batch_start in range(0, total_transcripts, batch_size):
+            batch_end = min(batch_start + batch_size, total_transcripts)
+            batch_transcripts = unique_transcripts[batch_start:batch_end]
+            
+            for tran in batch_transcripts:
+                # Submit the process_transcript function to the executor
+                futures.append(executor.submit(process_transcript, tran, exon_partitions, orf_partitions, bwfile_path, old_scoring, sru_range))
+
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                transcript_results = future.result()
+                if transcript_results:
+                    all_results.extend(transcript_results)
+            except Exception as exc:
+                log_error(f"Transcript processing generated an exception: {exc}")
 
     # Combine all results
     if not all_results:

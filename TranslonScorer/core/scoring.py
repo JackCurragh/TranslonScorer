@@ -145,10 +145,10 @@ def oldscoring(df, tran_reads, sru_range, typeorf):
         
         # Calculate SRU scores based on ORF type
         if typeorf == "uoORF" or typeorf not in ("uoORF", "doORF"):
-            rise_up_scores = sru_score_vectorized(starts, tran_reads_data, sru_range, 0)
+            rise_up_scores = sru_score(starts, tran_reads_data, sru_range, 0)
             
         if typeorf == "doORF" or typeorf not in ("uoORF", "doORF"):
-            step_down_scores = sru_score_vectorized(stops, tran_reads_data, sru_range, 1)
+            step_down_scores = sru_score(stops, tran_reads_data, sru_range, 1)
         
         # Calculate region scores
         hrf_scores, avg_scores, nzc_scores = calculate_scores_vectorized(
@@ -188,7 +188,7 @@ def compute_score_dict(unique_positions, tran_reads_data, sru_range, direction):
     Returns:
         dict: Dictionary mapping positions to their scores
     """
-    scores = sru_score_vectorized(unique_positions, tran_reads_data, sru_range, direction)
+    scores = sru_score(unique_positions, tran_reads_data, sru_range, direction)
     # Create dictionary in one go instead of repeated updates
     return dict(zip(unique_positions, scores))
 
@@ -280,7 +280,7 @@ def globalscores(df, tran_reads, typeorf):
         stops = df["stop"].to_list()
         
         # Calculate region scores in one vectorized operation
-        hrf_scores, avg_scores, nzc_scores = calculate_scores_vectorized(
+        hrf_scores, avg_scores, nzc_scores = calculate_scores(
             starts, stops, tran_reads_data
         )
         

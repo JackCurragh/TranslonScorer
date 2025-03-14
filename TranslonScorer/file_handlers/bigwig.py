@@ -212,7 +212,7 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_s
     
     return transcript_results
 
-def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_size=1000):
+def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=1000):
     """
     Score ORFs using bigwig coverage data with optimized performance.
     
@@ -222,7 +222,6 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
         orfs (str or DataFrame): Path to ORFs file or DataFrame
         old_scoring (bool): Whether to use old scoring method
         sru_range (int): Range for SRU score calculation
-        max_workers (int, optional): Maximum number of worker processes
         batch_size (int): Size of transcript batches for processing
         
     Returns:
@@ -244,24 +243,6 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
         log_info("Using provided exon DataFrame")
         exon_df = exon
 
-    # Optimize string conversions
-    string_columns = ["start", "stop", "tran_start", "tran_stop"]
-    conversions = []
-    for col in string_columns:
-        if col in exon_df.columns:
-            col_dtype = exon_df.schema[col]
-            if col_dtype == pl.Utf8:  # Check if the column is string type
-                conversions.append(
-                    pl.col(col)
-                    .str.split(",")
-                    .map_elements(lambda x: [int(i) for i in x])
-                    .alias(col)
-                )
-    
-    # Apply all conversions in one operation if any exist
-    if conversions:
-        exon_df = exon_df.with_columns(conversions)
-    
     # Similar check for ORFs
     if isinstance(orfs, str):
         log_info(f"Reading ORFs data from file: {orfs}")
@@ -286,12 +267,6 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
     # Process in batches to manage memory
     all_results = []
     
-    # Determine max_workers based on CPU count if not specified
-    if max_workers is None:
-        max_workers = min(os.cpu_count() or 4, 8)  # Reasonable default
-    
-    log_info(f"Using {max_workers} parallel workers")
-    
     for batch_start in range(0, total_transcripts, batch_size):
         batch_end = min(batch_start + batch_size, total_transcripts)
         batch_transcripts = unique_transcripts[batch_start:batch_end]
@@ -299,33 +274,19 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, max_workers=None, batch_
         log_info(f"Processing batch {batch_start//batch_size + 1}/{(total_transcripts + batch_size - 1)//batch_size}: "
                  f"transcripts {batch_start+1} to {batch_end}")
         
-        # Create partial function with fixed arguments
-        process_func = partial(
-            process_transcript, 
-            exon_partitions=exon_partitions,  # Pass the list of partitions
-            orf_partitions=orf_partitions,     # Pass the list of partitions
-            bwfile_path=bwfile_path,            # Pass the path to the BigWig file
-            old_scoring=old_scoring, 
-            sru_range=sru_range
-        )
+        for tran in batch_transcripts:
+            # Call process_transcript directly for each transcript
+            transcript_results = process_transcript(
+                tran, 
+                exon_partitions, 
+                orf_partitions, 
+                bwfile_path, 
+                old_scoring, 
+                sru_range
+            )
+            if transcript_results:
+                all_results.extend(transcript_results)
 
-        batch_results = []
-        # Process batch in parallel
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            future_to_tran = {executor.submit(process_func, tran): tran for tran in batch_transcripts}
-
-            for future in concurrent.futures.as_completed(future_to_tran):
-
-                tran = future_to_tran[future]
-                try:
-                    transcript_results = future.result()
-                    log_info(f"Transcript {tran}: "
-                             f"Scored {len(transcript_results)} ORFs")
-                    if transcript_results:
-                        batch_results.extend(transcript_results)
-                except Exception as exc:
-                    log_error(f"Transcript {tran} generated an exception: {exc}")
-    
     # Combine all results
     if not all_results:
         log_warning("No ORFs were scored")

@@ -1,11 +1,11 @@
 """
-BigWig file handling functionality for TranslonScorer.
+BigWig file handling functionality for TranslonScorer with high-performance optimization.
 
-This module contains functions for reading and processing BigWig files,
+This module contains optimized functions for reading and processing BigWig files,
 including conversion to other formats and coordinate transformations.
 """
 
-from typing import Dict, List, Optional, Union, Tuple, Any
+from typing import Dict, List, Optional, Union, Tuple, Any, Set
 import polars as pl
 import pyBigWig as bw
 from ..utils.logging import log_info, log_warning, log_error
@@ -16,8 +16,12 @@ from functools import partial
 import os
 import time
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from contextlib import contextmanager
+import tempfile
+import pickle
+import itertools
+import gc
 
 
 @dataclass
@@ -27,7 +31,11 @@ class ProcessingConfig:
     batch_size: int = 50  # Number of transcripts to process in each batch
     sru_range: int = 100  # Range for SRU score calculation
     max_region_size: int = 1_000_000  # Maximum region size to process at once
-    chunk_size: int = 50_000  # Size of chunks for processing large regions
+    chunk_size: int = 100_000  # Size of chunks for processing large regions
+    use_temp_files: bool = True  # Use temporary files for large intermediate results
+    max_regions_per_worker: int = 500  # Maximum regions to process per worker
+    prefetch_bigwig: bool = True  # Prefetch BigWig data for common chromosomes
+    use_shared_data: bool = True  # Use shared memory for data when possible
 
 
 @contextmanager
@@ -44,6 +52,47 @@ def open_bigwig(path: str):
             bw_file.close()
 
 
+class BigWigCache:
+    """Cache for BigWig data to reduce repeated file access."""
+    
+    def __init__(self, bigwig_path, max_cache_size=1000):
+        self.bigwig_path = bigwig_path
+        self.max_cache_size = max_cache_size
+        self.cache = {}
+        self.chroms = set()
+        
+        # Initialize with chromosome information
+        with open_bigwig(bigwig_path) as bwfile:
+            self.chroms = set(bwfile.chroms().keys())
+    
+    def get_values(self, chrom, start, stop):
+        """Get values for a region, using cache if available."""
+        if chrom not in self.chroms:
+            return None
+            
+        # For very large regions, don't cache
+        if stop - start > 100000:
+            with open_bigwig(self.bigwig_path) as bwfile:
+                return bwfile.values(chrom, start, stop)
+        
+        # Check cache
+        cache_key = (chrom, start, stop)
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        # Fetch from file
+        with open_bigwig(self.bigwig_path) as bwfile:
+            values = bwfile.values(chrom, start, stop)
+            
+            # Manage cache size
+            if len(self.cache) >= self.max_cache_size:
+                # Remove a random item (simple strategy)
+                self.cache.pop(next(iter(self.cache)))
+            
+            self.cache[cache_key] = values
+            return values
+
+
 def _flatten_list_or_value(value: Any) -> List:
     """
     Helper function to flatten a value that might be a list or a single value.
@@ -53,6 +102,182 @@ def _flatten_list_or_value(value: Any) -> List:
         return value
     else:
         return [value]
+
+
+def extract_regions(exon_df: pl.DataFrame) -> List[Tuple[str, int, int]]:
+    """
+    Extract regions (chr, start, stop) from exon DataFrame.
+    Handles both list and scalar values.
+    
+    Returns:
+        List of (chr, start, stop) tuples
+    """
+    regions = []
+    
+    # Process each row in the exon dataframe
+    for row in exon_df.iter_rows(named=True):
+        chrom = row["chr"]
+        tran_id = row["tran_id"]
+        
+        # Handle both single values and lists for start/stop
+        starts = _flatten_list_or_value(row["start"])
+        stops = _flatten_list_or_value(row["stop"])
+        
+        # Make sure we have matching start/stop pairs
+        if len(starts) != len(stops):
+            log_warning(f"Mismatched start/stop lists for {tran_id} on {chrom}: {len(starts)} starts, {len(stops)} stops")
+            continue
+        
+        # Process each start/stop pair
+        for start, stop in zip(starts, stops):
+            # Ensure start and stop are integers
+            try:
+                start = int(start)
+                stop = int(stop)
+            except (ValueError, TypeError):
+                continue
+                
+            if start >= stop:
+                continue
+                
+            regions.append((chrom, start, stop, tran_id))
+    
+    return regions
+
+
+def process_region_batch(region_batch, bigwig_path, config=None):
+    """
+    Process a batch of regions from the BigWig file.
+    
+    Args:
+        region_batch: List of (chrom, start, stop, tran_id) tuples
+        bigwig_path: Path to BigWig file
+        config: ProcessingConfig object
+        
+    Returns:
+        Dictionary mapping transcript IDs to reads DataFrames
+    """
+    if config is None:
+        config = ProcessingConfig()
+        
+    # Create BigWig cache
+    bw_cache = BigWigCache(bigwig_path)
+    
+    # Group regions by transcript
+    regions_by_transcript = {}
+    for chrom, start, stop, tran_id in region_batch:
+        if tran_id not in regions_by_transcript:
+            regions_by_transcript[tran_id] = []
+        regions_by_transcript[tran_id].append((chrom, start, stop))
+    
+    results = {}
+    processed_regions = 0
+    failed_regions = 0
+    
+    # Process each transcript
+    for tran_id, regions in regions_by_transcript.items():
+        all_reads = []
+        
+        for chrom, start, stop in regions:
+            # Check if region is too large
+            region_size = stop - start
+            if region_size > config.max_region_size:
+                # Process in chunks
+                for chunk_start in range(start, stop, config.chunk_size):
+                    chunk_end = min(chunk_start + config.chunk_size, stop)
+                    
+                    try:
+                        values = bw_cache.get_values(chrom, chunk_start, chunk_end)
+                        if values and any(v is not None for v in values):
+                            all_reads.extend(v if v is not None else 0.0 for v in values)
+                        else:
+                            all_reads.extend([0.0] * (chunk_end - chunk_start))
+                            
+                        processed_regions += 1
+                    except Exception as e:
+                        failed_regions += 1
+                        all_reads.extend([0.0] * (chunk_end - chunk_start))
+            else:
+                # Process the whole region
+                try:
+                    values = bw_cache.get_values(chrom, start, stop)
+                    if values and any(v is not None for v in values):
+                        all_reads.extend(v if v is not None else 0.0 for v in values)
+                    else:
+                        all_reads.extend([0.0] * (stop - start))
+                        
+                    processed_regions += 1
+                except Exception:
+                    failed_regions += 1
+                    all_reads.extend([0.0] * (stop - start))
+        
+        # Create DataFrame for this transcript
+        if all_reads:
+            results[tran_id] = pl.DataFrame({
+                "tran_start": list(range(len(all_reads))),
+                "counts": all_reads
+            })
+    
+    return {
+        "results": results, 
+        "processed": processed_regions,
+        "failed": failed_regions
+    }
+
+
+def score_transcript_batch(transcript_batch, transcript_reads, orf_df, old_scoring, sru_range):
+    """
+    Score a batch of transcripts.
+    
+    Args:
+        transcript_batch: List of transcript IDs
+        transcript_reads: Dictionary mapping transcript IDs to reads DataFrames
+        orf_df: DataFrame containing all ORF data
+        old_scoring: Whether to use old scoring method
+        sru_range: Range for SRU score calculation
+        
+    Returns:
+        List of scored ORF DataFrames
+    """
+    batch_results = []
+    
+    for tran in transcript_batch:
+        if tran not in transcript_reads:
+            continue
+            
+        tran_reads = transcript_reads[tran]
+        orfs = orf_df.filter(pl.col("tran_id") == tran)
+        
+        if orfs.is_empty() or tran_reads.is_empty():
+            continue
+            
+        for typeorf in orfs["type"].unique():
+            orfs_filtered = orfs.filter(pl.col("type") == typeorf)
+            
+            if orfs_filtered.is_empty():
+                continue
+                
+            try:
+                if old_scoring:
+                    orfs_filtered = oldscoring(
+                        orfs_filtered, tran_reads, sru_range, typeorf
+                    )
+                    batch_results.append(orfs_filtered)
+                else:
+                    emptyscore_df = existingscore(orfs_filtered, typeorf, {"rise_up": {}, "step_down": {}})
+                    if not emptyscore_df.is_empty():
+                        scoredict = newscoring(
+                            emptyscore_df, tran_reads, sru_range, typeorf, {"rise_up": {}, "step_down": {}}
+                        )
+                        orfs_filtered = assigningscore(
+                            orfs_filtered, scoredict, typeorf
+                        )
+                        orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
+                        batch_results.append(orfs_filtered)
+            except Exception as e:
+                log_error(f"Error scoring ORFs for transcript {tran}, type {typeorf}: {str(e)}")
+    
+    return batch_results
 
 
 def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
@@ -65,7 +290,6 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
         An open BigWig file handle
     exon_df : polars.DataFrame
         DataFrame containing exon annotations with columns: chr, start, stop
-        The start and stop columns may contain lists of positions
         
     Returns:
     -------
@@ -107,7 +331,7 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
             
             # Make sure we have matching start/stop pairs
             if len(starts) != len(stops):
-                log_warning(f"Mismatched start/stop lists for {chrom}: {len(starts)} starts, {len(stops)} stops")
+                log_warning(f"Mismatched start/stop lists: {len(starts)} starts, {len(stops)} stops")
                 failed_regions += 1
                 continue
             
@@ -118,7 +342,7 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
                     start = int(start)
                     stop = int(stop)
                 except (ValueError, TypeError) as e:
-                    log_warning(f"Invalid start/stop values for {chrom}: {start}, {stop} - {str(e)}")
+                    log_warning(f"Invalid start/stop values: {start}, {stop} - {str(e)}")
                     failed_regions += 1
                     continue
                 
@@ -245,7 +469,11 @@ def process_transcript(tran, exon_df, orf_df, bwfile_path, old_scoring, sru_rang
 
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
-    Score ORFs using bigwig coverage data with optimized performance.
+    Score ORFs using bigwig coverage data with high-performance optimization.
+    
+    This implementation uses a two-stage approach:
+    1. Extract all BigWig data in parallel by region batches
+    2. Score all transcripts in parallel using the pre-extracted data
     
     Args:
         bigwig (str): Path to bigwig file
@@ -260,6 +488,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
         DataFrame: Scored ORFs
     """
     start_time = time.time()
+    config = ProcessingConfig(batch_size=batch_size, sru_range=sru_range)
     
     bwfile_path = bigwig  # Store the path instead of opening it here
     
@@ -281,66 +510,104 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     else:
         orf_df = orfs
 
-    # Get unique transcripts
-    unique_transcripts = orf_df["tran_id"].unique().to_list()
-    total_transcripts = len(unique_transcripts)
-    
-    log_info(f"Processing {total_transcripts} unique transcripts")
-    
     # Set max workers if not specified
     if max_workers is None:
         max_workers = os.cpu_count() or 4
+    config.max_workers = max_workers
     
-    log_info(f"Using {max_workers} workers with batch size {batch_size}")
+    log_info(f"Using {max_workers} workers for parallel processing")
     
-    # Process transcripts in batches
-    all_results = []
-    processed_count = 0
-    failed_count = 0
+    # STEP 1: Extract all regions from exon data
+    all_regions = extract_regions(exon_df)
+    total_regions = len(all_regions)
+    log_info(f"Found {total_regions} regions to process across all transcripts")
+    
+    # Group regions into batches for better work distribution
+    region_batches = []
+    for i in range(0, total_regions, config.max_regions_per_worker):
+        end = min(i + config.max_regions_per_worker, total_regions)
+        region_batches.append(all_regions[i:end])
+    
+    log_info(f"Distributing regions into {len(region_batches)} balanced batches")
+    
+    # STEP 2: Process all region batches in parallel
+    transcript_reads = {}  # Will hold reads for all transcripts
+    total_processed = 0
+    total_failed = 0
     
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
+        # Submit all batches for processing
+        future_to_batch = {
+            executor.submit(process_region_batch, batch, bwfile_path, config): i 
+            for i, batch in enumerate(region_batches)
+        }
         
-        for batch_start in range(0, total_transcripts, batch_size):
-            batch_end = min(batch_start + batch_size, total_transcripts)
-            batch_transcripts = unique_transcripts[batch_start:batch_end]
-            
-            for tran in batch_transcripts:
-                # Submit each transcript as a separate task
-                futures.append(executor.submit(
-                    process_transcript, 
-                    tran, 
-                    exon_df, 
-                    orf_df, 
-                    bwfile_path, 
-                    old_scoring, 
-                    sru_range
-                ))
-
+        # Process results as they complete
+        completed_batches = 0
+        for future in concurrent.futures.as_completed(future_to_batch):
+            try:
+                result = future.result()
+                completed_batches += 1
+                
+                # Merge results
+                transcript_reads.update(result["results"])
+                total_processed += result["processed"]
+                total_failed += result["failed"]
+                
+                # Log progress periodically
+                if completed_batches % 10 == 0 or completed_batches == len(region_batches):
+                    progress = completed_batches / len(region_batches) * 100
+                    log_info(f"Processed {completed_batches}/{len(region_batches)} region batches ({progress:.1f}%) "
+                             f"- {len(transcript_reads)}/{len(set(r[3] for r in all_regions))} transcripts with data")
+                    
+            except Exception as exc:
+                log_error(f"Region batch processing error: {exc}")
+    
+    log_info(f"Completed BigWig data extraction: {total_processed} regions processed, {total_failed} failed")
+    log_info(f"Extracted data for {len(transcript_reads)} transcripts")
+    
+    # STEP 3: Score transcripts using the extracted reads
+    # Get transcripts with available reads
+    available_transcripts = list(transcript_reads.keys())
+    log_info(f"Scoring {len(available_transcripts)} transcripts with available data")
+    
+    # Create batches for scoring
+    transcript_batches = []
+    for i in range(0, len(available_transcripts), config.batch_size):
+        end = min(i + config.batch_size, len(available_transcripts))
+        transcript_batches.append(available_transcripts[i:end])
+    
+    # Score in parallel
+    all_results = []
+    
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all batches for scoring
+        futures = []
+        for batch in transcript_batches:
+            futures.append(executor.submit(
+                score_transcript_batch, 
+                batch, 
+                transcript_reads, 
+                orf_df, 
+                old_scoring, 
+                sru_range
+            ))
+        
         # Process results as they complete
         completed = 0
         for future in concurrent.futures.as_completed(futures):
             try:
-                transcript_results = future.result()
-                if transcript_results:
-                    all_results.extend(transcript_results)
-                    processed_count += 1
+                batch_results = future.result()
+                if batch_results:
+                    all_results.extend(batch_results)
                 
                 completed += 1
-                if completed % 100 == 0 or completed == len(futures):
+                if completed % 10 == 0 or completed == len(futures):
                     progress = completed / len(futures) * 100
-                    elapsed = time.time() - start_time
-                    rate = completed / elapsed
-                    
-                    log_info(f"Processed {completed}/{len(futures)} transcripts ({progress:.1f}%) - "
-                             f"Rate: {rate:.2f} transcripts/sec")
+                    log_info(f"Scored {completed}/{len(futures)} transcript batches ({progress:.1f}%)")
                     
             except Exception as exc:
-                log_error(f"Transcript processing generated an exception: {exc}")
-                failed_count += 1
-
-    # Log final processing statistics
-    log_info(f"Completed processing: {processed_count} successful, {failed_count} failed")
+                log_error(f"Transcript batch scoring error: {exc}")
     
     # Combine all results
     if not all_results:
@@ -350,7 +617,8 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     try:
         final_df = pl.concat(all_results)
         duration = time.time() - start_time
-        log_info(f"Scoring completed in {duration:.2f} seconds ({total_transcripts/duration:.2f} transcripts/sec)")
+        transcripts_per_second = len(available_transcripts) / duration
+        log_info(f"Scoring completed in {duration:.2f} seconds ({transcripts_per_second:.2f} transcripts/sec)")
         return final_df
     except Exception as exc:
         log_error(f"Error combining all results: {exc}")

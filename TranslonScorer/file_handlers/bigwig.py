@@ -75,13 +75,11 @@ def transcriptreads_optimized(bwfile: bw.pyBigWig, exon_df: pl.DataFrame,
     if not all(col in exon_df.columns for col in ["chr", "start", "stop"]):
         raise ValueError("Exon DataFrame missing required columns (chr, start, stop)")
 
-    # Calculate total bases to process for better memory pre-allocation
-    approx_total_bases = exon_df.select(
-        pl.sum((pl.col("stop") - pl.col("start")).alias("bases"))
-    ).item()
+    # Estimate total region size for memory allocation
+    total_size_estimate = sum((stop - start) for start, stop in zip(exon_df["start"], exon_df["stop"]))
     
     # Pre-allocate a numpy array for better memory efficiency
-    reads = np.zeros(approx_total_bases, dtype=np.float32)
+    reads = np.zeros(total_size_estimate, dtype=np.float32)
     current_pos = 0
     
     processed_regions = 0
@@ -93,84 +91,68 @@ def transcriptreads_optimized(bwfile: bw.pyBigWig, exon_df: pl.DataFrame,
     start_time = time.time()
     
     try:
-        # Explode the lists into rows and sort by chromosome and start position
-        exon_exploded = exon_df.with_columns([
-            pl.col("start").alias("start_list"),
-            pl.col("stop").alias("stop_list")
-        ]).explode(["start_list", "stop_list"])
-        
-        # Sort by chromosome and start position
-        exon_exploded = exon_exploded.sort(["chr", "start_list"])
-        
-        # Process each chromosome separately to maintain order
-        for chrom in exon_exploded["chr"].unique():
+        # Process each chromosome and region directly without exploding
+        for i, row in enumerate(exon_df.iter_rows(named=True)):
+            chrom = row["chr"]
+            
             if chrom not in valid_chroms:
                 log_warning(f"Chromosome {chrom} not found in bigWig file")
                 continue
                 
-            chrom_data = exon_exploded.filter(pl.col("chr") == chrom)
+            start = row["start"] 
+            stop = row["stop"]
             
-            # Get sorted positions for this chromosome
-            starts = chrom_data["start_list"].to_list()
-            stops = chrom_data["stop_list"].to_list()
+            if start >= stop:
+                log_warning(f"Invalid region {chrom}:{start}-{stop} (start >= stop)")
+                failed_regions += 1
+                continue
+                
+            region_size = stop - start
             
-            # Process regions in batches
-            for i in range(0, len(starts), config.region_batch_size):
-                batch_starts = starts[i:i+config.region_batch_size]
-                batch_stops = stops[i:i+config.region_batch_size]
-                
-                # Filter out invalid regions
-                valid_regions = [(s, e) for s, e in zip(batch_starts, batch_stops) if s < e]
-                if not valid_regions:
-                    continue
-                
-                for start, stop in valid_regions:
-                    region_size = stop - start
-                    
-                    try:
-                        # Use stats method for small regions when appropriate
-                        if region_size < 100 and config.use_stats_when_possible:
-                            stats = bwfile.stats(chrom, start, stop, type="mean")
-                            if stats and stats[0] is not None:
-                                # Ensure we have enough space in our array
-                                if current_pos + region_size > len(reads):
-                                    reads = np.resize(reads, max(len(reads)*2, current_pos + region_size))
-                                
-                                # Fill with the mean value
-                                reads[current_pos:current_pos+region_size] = stats[0]
-                                current_pos += region_size
-                                processed_regions += 1
-                            else:
-                                # Fill with zeros
-                                if current_pos + region_size > len(reads):
-                                    reads = np.resize(reads, max(len(reads)*2, current_pos + region_size))
-                                # Already zeros by initialization
-                                current_pos += region_size
-                                processed_regions += 1
-                        else:
-                            # For larger regions, use values()
-                            values = bwfile.values(chrom, start, stop)
-                            if values and any(v is not None for v in values):
-                                # Convert to numpy array for faster processing
-                                values_array = np.array([v if v is not None else 0.0 for v in values], dtype=np.float32)
-                                
-                                # Ensure we have enough space
-                                if current_pos + len(values_array) > len(reads):
-                                    reads = np.resize(reads, max(len(reads)*2, current_pos + len(values_array)))
-                                
-                                reads[current_pos:current_pos+len(values_array)] = values_array
-                                current_pos += len(values_array)
-                                processed_regions += 1
-                            else:
-                                # Fill with zeros
-                                if current_pos + region_size > len(reads):
-                                    reads = np.resize(reads, max(len(reads)*2, current_pos + region_size))
-                                # Already zeros by initialization
-                                current_pos += region_size
-                                processed_regions += 1
-                    except RuntimeError as e:
-                        log_error(f"Could not read values for {chrom}:{start}-{stop}: {str(e)}")
-                        failed_regions += 1
+            try:
+                # Use stats method for small regions when appropriate
+                if region_size < 100 and config.use_stats_when_possible:
+                    stats = bwfile.stats(chrom, start, stop, type="mean")
+                    if stats and stats[0] is not None:
+                        # Ensure we have enough space in our array
+                        if current_pos + region_size > len(reads):
+                            reads = np.resize(reads, max(len(reads)*2, current_pos + region_size))
+                        
+                        # Fill with the mean value
+                        reads[current_pos:current_pos+region_size] = stats[0]
+                        current_pos += region_size
+                        processed_regions += 1
+                    else:
+                        # Fill with zeros
+                        if current_pos + region_size > len(reads):
+                            reads = np.resize(reads, max(len(reads)*2, current_pos + region_size))
+                        # Already zeros by initialization
+                        current_pos += region_size
+                        processed_regions += 1
+                else:
+                    # For larger regions, use values()
+                    values = bwfile.values(chrom, start, stop)
+                    if values and any(v is not None for v in values):
+                        # Convert to numpy array for faster processing
+                        values_array = np.array([v if v is not None else 0.0 for v in values], dtype=np.float32)
+                        
+                        # Ensure we have enough space
+                        if current_pos + len(values_array) > len(reads):
+                            reads = np.resize(reads, max(len(reads)*2, current_pos + len(values_array)))
+                        
+                        reads[current_pos:current_pos+len(values_array)] = values_array
+                        current_pos += len(values_array)
+                        processed_regions += 1
+                    else:
+                        # Fill with zeros
+                        if current_pos + region_size > len(reads):
+                            reads = np.resize(reads, max(len(reads)*2, current_pos + region_size))
+                        # Already zeros by initialization
+                        current_pos += region_size
+                        processed_regions += 1
+            except RuntimeError as e:
+                log_error(f"Could not read values for {chrom}:{start}-{stop}: {str(e)}")
+                failed_regions += 1
                         
     except Exception as e:
         log_error(f"Error processing exon data: {str(e)}")
@@ -194,15 +176,15 @@ def transcriptreads_optimized(bwfile: bw.pyBigWig, exon_df: pl.DataFrame,
     })
 
 
-def process_transcript_batch(transcript_batch, exon_partitions, orf_partitions, bwfile_path, 
-                             old_scoring, sru_range, config=None):
+def process_transcript_batch(transcript_batch, exon_df, orf_df, bwfile_path, 
+                            old_scoring, sru_range, config=None):
     """
     Process a batch of transcripts at once to reduce overhead.
     
     Args:
         transcript_batch: List of transcript IDs to process in this batch
-        exon_partitions: List of DataFrames for exons
-        orf_partitions: List of DataFrames for ORFs
+        exon_df: DataFrame containing all exon data
+        orf_df: DataFrame containing all ORF data
         bwfile_path: Path to the BigWig file
         old_scoring: Whether to use old scoring method
         sru_range: Range for SRU score calculation
@@ -219,8 +201,9 @@ def process_transcript_batch(transcript_batch, exon_partitions, orf_partitions, 
     # Open the BigWig file once for the entire batch
     with open_bigwig(bwfile_path) as bwfile:
         for tran in transcript_batch:
-            exons = next((df for df in exon_partitions if tran in df["tran_id"].unique()), pl.DataFrame())
-            orfs = next((df for df in orf_partitions if tran in df["tran_id"].unique()), pl.DataFrame())
+            # Filter dataframes directly instead of using partitions
+            exons = exon_df.filter(pl.col("tran_id") == tran)
+            orfs = orf_df.filter(pl.col("tran_id") == tran)
             
             if exons.is_empty():
                 log_warning(f"No exon data found for transcript {tran}")
@@ -308,10 +291,6 @@ def scoring_optimized(bigwig, exon, orfs, old_scoring, sru_range, config=None):
     
     log_info(f"Processing {total_transcripts} unique transcripts")
     
-    # Pre-group data for faster access
-    exon_partitions = exon_df.partition_by("tran_id")
-    orf_partitions = orf_df.partition_by("tran_id")
-    
     # Set max workers if not specified
     if config.max_workers <= 0:
         config.max_workers = os.cpu_count() or 4
@@ -334,8 +313,8 @@ def scoring_optimized(bigwig, exon, orfs, old_scoring, sru_range, config=None):
             executor.submit(
                 process_transcript_batch, 
                 batch, 
-                exon_partitions, 
-                orf_partitions, 
+                exon_df,  # Pass full dataframe, not partitions 
+                orf_df,   # Pass full dataframe, not partitions
                 bwfile_path, 
                 old_scoring, 
                 sru_range,
@@ -381,8 +360,10 @@ def scoring_optimized(bigwig, exon, orfs, old_scoring, sru_range, config=None):
         return pl.DataFrame()
 
 
-# Replace the original functions with optimized versions
-# You can comment these out if you want to keep both versions separately
+# You can use these functions directly or replace the original ones:
+
+
+# Option 2: Replace the original functions (uncomment to use)
 transcriptreads = transcriptreads_optimized
 process_transcript = process_transcript_batch  
 scoring = scoring_optimized

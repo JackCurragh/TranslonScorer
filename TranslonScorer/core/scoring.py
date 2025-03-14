@@ -1,5 +1,5 @@
 """
-Core scoring functionality for TranslonScorer.
+Core scoring functionality for TranslonScorer (Optimized Version).
 
 This module contains all functions related to scoring ORFs, including:
 - Classic (old) scoring method
@@ -9,101 +9,118 @@ This module contains all functions related to scoring ORFs, including:
 """
 
 import polars as pl
+import numpy as np
 from ..utils.logging import log_info, log_warning, log_error
 from .orffinder import classify_orf
 from .orffinder import getexons_and_cds
 
 
-
-def sru_score(position, tran_reads, sru_range, direction):
+def _precompute_tran_reads(tran_reads):
     """
-    Calculate the SRU (Start/Stop Ramp Up/Down) score for a given position.
+    Precompute arrays for faster access during scoring.
     
     Args:
-        position (int): Position to calculate score for
         tran_reads (DataFrame): Transcript reads data
+        
+    Returns:
+        tuple: (positions array, counts array, total positions)
+    """
+    positions = tran_reads["tran_start"].to_numpy()
+    counts = tran_reads["counts"].to_numpy()
+    total_positions = len(positions)
+    return positions, counts, total_positions
+
+
+def sru_score_vectorized(positions, tran_reads_data, sru_range, direction=0):
+    """
+    Vectorized version of SRU score calculation for multiple positions at once.
+    
+    Args:
+        positions (list/array): Positions to calculate scores for
+        tran_reads_data (tuple): Precomputed transcript reads data
         sru_range (int): Range for calculation
         direction (int): 0 for start (up), 1 for stop (down)
         
     Returns:
-        float: Calculated SRU score
+        list: Calculated SRU scores for each position
     """
     try:
-        if direction == 0:
-            # Calculate rise up score
-            before = tran_reads.filter(
-                (pl.col("tran_start") >= position - sru_range)
-                & (pl.col("tran_start") < position)
-            )
-            after = tran_reads.filter(
-                (pl.col("tran_start") >= position)
-                & (pl.col("tran_start") < position + sru_range)
-            )
-        else:
-            # Calculate step down score
-            before = tran_reads.filter(
-                (pl.col("tran_start") >= position)
-                & (pl.col("tran_start") < position + sru_range)
-            )
-            after = tran_reads.filter(
-                (pl.col("tran_start") >= position + sru_range)
-                & (pl.col("tran_start") < position + (2 * sru_range))
-            )
-
-        before_mean = before["counts"].mean() or 0
-        after_mean = after["counts"].mean() or 0
+        tran_positions, tran_counts, _ = tran_reads_data
         
-        if direction == 0:
-            return after_mean - before_mean
-        else:
-            return before_mean - after_mean
+        # Initialize results array
+        results = np.zeros(len(positions))
+        
+        for i, position in enumerate(positions):
+            if direction == 0:
+                # Calculate rise up score (start)
+                before_mask = (tran_positions >= position - sru_range) & (tran_positions < position)
+                after_mask = (tran_positions >= position) & (tran_positions < position + sru_range)
+            else:
+                # Calculate step down score (stop)
+                before_mask = (tran_positions >= position) & (tran_positions < position + sru_range)
+                after_mask = (tran_positions >= position + sru_range) & (tran_positions < position + (2 * sru_range))
             
+            before_vals = tran_counts[before_mask]
+            after_vals = tran_counts[after_mask]
+            
+            before_mean = np.mean(before_vals) if len(before_vals) > 0 else 0
+            after_mean = np.mean(after_vals) if len(after_vals) > 0 else 0
+            
+            if direction == 0:
+                results[i] = after_mean - before_mean
+            else:
+                results[i] = before_mean - after_mean
+        
+        return results.tolist()
     except Exception as e:
-        log_error(f"Error calculating SRU score: {str(e)}")
-        return 0.0
+        log_error(f"Error in vectorized SRU score calculation: {str(e)}")
+        return [0.0] * len(positions)
 
 
-def calculate_scores(start, stop, tran_reads):
+def calculate_scores_vectorized(starts, stops, tran_reads_data):
     """
-    Calculate HRF, average, and non-zero coverage scores for a region.
+    Vectorized version to calculate HRF, average, and non-zero coverage scores for multiple regions.
     
     Args:
-        start (int): Start position
-        stop (int): Stop position
-        tran_reads (DataFrame): Transcript reads data
+        starts (list/array): Start positions
+        stops (list/array): Stop positions
+        tran_reads_data (tuple): Precomputed transcript reads data
         
     Returns:
-        tuple: (HRF score, average score, non-zero coverage score)
+        tuple: (HRF scores, average scores, non-zero coverage scores)
     """
     try:
-        region = tran_reads.filter(
-            (pl.col("tran_start") >= start) & (pl.col("tran_start") <= stop)
-        )
+        tran_positions, tran_counts, _ = tran_reads_data
         
-        if region.is_empty():
-            return (0.0, 0.0, 0.0)
+        # Initialize result arrays
+        hrf_scores = np.zeros(len(starts))
+        avg_scores = np.zeros(len(starts))
+        nzc_scores = np.zeros(len(starts))
+        
+        for i, (start, stop) in enumerate(zip(starts, stops)):
+            # Get counts for this region
+            region_mask = (tran_positions >= start) & (tran_positions <= stop)
+            region_counts = tran_counts[region_mask]
             
-        counts = region["counts"].to_list()
+            if len(region_counts) > 0:
+                # Highest Reading Frame
+                hrf_scores[i] = np.max(region_counts)
+                
+                # Average
+                avg_scores[i] = np.mean(region_counts)
+                
+                # Non-zero Coverage
+                nzc_scores[i] = np.sum(region_counts > 0) / len(region_counts)
         
-        # Highest Reading Frame
-        hrf = max(counts) if counts else 0
-        
-        # Average
-        avg = sum(counts) / len(counts) if counts else 0
-        
-        # Non-zero Coverage
-        nzc = len([x for x in counts if x > 0]) / len(counts) if counts else 0
-        
-        return (hrf, avg, nzc)
-        
+        return hrf_scores.tolist(), avg_scores.tolist(), nzc_scores.tolist()
     except Exception as e:
-        log_error(f"Error calculating region scores: {str(e)}")
-        return (0.0, 0.0, 0.0)
+        log_error(f"Error in vectorized region score calculation: {str(e)}")
+        return ([0.0] * len(starts), [0.0] * len(starts), [0.0] * len(starts))
 
 
 def oldscoring(df, tran_reads, sru_range, typeorf):
     """
-    Classic scoring method that calculates all scores at once.
+    Optimized classic scoring method using vectorized operations.
 
     Args:
         df (DataFrame): Input DataFrame with ORF information
@@ -112,68 +129,73 @@ def oldscoring(df, tran_reads, sru_range, typeorf):
         typeorf (str): Type of ORF ('uoORF', 'doORF', or other)
 
     Returns:
-        dict: DataFrame as dictionary with calculated scores
+        DataFrame: DataFrame with calculated scores
     """
     try:
-        # Initialize rise_up and step_down columns with default values
-        df = df.with_columns([
-            pl.lit(0.0).alias("rise_up"),
-            pl.lit(0.0).alias("step_down")
+        # Precompute transcript reads data for faster access
+        tran_reads_data = _precompute_tran_reads(tran_reads)
+        
+        # Extract start and stop positions
+        starts = df["start"].to_list()
+        stops = df["stop"].to_list()
+        
+        # Initialize scores
+        rise_up_scores = [0.0] * len(df)
+        step_down_scores = [0.0] * len(df)
+        
+        # Calculate SRU scores based on ORF type
+        if typeorf == "uoORF" or typeorf not in ("uoORF", "doORF"):
+            rise_up_scores = sru_score_vectorized(starts, tran_reads_data, sru_range, 0)
+            
+        if typeorf == "doORF" or typeorf not in ("uoORF", "doORF"):
+            step_down_scores = sru_score_vectorized(stops, tran_reads_data, sru_range, 1)
+        
+        # Calculate region scores
+        hrf_scores, avg_scores, nzc_scores = calculate_scores_vectorized(
+            starts, stops, tran_reads_data
+        )
+        
+        # Create result DataFrame
+        result_df = df.with_columns([
+            pl.Series("rise_up", rise_up_scores),
+            pl.Series("step_down", step_down_scores),
+            pl.Series("hrf", hrf_scores),
+            pl.Series("avg", avg_scores),
+            pl.Series("nzc", nzc_scores)
         ])
-
-        if typeorf == "uoORF":
-            df = df.with_columns(
-                pl.struct(["start"])
-                .apply(lambda x: sru_score(x["start"], tran_reads, sru_range, 0))
-                .alias("rise_up")
-            )
-        elif typeorf == "doORF":
-            df = df.with_columns(
-                pl.struct(["stop"])
-                .apply(lambda x: sru_score(x["stop"], tran_reads, sru_range, 1))
-                .alias("step_down")
-            )
-        else:
-            # For other types, calculate both rise_up and step_down
-            df = df.with_columns([
-                pl.struct(["start"])
-                .apply(lambda x: sru_score(x["start"], tran_reads, sru_range, 0))
-                .alias("rise_up"),
-                pl.struct(["stop"])
-                .apply(lambda x: sru_score(x["stop"], tran_reads, sru_range, 1))
-                .alias("step_down")
-            ])
-
-        # Calculate other scores
-        df = df.with_columns(
-            (
-                pl.struct(["start", "stop"])
-                .apply(lambda x: calculate_scores(x["start"], x["stop"], tran_reads))
-                .alias("list_scores")
-            )
+        
+        # Calculate total score
+        result_df = result_df.with_columns(
+            score=pl.sum_horizontal("rise_up", "step_down", "hrf", "avg", "nzc")
         )
-        df = df.with_columns(
-            (pl.col("list_scores").apply(lambda x: x[0]).alias("hrf")),
-            (pl.col("list_scores").apply(lambda x: x[1]).alias("avg")),
-            (pl.col("list_scores").apply(lambda x: x[2]).alias("nzc")),
-        )
-
-        df = (
-            df.with_columns(
-                score=pl.sum_horizontal("rise_up", "step_down", "hrf", "avg", "nzc")
-            )
-            .select(pl.all().exclude("list_scores"))
-            .to_dict(as_series=False)
-        )
-        return df
+        
+        return result_df
     except Exception as e:
-        log_error(f"Error in old scoring method: {str(e)}")
+        log_error(f"Error in optimized old scoring method: {str(e)}")
         return pl.DataFrame()
+
+
+def compute_score_dict(unique_positions, tran_reads_data, sru_range, direction):
+    """
+    Efficiently compute scores for unique positions and create a dictionary.
+    
+    Args:
+        unique_positions (list): Unique positions to calculate scores for
+        tran_reads_data (tuple): Precomputed transcript reads data
+        sru_range (int): Range for calculation
+        direction (int): 0 for start (up), 1 for stop (down)
+        
+    Returns:
+        dict: Dictionary mapping positions to their scores
+    """
+    scores = sru_score_vectorized(unique_positions, tran_reads_data, sru_range, direction)
+    # Create dictionary in one go instead of repeated updates
+    return dict(zip(unique_positions, scores))
 
 
 def newscoring(df, tran_reads, sru_range, typeorf, scoredict):
     """
-    Modern scoring method that caches scores in a dictionary.
+    Optimized modern scoring method that efficiently caches scores in a dictionary.
 
     Args:
         df (DataFrame/Series): Input data with ORF information
@@ -186,36 +208,60 @@ def newscoring(df, tran_reads, sru_range, typeorf, scoredict):
         dict: Updated score dictionary
     """
     try:
-        if not typeorf == "doORF":
-            if type(df) != type(pl.Series()):
-                startvalues = df.get_column("start").unique()
-            else:
-                startvalues = df
-            startscore = startvalues.map_elements(
-                lambda x: sru_score(x, tran_reads, sru_range, 0)
-            ).to_list()
-            for i, value in enumerate(startscore):
-                scoredict["rise_up"].update({startvalues[i]: startscore[i]})
-
-        if not typeorf == "uoORF":
-            if type(df) != type(pl.Series()):
-                stopvalues = df.get_column("stop").unique()
-            else:
-                stopvalues = df
-            stopscore = stopvalues.map_elements(
-                lambda x: sru_score(x, tran_reads, sru_range, 1)
-            ).to_list()
-            for i, value in enumerate(stopscore):
-                scoredict["step_down"].update({stopvalues[i]: stopscore[i]})
+        # Precompute transcript reads data
+        tran_reads_data = _precompute_tran_reads(tran_reads)
+        
+        # Update rise_up scores if needed
+        if typeorf != "doORF" and not isinstance(df, pl.Series):
+            # Get unique start positions not already in the cache
+            start_values = df["start"].unique().to_list()
+            new_starts = [s for s in start_values if s not in scoredict["rise_up"]]
+            
+            if new_starts:
+                # Calculate scores for new positions only
+                rise_up_dict = compute_score_dict(new_starts, tran_reads_data, sru_range, 0)
+                # Update the cache in one batch operation
+                scoredict["rise_up"].update(rise_up_dict)
+                
+        elif typeorf != "doORF" and isinstance(df, pl.Series):
+            # Handle Series case
+            start_values = df.to_list()
+            new_starts = [s for s in start_values if s not in scoredict["rise_up"]]
+            
+            if new_starts:
+                rise_up_dict = compute_score_dict(new_starts, tran_reads_data, sru_range, 0)
+                scoredict["rise_up"].update(rise_up_dict)
+        
+        # Update step_down scores if needed
+        if typeorf != "uoORF" and not isinstance(df, pl.Series):
+            # Get unique stop positions not already in the cache
+            stop_values = df["stop"].unique().to_list()
+            new_stops = [s for s in stop_values if s not in scoredict["step_down"]]
+            
+            if new_stops:
+                # Calculate scores for new positions only
+                step_down_dict = compute_score_dict(new_stops, tran_reads_data, sru_range, 1)
+                # Update the cache in one batch operation
+                scoredict["step_down"].update(step_down_dict)
+                
+        elif typeorf != "uoORF" and isinstance(df, pl.Series):
+            # Handle Series case
+            stop_values = df.to_list()
+            new_stops = [s for s in stop_values if s not in scoredict["step_down"]]
+            
+            if new_stops:
+                step_down_dict = compute_score_dict(new_stops, tran_reads_data, sru_range, 1)
+                scoredict["step_down"].update(step_down_dict)
+        
         return scoredict
     except Exception as e:
-        log_error(f"Error in new scoring method: {str(e)}")
+        log_error(f"Error in optimized new scoring method: {str(e)}")
         return {"rise_up": {}, "step_down": {}}
 
 
 def globalscores(df, tran_reads, typeorf):
     """
-    Calculate global scores (HRF, average, NZC) for ORFs.
+    Calculate global scores (HRF, average, NZC) for ORFs using optimized vectorized operations.
 
     Args:
         df (DataFrame): Input DataFrame with ORF information
@@ -223,43 +269,51 @@ def globalscores(df, tran_reads, typeorf):
         typeorf (str): Type of ORF ('uoORF', 'doORF', or other)
 
     Returns:
-        dict: DataFrame as dictionary with calculated global scores
+        DataFrame: DataFrame with calculated global scores
     """
     try:
-        df = df.with_columns(
-            (
-                pl.struct(["start", "stop"])
-                .apply(lambda x: calculate_scores(x["start"], x["stop"], tran_reads))
-                .alias("list_scores")
-            )
+        # Precompute transcript reads data
+        tran_reads_data = _precompute_tran_reads(tran_reads)
+        
+        # Extract start and stop positions
+        starts = df["start"].to_list()
+        stops = df["stop"].to_list()
+        
+        # Calculate region scores in one vectorized operation
+        hrf_scores, avg_scores, nzc_scores = calculate_scores_vectorized(
+            starts, stops, tran_reads_data
         )
-        df = df.with_columns(
-            (pl.col("list_scores").apply(lambda x: x[0]).alias("hrf")),
-            (pl.col("list_scores").apply(lambda x: x[1]).alias("avg")),
-            (pl.col("list_scores").apply(lambda x: x[2]).alias("nzc")),
-        ).select(pl.all().exclude("list_scores"))
-
+        
+        # Add columns to DataFrame
+        result_df = df.with_columns([
+            pl.Series("hrf", hrf_scores),
+            pl.Series("avg", avg_scores),
+            pl.Series("nzc", nzc_scores)
+        ])
+        
+        # Calculate total score
         if typeorf == "doORF":
-            df = df.with_columns(
+            result_df = result_df.with_columns(
                 score=pl.sum_horizontal("step_down", "hrf", "avg", "nzc")
-            ).to_dict(as_series=False)
+            )
         elif typeorf == "uoORF":
-            df = df.with_columns(
+            result_df = result_df.with_columns(
                 score=pl.sum_horizontal("rise_up", "hrf", "avg", "nzc")
-            ).to_dict(as_series=False)
+            )
         else:
-            df = df.with_columns(
+            result_df = result_df.with_columns(
                 score=pl.sum_horizontal("rise_up", "step_down", "hrf", "avg", "nzc")
-            ).to_dict(as_series=False)
-        return df
+            )
+        
+        return result_df
     except Exception as e:
-        log_error(f"Error calculating global scores: {str(e)}")
+        log_error(f"Error in optimized global scores calculation: {str(e)}")
         return pl.DataFrame()
 
 
 def existingscore(df, typeorf, scoredict):
     """
-    Filter out ORFs that already have scores in the cache.
+    Optimized version to filter out ORFs that already have scores in the cache.
 
     Args:
         df (DataFrame): Input DataFrame with ORF information
@@ -270,45 +324,34 @@ def existingscore(df, typeorf, scoredict):
         DataFrame/Series: Filtered data containing only ORFs needing scoring
     """
     try:
+        # Convert dict keys to sets for faster membership testing
+        rise_up_keys = set(scoredict["rise_up"].keys())
+        step_down_keys = set(scoredict["step_down"].keys())
+        
         if typeorf == "uoORF":
-            df = (
-                df["start"]
-                .map_elements(lambda x: x if x not in scoredict["rise_up"] else None)
-                .drop_nulls()
-            )
-            return df
+            # Filter in one vectorized operation
+            return df["start"].filter(~pl.col("start").is_in(rise_up_keys))
+            
         elif typeorf == "doORF":
-            df = (
-                df["stop"]
-                .map_elements(lambda x: x if x not in scoredict["step_down"] else None)
-                .drop_nulls()
-            )
-            return df
+            # Filter in one vectorized operation
+            return df["stop"].filter(~pl.col("stop").is_in(step_down_keys))
+            
         else:
-            df = df.select(["start", "stop"]).with_columns(
-                (
-                    pl.col("start")
-                    .apply(lambda x: x if x not in scoredict["rise_up"] else None)
-                    .alias("in_ru")
-                ),
-                (
-                    pl.col("stop")
-                    .apply(lambda x: x if x not in scoredict["step_down"] else None)
-                    .alias("in_sd")
-                ),
+            # For mixed types, check both start and stop
+            filtered_df = df.select(["start", "stop"]).filter(
+                (~pl.col("start").is_in(rise_up_keys)) | 
+                (~pl.col("stop").is_in(step_down_keys))
             )
-            df = df.filter(
-                (pl.col("in_ru").is_not_null()) | (pl.col("in_sd").is_not_null())
-            ).select(["start", "stop"])
-            return df
+            return filtered_df
+            
     except Exception as e:
-        log_error(f"Error checking existing scores: {str(e)}")
+        log_error(f"Error in optimized existing score check: {str(e)}")
         return pl.DataFrame()
 
 
 def assigningscore(df, scoredict, typeorf):
     """
-    Assign cached scores to ORFs.
+    Optimized version to assign cached scores to ORFs using vectorized operations.
 
     Args:
         df (DataFrame): Input DataFrame with ORF information
@@ -319,40 +362,43 @@ def assigningscore(df, scoredict, typeorf):
         DataFrame: DataFrame with scores assigned from cache
     """
     try:
+        # Convert dictionaries to Series for faster lookups
+        rise_up_series = pl.Series(list(scoredict["rise_up"].keys()), 
+                                  list(scoredict["rise_up"].values()))
+        step_down_series = pl.Series(list(scoredict["step_down"].keys()), 
+                                    list(scoredict["step_down"].values()))
+        
+        # Create lookup expressions
         if typeorf == "uoORF":
-            df = df.with_columns(
-                (pl.col("start").apply(lambda x: scoredict["rise_up"][x]).alias("rise_up")),
-                (pl.lit(0.0).alias("step_down")),
-            )
-
+            result_df = df.with_columns([
+                # Use map_dict for faster lookups
+                pl.col("start").map_dict(scoredict["rise_up"], default=0.0).alias("rise_up"),
+                pl.lit(0.0).alias("step_down")
+            ])
+            
         elif typeorf == "doORF":
-            df = df.with_columns(
-                (
-                    pl.col("stop")
-                    .apply(lambda x: scoredict["step_down"][x])
-                    .alias("step_down")
-                ),
-                (pl.lit(0.0).alias("rise_up")),
-            )
+            result_df = df.with_columns([
+                pl.lit(0.0).alias("rise_up"),
+                pl.col("stop").map_dict(scoredict["step_down"], default=0.0).alias("step_down")
+            ])
+            
         else:
-            df = df.with_columns(
-                (pl.col("start").apply(lambda x: scoredict["rise_up"][x]).alias("rise_up")),
-                (
-                    pl.col("stop")
-                    .apply(lambda x: scoredict["step_down"][x])
-                    .alias("step_down")
-                ),
-            )
-        return df
+            result_df = df.with_columns([
+                pl.col("start").map_dict(scoredict["rise_up"], default=0.0).alias("rise_up"),
+                pl.col("stop").map_dict(scoredict["step_down"], default=0.0).alias("step_down")
+            ])
+            
+        return result_df
+        
     except Exception as e:
-        log_error(f"Error assigning scores: {str(e)}")
+        log_error(f"Error in optimized score assignment: {str(e)}")
         return pl.DataFrame()
 
 
 def orfrelativeposition(annotation, df, cds_df):
     """
     Determines the relative position of ORFs to coding sequences (CDS).
-
+    
     This function takes a genome annotation file and a DataFrame containing ORF coordinates,
     and determines the relative position of each ORF with respect to coding sequences (CDS).
     It classifies each ORF into different categories based on its relationship with CDS.
@@ -394,4 +440,4 @@ def orfrelativeposition(annotation, df, cds_df):
     # Filter CDS
     cdslist = df.filter(pl.col("type") == "CDS")["tran_id"].unique().to_list()
 
-    return df, exon_coords 
+    return df, exon_coords

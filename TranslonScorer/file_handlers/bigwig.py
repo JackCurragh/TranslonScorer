@@ -148,8 +148,8 @@ def process_transcript(tran, exon_partitions, orf_partitions, bwfile_path, old_s
     Returns:
         List of scored ORF DataFrames for this transcript
     """
-    exons = next((df for df in exon_partitions if df["tran_id"].unique() == tran), pl.DataFrame())
-    orfs = next((df for df in orf_partitions if df["tran_id"].unique() == tran), pl.DataFrame())
+    exons = next((df for df in exon_partitions if tran in df["tran_id"].unique()), pl.DataFrame())
+    orfs = next((df for df in orf_partitions if tran in df["tran_id"].unique()), pl.DataFrame())
     
     transcript_results = []
     log_info(f"Processing transcript {tran}")

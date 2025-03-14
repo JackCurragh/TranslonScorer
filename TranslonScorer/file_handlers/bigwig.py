@@ -231,22 +231,21 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=1000, max_wor
     exon_partitions = exon_df.partition_by("tran_id")
     orf_partitions = orf_df.partition_by("tran_id")
     
-    # Process in batches to manage memory
-    all_results = []
-    
-    if max_workers is None:
-        max_workers = os.cpu_count() or 4  # Default to number of CPUs if not specified
+    # Pre-read all necessary data from the BigWig file into memory
+    with bw.open(bwfile_path) as bwfile:
+        all_reads = {}
+        for chrom in exon_df["chr"].unique():
+            # Read all regions for this chromosome at once
+            chrom_exons = exon_df.filter(pl.col("chr") == chrom)
+            starts = chrom_exons["start"].to_list()
+            stops = chrom_exons["stop"].to_list()
+            all_reads[chrom] = bwfile.values(chrom, starts, stops)
 
+    # Process transcripts in parallel
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = []
-        
-        for batch_start in range(0, total_transcripts, batch_size):
-            batch_end = min(batch_start + batch_size, total_transcripts)
-            batch_transcripts = unique_transcripts[batch_start:batch_end]
-            
-            for tran in batch_transcripts:
-                # Submit the process_transcript function to the executor
-                futures.append(executor.submit(process_transcript, tran, exon_partitions, orf_partitions, bwfile_path, old_scoring, sru_range))
+        for tran in unique_transcripts:
+            futures.append(executor.submit(process_transcript, tran, exon_partitions, orf_partitions, all_reads, old_scoring, sru_range))
 
         # Print progress updates
         for i, future in enumerate(concurrent.futures.as_completed(futures), start=1):

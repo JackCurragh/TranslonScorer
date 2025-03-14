@@ -248,13 +248,15 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=1000, max_wor
                 # Submit the process_transcript function to the executor
                 futures.append(executor.submit(process_transcript, tran, exon_partitions, orf_partitions, bwfile_path, old_scoring, sru_range))
 
-        for future in concurrent.futures.as_completed(futures):
+        # Print progress updates
+        for i, future in enumerate(concurrent.futures.as_completed(futures), start=1):
             try:
                 transcript_results = future.result()
                 if transcript_results:
                     all_results.extend(transcript_results)
             except Exception as exc:
                 log_error(f"Transcript processing generated an exception: {exc}")
+            print(f"Processed {i}/{len(futures)} transcripts...")  # Progress update
 
     # Combine all results
     if not all_results:

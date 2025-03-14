@@ -313,7 +313,7 @@ def globalscores(df, tran_reads, typeorf):
 
 def existingscore(df, typeorf, scoredict):
     """
-    Optimized version to filter out ORFs that already have scores in the cache.
+    Filter out ORFs that already have scores in the cache.
 
     Args:
         df (DataFrame): Input DataFrame with ORF information
@@ -329,73 +329,78 @@ def existingscore(df, typeorf, scoredict):
         step_down_keys = set(scoredict["step_down"].keys())
         
         if typeorf == "uoORF":
-            # Filter in one vectorized operation
-            return df["start"].filter(~pl.col("start").is_in(rise_up_keys))
+            # Use map_elements as in the original code, but with set for faster lookups
+            df = (
+                df["start"]
+                .map_elements(lambda x: x if x not in rise_up_keys else None)
+                .drop_nulls()
+            )
+            return df
             
         elif typeorf == "doORF":
-            # Filter in one vectorized operation
-            return df["stop"].filter(~pl.col("stop").is_in(step_down_keys))
+            # Use map_elements as in the original code, but with set for faster lookups
+            df = (
+                df["stop"]
+                .map_elements(lambda x: x if x not in step_down_keys else None)
+                .drop_nulls()
+            )
+            return df
             
         else:
-            # For mixed types, check both start and stop
-            filtered_df = df.select(["start", "stop"]).filter(
-                (~pl.col("start").is_in(rise_up_keys)) | 
-                (~pl.col("stop").is_in(step_down_keys))
-            )
-            return filtered_df
+            # For mixed types, use the approach from original code with set for faster lookups
+            df = df.select(["start", "stop"]).with_columns([
+                pl.col("start")
+                .apply(lambda x: x if x not in rise_up_keys else None)
+                .alias("in_ru"),
+                
+                pl.col("stop")
+                .apply(lambda x: x if x not in step_down_keys else None)
+                .alias("in_sd")
+            ])
+            
+            df = df.filter(
+                (pl.col("in_ru").is_not_null()) | (pl.col("in_sd").is_not_null())
+            ).select(["start", "stop"])
+            
+            return df
             
     except Exception as e:
-        log_error(f"Error in optimized existing score check: {str(e)}")
+        log_error(f"Error in existing score check: {str(e)}")
         return pl.DataFrame()
-
 
 def assigningscore(df, scoredict, typeorf):
     """
-    Assigns scores from a dictionary to a DataFrame based on the type of ORF.
+    Assign cached scores to ORFs.
 
-    This function updates the DataFrame `df` by assigning scores from the `scoredict` to the
-    'rise_up' and 'step_down' columns based on the 'start' and 'stop' values. The type of ORF (`typeorf`)
-    determines which scores are assigned.
-
-    Parameters:
-    df (pl.DataFrame): The input DataFrame containing 'start' and 'stop' columns.
-    scoredict (dict): Dictionary containing the scores for 'rise_up' and 'step_down'.
-    typeorf (str): Type of ORF, can be 'uoORF', 'doORF', or any other value for different processing.
+    Args:
+        df (DataFrame): Input DataFrame with ORF information
+        scoredict (dict): Dictionary of cached scores
+        typeorf (str): Type of ORF ('uoORF', 'doORF', or other)
 
     Returns:
-    pl.DataFrame: The modified DataFrame with assigned scores.
-
-    Notes:
-    - For 'uoORF', assigns 'rise_up' scores from `scoredict` based on 'start' values and sets 'step_down' to 0.0.
-    - For 'doORF', assigns 'step_down' scores from `scoredict` based on 'stop' values and sets 'rise_up' to 0.0.
-    - For other types, assigns both 'rise_up' and 'step_down' scores from `scoredict` based on 'start' and 'stop' values.
+        DataFrame: DataFrame with scores assigned from cache
     """
     try:
+        # Use the original approach but with more efficient dictionary lookups
         if typeorf == "uoORF":
-            df = df.with_columns(
-                (pl.col("start").apply(lambda x: scoredict["rise_up"].get(x, 0.0)).alias("rise_up")),
-                (pl.lit(0.0).alias("step_down")),
-            )
+            df = df.with_columns([
+                # Use apply with lambda for compatibility
+                pl.col("start").apply(lambda x: scoredict["rise_up"].get(x, 0.0)).alias("rise_up"),
+                pl.lit(0.0).alias("step_down")
+            ])
 
         elif typeorf == "doORF":
-            df = df.with_columns(
-                (
-                    pl.col("stop")
-                    .apply(lambda x: scoredict["step_down"].get(x, 0.0))
-                    .alias("step_down")
-                ),
-                (pl.lit(0.0).alias("rise_up")),
-            )
+            df = df.with_columns([
+                pl.lit(0.0).alias("rise_up"),
+                pl.col("stop").apply(lambda x: scoredict["step_down"].get(x, 0.0)).alias("step_down")
+            ])
         else:
-            df = df.with_columns(
-                (pl.col("start").apply(lambda x: scoredict["rise_up"].get(x, 0.0)).alias("rise_up")),
-                (
-                    pl.col("stop")
-                    .apply(lambda x: scoredict["step_down"].get(x, 0.0))
-                    .alias("step_down")
-                ),
-            )
+            df = df.with_columns([
+                pl.col("start").apply(lambda x: scoredict["rise_up"].get(x, 0.0)).alias("rise_up"),
+                pl.col("stop").apply(lambda x: scoredict["step_down"].get(x, 0.0)).alias("step_down")
+            ])
         return df
+        
     except Exception as e:
         log_error(f"Error assigning scores: {str(e)}")
         return pl.DataFrame()

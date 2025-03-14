@@ -381,11 +381,6 @@ def scoring_optimized(bigwig, exon, orfs, old_scoring, sru_range, config=None):
         return pl.DataFrame()
 
 
-# Alias the original functions for backwards compatibility
-transcriptreads_original = transcriptreads  # Keep a reference to the original function
-process_transcript_original = process_transcript  # Keep a reference to the original function
-scoring_original = scoring  # Keep a reference to the original function
-
 # Replace the original functions with optimized versions
 # You can comment these out if you want to keep both versions separately
 transcriptreads = transcriptreads_optimized

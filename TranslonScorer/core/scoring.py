@@ -447,10 +447,6 @@ def globalscores(df, tran_reads, typeorf):
             
             # Add to results
             result_chunks.append(processed_chunk)
-            
-            # Log progress
-            log_info(f"Processing global scores for ORFs {i} to {end-1} out of {len(df)}")
-            
             # Force garbage collection
             del chunk
             gc.collect()

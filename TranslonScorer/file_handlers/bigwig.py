@@ -22,6 +22,7 @@ import tempfile
 import pickle
 import itertools
 import gc
+from memory_profiler import profile  # Import the memory profiler
 
 
 @dataclass
@@ -405,6 +406,7 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     })
 
 
+@profile  # Add the memory profiler decorator
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
     Score ORFs using bigwig coverage data with high-performance optimization.

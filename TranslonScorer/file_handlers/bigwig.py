@@ -518,7 +518,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
         transcript_batches.append(available_transcripts[i:end])
     
     # Limit to 10% of the batches for testing
-    test_batch_count = max(1, len(transcript_batches) // 10)  # Ensure at least one batch
+    test_batch_count = 3  # Ensure at least one batch
     transcript_batches = transcript_batches[:test_batch_count]
     
     log_info(f"Processing {test_batch_count} out of {len(transcript_batches)} total batches for testing.")

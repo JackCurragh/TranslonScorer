@@ -225,7 +225,6 @@ def process_region_batch(region_batch, bigwig_path, config=None):
         "failed": failed_regions
     }
 
-
 def score_transcript_batch(transcript_batch, transcript_reads, orf_df, old_scoring, sru_range):
     """
     Score a batch of transcripts.
@@ -405,7 +404,6 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
         "counts": reads
     })
 
-
 @profile  # Add the memory profiler decorator
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
@@ -427,6 +425,8 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     Returns:
         DataFrame: Scored ORFs
     """
+    import gc  # Add garbage collection
+    
     start_time = time.time()
     config = ProcessingConfig(batch_size=batch_size, sru_range=sru_range)
     
@@ -462,6 +462,9 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     total_regions = len(all_regions)
     log_info(f"Found {total_regions} regions to process across all transcripts")
     
+    # Calculate this once to avoid repeated calculations in logging
+    total_unique_transcripts = len(set(r[3] for r in all_regions))
+    
     # Group regions into batches for better work distribution
     region_batches = []
     for i in range(0, total_regions, config.max_regions_per_worker):
@@ -475,6 +478,9 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     total_processed = 0
     total_failed = 0
     
+    # Free up memory before parallel processing
+    gc.collect()
+    
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         # Submit all batches for processing
         future_to_batch = {
@@ -484,6 +490,11 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
         
         # Process results as they complete
         completed_batches = 0
+        total_batches = len(region_batches)
+        
+        # Log less frequently
+        log_interval = max(1, total_batches // 20)  # Log ~20 times during processing
+        
         for future in concurrent.futures.as_completed(future_to_batch):
             try:
                 result = future.result()
@@ -494,14 +505,19 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
                 total_processed += result["processed"]
                 total_failed += result["failed"]
                 
-                # Log progress periodically
-                if completed_batches % 10 == 0 or completed_batches == len(region_batches):
-                    progress = completed_batches / len(region_batches) * 100
-                    log_info(f"Processed {completed_batches}/{len(region_batches)} region batches ({progress:.1f}%) "
-                             f"- {len(transcript_reads)}/{len(set(r[3] for r in all_regions))} transcripts with data")
+                # Log progress less frequently
+                if completed_batches % log_interval == 0 or completed_batches == total_batches:
+                    progress = completed_batches / total_batches * 100
+                    log_info(f"Processed {completed_batches}/{total_batches} region batches ({progress:.1f}%) "
+                             f"- {len(transcript_reads)}/{total_unique_transcripts} transcripts with data")
                     
             except Exception as exc:
                 log_error(f"Region batch processing error: {exc}")
+    
+    # Clear regions data as it's no longer needed
+    all_regions = None
+    region_batches = None
+    gc.collect()
     
     log_info(f"Completed BigWig data extraction: {total_processed} regions processed, {total_failed} failed")
     log_info(f"Extracted data for {len(transcript_reads)} transcripts")
@@ -525,6 +541,10 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     
     # Score in parallel
     all_results = []
+    
+    # Free memory before second parallel processing
+    gc.collect()
+    
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         # Submit all batches for scoring
         futures = []
@@ -554,6 +574,10 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
                     
             except Exception as exc:
                 log_error(f"Transcript batch scoring error: {exc}")
+    
+    # Free memory after processing
+    transcript_reads = None
+    gc.collect()
     
     # Combine all results
     if not all_results:

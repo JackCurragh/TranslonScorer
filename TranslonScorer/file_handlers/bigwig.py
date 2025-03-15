@@ -581,6 +581,8 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     test_batch_count = max(1, len(transcript_batches) // 10)  # Ensure at least one batch
     transcript_batches = transcript_batches[:test_batch_count]
     
+    log_info(f"Processing {test_batch_count} out of {len(transcript_batches)} total batches for testing.")
+    
     # Score in parallel
     all_results = []
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -598,6 +600,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
         
         # Process results as they complete
         completed = 0
+        total_batches = len(futures)
         for future in concurrent.futures.as_completed(futures):
             try:
                 batch_results = future.result()
@@ -605,9 +608,9 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
                     all_results.extend(batch_results)
                 
                 completed += 1
-                if completed % 10 == 0 or completed == len(futures):
-                    progress = completed / len(futures) * 100
-                    log_info(f"Scored {completed}/{len(futures)} transcript batches ({progress:.1f}%)")
+                # Improved logging for each completed batch
+                progress = (completed / total_batches) * 100
+                log_info(f"Scored batch {completed}/{total_batches} ({progress:.1f}%)")
                     
             except Exception as exc:
                 log_error(f"Transcript batch scoring error: {exc}")

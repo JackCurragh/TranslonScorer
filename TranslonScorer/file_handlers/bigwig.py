@@ -463,15 +463,23 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     total_regions = len(all_regions)
     log_info(f"Found {total_regions} regions to process across all transcripts")
     
-    # Extract the transcript IDs (column 3) just once and calculate unique count
-    transcript_ids = [r[3] for r in all_regions]  # Do this extraction only once
-    total_unique_transcripts = len(set(transcript_ids))  # Calculate just once
-    transcript_ids = None  # Free memory immediately
+    # Calculate unique transcripts without creating a large intermediate list
+    unique_transcripts = set()
+    # Process in smaller chunks to avoid memory spikes
+    chunk_size = 10000
+    for i in range(0, len(all_regions), chunk_size):
+        chunk = all_regions[i:min(i+chunk_size, len(all_regions))]
+        unique_transcripts.update(r[3] for r in chunk)
+    
+    total_unique_transcripts = len(unique_transcripts)
+    unique_transcripts = None  # Free memory
+    gc.collect()
     
     # Group regions into batches for better work distribution
     region_batches = []
-    for i in range(0, total_regions, config.max_regions_per_worker):
-        end = min(i + config.max_regions_per_worker, total_regions)
+    batch_size = config.max_regions_per_worker
+    for i in range(0, total_regions, batch_size):
+        end = min(i + batch_size, total_regions)
         region_batches.append(all_regions[i:end])
     
     log_info(f"Distributing regions into {len(region_batches)} balanced batches")
@@ -485,11 +493,10 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     gc.collect()
     
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all batches for processing
-        future_to_batch = {
-            executor.submit(process_region_batch, batch, bwfile_path, config): i 
-            for i, batch in enumerate(region_batches)
-        }
+        # Submit all batches for processing - create futures in smaller chunks
+        futures = []
+        for i, batch in enumerate(region_batches):
+            futures.append(executor.submit(process_region_batch, batch, bwfile_path, config))
         
         # Process results as they complete
         completed_batches = 0
@@ -498,7 +505,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
         # Log less frequently
         log_interval = max(1, total_batches // 20)  # Log ~20 times during processing
         
-        for future in concurrent.futures.as_completed(future_to_batch):
+        for future in concurrent.futures.as_completed(futures):
             try:
                 result = future.result()
                 completed_batches += 1

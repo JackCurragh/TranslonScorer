@@ -110,7 +110,7 @@ check_file "$GTF_FILE" "GTF annotation" || exit 1
 if [ $BIGWIG_EXISTS -eq 1 ]; then
     echo "BigWig file found, using direct ORF finding path..."
     echo "Running TranslonScorer with memory monitoring..."
-    PROFILE=1 memray run translonscorer all \
+    PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer all \
         --sequence "$GENOME_FA" \
         --annotation "$GTF_FILE" \
         --bigwig_path "$BIGWIG_FILE" \

@@ -638,3 +638,6 @@ def orfrelativeposition(annotation, df, cds_df):
     cdslist = df.filter(pl.col("type") == "CDS")["tran_id"].unique().to_list()
 
     return df, exon_coords
+
+print(tran_reads.shape)
+print(tran_reads.memory_usage(deep=True))

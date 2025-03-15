@@ -405,6 +405,7 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     })
 
 @profile  # Add the memory profiler decorator
+@profile  # Add the memory profiler decorator
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
     Score ORFs using bigwig coverage data with high-performance optimization.
@@ -462,8 +463,10 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     total_regions = len(all_regions)
     log_info(f"Found {total_regions} regions to process across all transcripts")
     
-    # Calculate this once to avoid repeated calculations in logging
-    total_unique_transcripts = len(set(r[3] for r in all_regions))
+    # Extract the transcript IDs (column 3) just once and calculate unique count
+    transcript_ids = [r[3] for r in all_regions]  # Do this extraction only once
+    total_unique_transcripts = len(set(transcript_ids))  # Calculate just once
+    transcript_ids = None  # Free memory immediately
     
     # Group regions into batches for better work distribution
     region_batches = []

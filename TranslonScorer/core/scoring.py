@@ -455,7 +455,8 @@ def globalscores(df, tran_reads, typeorf):
             # Force garbage collection
             del chunk
             gc.collect()
-        
+        import sys
+        sys.exit()
         # Combine results
         if result_chunks:
             return pl.concat(result_chunks)

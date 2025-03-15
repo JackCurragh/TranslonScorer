@@ -577,13 +577,16 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
         end = min(i + config.batch_size, len(available_transcripts))
         transcript_batches.append(available_transcripts[i:end])
     
+    # Limit to 10% of the batches for testing
+    test_batch_count = max(1, len(transcript_batches) // 10)  # Ensure at least one batch
+    transcript_batches = transcript_batches[:test_batch_count]
+    
     # Score in parallel
     all_results = []
-    print(transcript_batches)
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         # Submit all batches for scoring
         futures = []
-        for batch in transcript_batches[:10]:
+        for batch in transcript_batches:
             futures.append(executor.submit(
                 score_transcript_batch, 
                 batch, 

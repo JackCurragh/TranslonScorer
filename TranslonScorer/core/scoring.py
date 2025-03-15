@@ -432,14 +432,13 @@ def globalscores(df, tran_reads, typeorf):
         DataFrame: DataFrame with calculated global scores
     """
     try:
-        # Define optimal chunk size
-        chunk_size = 5
-        
-        # Process in chunks and collect results
+        # Calculate dynamic chunk size
+        desired_batches = 10  # Adjust this as needed
+        chunk_size = max(1, len(df) // desired_batches)  # Ensure at least 1
+
         result_chunks = []
         
         for i in range(0, len(df), chunk_size):
-            # Extract chunk
             end = min(i + chunk_size, len(df))
             chunk = df.slice(i, end - i)
             
@@ -455,8 +454,6 @@ def globalscores(df, tran_reads, typeorf):
             # Force garbage collection
             del chunk
             gc.collect()
-        import sys
-        sys.exit()
         # Combine results
         if result_chunks:
             return pl.concat(result_chunks)

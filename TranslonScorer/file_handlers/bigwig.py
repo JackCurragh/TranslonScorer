@@ -405,68 +405,6 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     })
 
 
-def process_transcript(tran, exon_df, orf_df, bwfile_path, old_scoring, sru_range):
-    """
-    Process a single transcript.
-    
-    Args:
-        tran: Transcript ID
-        exon_df: DataFrame containing all exon data
-        orf_df: DataFrame containing all ORF data
-        bwfile_path: Path to the BigWig file
-        old_scoring: Whether to use old scoring method
-        sru_range: Range for SRU score calculation
-        
-    Returns:
-        List of scored ORF DataFrames for this transcript
-    """
-    # Filter dataframes for this transcript
-    exons = exon_df.filter(pl.col("tran_id") == tran)
-    orfs = orf_df.filter(pl.col("tran_id") == tran)
-    
-    transcript_results = []
-    
-    if exons.is_empty():
-        log_warning(f"No exon data found for transcript {tran}")
-        return transcript_results
-    
-    try:
-        with open_bigwig(bwfile_path) as bwfile:
-            tran_reads = transcriptreads(bwfile, exons)
-
-        if tran_reads.is_empty():
-            log_warning(f"No transcript reads found for {tran}")
-            return transcript_results
-        
-        for typeorf in orfs["type"].unique():
-            orfs_filtered = orfs.filter(pl.col("type") == typeorf)
-
-            if orfs_filtered.is_empty():
-                log_warning(f"No ORFs found for type {typeorf} in transcript {tran}")
-                continue
-
-            if old_scoring:
-                orfs_filtered = oldscoring(
-                    orfs_filtered, tran_reads, sru_range, typeorf
-                )
-                transcript_results.append(orfs_filtered)
-            else:
-                emptyscore_df = existingscore(orfs_filtered, typeorf, {"rise_up": {}, "step_down": {}})
-                if not emptyscore_df.is_empty():
-                    scoredict = newscoring(
-                        emptyscore_df, tran_reads, sru_range, typeorf, {"rise_up": {}, "step_down": {}}
-                    )
-                    orfs_filtered = assigningscore(
-                        orfs_filtered, scoredict, typeorf
-                    )
-                    orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
-                    transcript_results.append(orfs_filtered)
-    except Exception as e:
-        log_error(f"Error processing transcript {tran}: {str(e)}")
-    
-    return transcript_results
-
-
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
     Score ORFs using bigwig coverage data with high-performance optimization.

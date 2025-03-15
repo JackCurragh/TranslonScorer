@@ -579,7 +579,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     
     # Score in parallel
     all_results = []
-    
+    print(transcript_batches)
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         # Submit all batches for scoring
         futures = []

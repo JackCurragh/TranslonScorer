@@ -308,39 +308,33 @@ def score_transcript(args):
                 
             try:
                 scoring_start_time = time.time()  # Start timing scoring
-                empty_dict = {"rise_up": defaultdict(float), "step_down": defaultdict(float)}
-                
-                # Find ORFs that need scoring
-                find_orfs_start_time = time.time()
-                emptyscore_df = existingscore(orfs_filtered, typeorf, empty_dict)
-                find_orfs_duration = time.time() - find_orfs_start_time
-                log_info(f"Time taken to find ORFs for type {typeorf} in {tran_id}: {find_orfs_duration:.4f} seconds")
-                
-                if not emptyscore_df.is_empty():
-                    # Calculate new scores
-                    calculate_scores_start_time = time.time()
-                    scoredict = newscoring(
-                        emptyscore_df, tran_reads, sru_range, typeorf, empty_dict
+                if old_scoring:
+                    # Use classic scoring method
+                    scored_orfs = oldscoring(
+                        orfs_filtered, tran_reads, sru_range, typeorf
                     )
-                    calculate_scores_duration = time.time() - calculate_scores_start_time
-                    log_info(f"Time taken to calculate scores for type {typeorf} in {tran_id}: {calculate_scores_duration:.4f} seconds")
+                    results.append(scored_orfs)
+                else:
+                    # Use modern scoring method with score caching
+                    empty_dict = {"rise_up": defaultdict(float), "step_down": defaultdict(float)}
                     
-                    # Assign scores to ORFs
-                    assign_scores_start_time = time.time()
-                    orfs_filtered = assigningscore(
-                        orfs_filtered, scoredict, typeorf
-                    )
-                    assign_scores_duration = time.time() - assign_scores_start_time
-                    log_info(f"Time taken to assign scores for type {typeorf} in {tran_id}: {assign_scores_duration:.4f} seconds")
+                    # Find ORFs that need scoring
+                    emptyscore_df = existingscore(orfs_filtered, typeorf, empty_dict)
                     
-                    # Calculate global scores
-                    global_scores_start_time = time.time()
-                    orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
-                    global_scores_duration = time.time() - global_scores_start_time
-                    log_info(f"Time taken to calculate global scores for type {typeorf} in {tran_id}: {global_scores_duration:.4f} seconds")
-                    
-                    results.append(orfs_filtered)
-                
+                    if not emptyscore_df.is_empty():
+                        # Calculate new scores
+                        scoredict = newscoring(
+                            emptyscore_df, tran_reads, sru_range, typeorf, empty_dict
+                        )
+                        
+                        # Assign scores to ORFs
+                        orfs_filtered = assigningscore(
+                            orfs_filtered, scoredict, typeorf
+                        )
+                        
+                        # Calculate global scores
+                        orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
+                        results.append(orfs_filtered)
                 scoring_duration = time.time() - scoring_start_time
                 log_info(f"Time taken to score ORF type {typeorf} for {tran_id}: {scoring_duration:.4f} seconds")
             except Exception as e:

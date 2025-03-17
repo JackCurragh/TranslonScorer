@@ -405,7 +405,6 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     })
 
 @profile  # Add the memory profiler decorator
-@profile  # Add the memory profiler decorator
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
     Score ORFs using bigwig coverage data with high-performance optimization.
@@ -468,8 +467,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     # Process in smaller chunks to avoid memory spikes
     chunk_size = 10000
     total_chunks = (len(all_regions) + chunk_size - 1) // chunk_size  # Ceiling division
-    unique_transcripts = set()
-
+    
     for i in range(total_chunks):
         start_idx = i * chunk_size
         end_idx = min(start_idx + chunk_size, len(all_regions))
@@ -484,16 +482,18 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     total_unique_transcripts = len(unique_transcripts)
     unique_transcripts = None  # Free memory
     gc.collect()
-    # Group regions into batches for better work distribution
+    
+    # Group regions into batches for better work distribution - using indices only
     region_batches = []
     batch_size = config.max_regions_per_worker
     for i in range(0, total_regions, batch_size):
         end = min(i + batch_size, total_regions)
-        region_batches.append(all_regions[i:end])
+        # Store only indices, not data copies
+        region_batches.append((i, end))
     
     log_info(f"Distributing regions into {len(region_batches)} balanced batches")
     
-    # STEP 2: Process all region batches in parallel
+    # STEP 2: Process all region batches in parallel with staggered execution
     transcript_reads = {}  # Will hold reads for all transcripts
     total_processed = 0
     total_failed = 0
@@ -501,37 +501,64 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     # Free up memory before parallel processing
     gc.collect()
     
+    # Modified process_region_batch function to work with indices instead of data slices
+    def process_region_batch_by_indices(indices, all_regions, bwfile_path, config):
+        start_idx, end_idx = indices
+        # Extract the actual data when needed inside the worker process
+        batch_data = all_regions[start_idx:end_idx]
+        # Call the original function with the extracted data
+        return process_region_batch(batch_data, bwfile_path, config)
+    
+    # Staggered parallelization constants
+    max_concurrent_jobs = min(max_workers * 2, 16)  # Limit concurrent jobs
+    stagger_size = min(len(region_batches) // 10 + 1, max_concurrent_jobs)  # Process ~10% at a time
+    log_interval = max(1, len(region_batches) // 20)  # Log ~20 times during processing
+    
+    completed_batches = 0
+    total_batches = len(region_batches)
+    
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all batches for processing - create futures in smaller chunks
-        futures = []
-        for i, batch in enumerate(region_batches):
-            futures.append(executor.submit(process_region_batch, batch, bwfile_path, config))
-        
-        # Process results as they complete
-        completed_batches = 0
-        total_batches = len(region_batches)
-        
-        # Log less frequently
-        log_interval = max(1, total_batches // 20)  # Log ~20 times during processing
-        
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                result = future.result()
-                completed_batches += 1
-                
-                # Merge results
-                transcript_reads.update(result["results"])
-                total_processed += result["processed"]
-                total_failed += result["failed"]
-                
-                # Log progress less frequently
-                if completed_batches % log_interval == 0 or completed_batches == total_batches:
-                    progress = completed_batches / total_batches * 100
-                    log_info(f"Processed {completed_batches}/{total_batches} region batches ({progress:.1f}%) "
-                             f"- {len(transcript_reads)}/{total_unique_transcripts} transcripts with data")
+        # Process batches in a staggered fashion
+        for start_batch in range(0, total_batches, stagger_size):
+            end_batch = min(start_batch + stagger_size, total_batches)
+            current_batch_count = end_batch - start_batch
+            
+            log_info(f"Processing batch group {start_batch//stagger_size + 1}: batches {start_batch} to {end_batch-1}")
+            
+            # Submit a group of batches
+            futures = []
+            for i in range(start_batch, end_batch):
+                indices = region_batches[i]
+                futures.append(executor.submit(
+                    process_region_batch_by_indices, 
+                    indices, 
+                    all_regions, 
+                    bwfile_path, 
+                    config
+                ))
+            
+            # Process results as they complete for this group
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    result = future.result()
+                    completed_batches += 1
                     
-            except Exception as exc:
-                log_error(f"Region batch processing error: {exc}")
+                    # Merge results
+                    transcript_reads.update(result["results"])
+                    total_processed += result["processed"]
+                    total_failed += result["failed"]
+                    
+                    # Log progress less frequently
+                    if completed_batches % log_interval == 0 or completed_batches == total_batches:
+                        progress = completed_batches / total_batches * 100
+                        log_info(f"Processed {completed_batches}/{total_batches} region batches ({progress:.1f}%) "
+                                 f"- {len(transcript_reads)}/{total_unique_transcripts} transcripts with data")
+                        
+                except Exception as exc:
+                    log_error(f"Region batch processing error: {exc}")
+            
+            # Optional: force garbage collection after each stagger group
+            gc.collect()
     
     # Clear regions data as it's no longer needed
     all_regions = None
@@ -541,58 +568,80 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     log_info(f"Completed BigWig data extraction: {total_processed} regions processed, {total_failed} failed")
     log_info(f"Extracted data for {len(transcript_reads)} transcripts")
     
-    # STEP 3: Score transcripts using the extracted reads
+    # STEP 3: Score transcripts using the extracted reads - Also with staggered parallelization
     # Get transcripts with available reads
     available_transcripts = list(transcript_reads.keys())
     log_info(f"Scoring {len(available_transcripts)} transcripts with available data")
     
-    # Create batches for scoring
-    transcript_batches = []
-    for i in range(0, len(available_transcripts), config.batch_size):
-        end = min(i + config.batch_size, len(available_transcripts))
-        transcript_batches.append(available_transcripts[i:end])
+    # Create batches for scoring - indices only
+    transcript_indices = []
+    batch_size = config.batch_size
+    for i in range(0, len(available_transcripts), batch_size):
+        end = min(i + batch_size, len(available_transcripts))
+        transcript_indices.append((i, end))
     
-    # Limit to 10% of the batches for testing
+    # Limit to test batch count if needed
     test_batch_count = 3  # Ensure at least one batch
-    transcript_batches = transcript_batches[:test_batch_count]
+    transcript_indices = transcript_indices[:test_batch_count]
     
-    log_info(f"Processing {test_batch_count} out of {len(transcript_batches)} total batches for testing.")
+    log_info(f"Processing {len(transcript_indices)} transcript batches for testing.")
     
-    # Score in parallel
+    # Score in parallel - with staggered execution
     all_results = []
     
     # Free memory before second parallel processing
     gc.collect()
     
+    # Define function that works with indices
+    def score_transcript_batch_by_indices(indices, transcripts_list, transcript_reads, orf_df, old_scoring, sru_range):
+        start_idx, end_idx = indices
+        batch = transcripts_list[start_idx:end_idx]
+        return score_transcript_batch(batch, transcript_reads, orf_df, old_scoring, sru_range)
+    
+    # Staggered parallelization for scoring
+    scoring_stagger_size = min(len(transcript_indices) // 4 + 1, max_workers)  # Process ~25% at a time
+    
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all batches for scoring
-        futures = []
-        for batch in transcript_batches:
-            futures.append(executor.submit(
-                score_transcript_batch, 
-                batch, 
-                transcript_reads, 
-                orf_df, 
-                old_scoring, 
-                sru_range
-            ))
-        
-        # Process results as they complete
-        completed = 0
-        total_batches = len(futures)
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                batch_results = future.result()
-                if batch_results:
-                    all_results.extend(batch_results)
-                
-                completed += 1
-                # Improved logging for each completed batch
-                progress = (completed / total_batches) * 100
-                log_info(f"Scored batch {completed}/{total_batches} ({progress:.1f}%)")
+        # Process transcript batches in a staggered fashion
+        for start_batch in range(0, len(transcript_indices), scoring_stagger_size):
+            end_batch = min(start_batch + scoring_stagger_size, len(transcript_indices))
+            
+            log_info(f"Processing scoring batch group {start_batch//scoring_stagger_size + 1}: "
+                     f"batches {start_batch} to {end_batch-1}")
+            
+            # Submit a group of scoring batches
+            futures = []
+            for i in range(start_batch, end_batch):
+                indices = transcript_indices[i]
+                futures.append(executor.submit(
+                    score_transcript_batch_by_indices,
+                    indices,
+                    available_transcripts,
+                    transcript_reads,
+                    orf_df,
+                    old_scoring,
+                    sru_range
+                ))
+            
+            # Process results as they complete for this group
+            completed = 0
+            total_futures = len(futures)
+            
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    batch_results = future.result()
+                    if batch_results:
+                        all_results.extend(batch_results)
                     
-            except Exception as exc:
-                log_error(f"Transcript batch scoring error: {exc}")
+                    completed += 1
+                    progress = (completed / total_futures) * 100
+                    log_info(f"Scored batch {completed}/{total_futures} ({progress:.1f}%)")
+                        
+                except Exception as exc:
+                    log_error(f"Transcript batch scoring error: {exc}")
+            
+            # Force garbage collection after each stagger group
+            gc.collect()
     
     # Free memory after processing
     transcript_reads = None

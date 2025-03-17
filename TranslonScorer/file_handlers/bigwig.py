@@ -467,14 +467,23 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     unique_transcripts = set()
     # Process in smaller chunks to avoid memory spikes
     chunk_size = 10000
-    for i in range(0, len(all_regions), chunk_size):
-        chunk = all_regions[i:min(i+chunk_size, len(all_regions))]
-        unique_transcripts.update(r[3] for r in chunk)
-    
+    total_chunks = (len(all_regions) + chunk_size - 1) // chunk_size  # Ceiling division
+    unique_transcripts = set()
+
+    for i in range(total_chunks):
+        start_idx = i * chunk_size
+        end_idx = min(start_idx + chunk_size, len(all_regions))
+        
+        # Process directly from all_regions without creating a new list
+        unique_transcripts.update(all_regions[j][3] for j in range(start_idx, end_idx))
+        
+        # Optional: periodically force garbage collection for very large datasets
+        if i > 0 and i % 10 == 0:  # Every 10 chunks
+            gc.collect()
+
     total_unique_transcripts = len(unique_transcripts)
     unique_transcripts = None  # Free memory
     gc.collect()
-    
     # Group regions into batches for better work distribution
     region_batches = []
     batch_size = config.max_regions_per_worker

@@ -404,6 +404,42 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
         "counts": reads
     })
 
+
+def process_region_batch_by_indices(indices_and_data):
+    """
+    Process a batch of regions from the BigWig file using indices.
+    This must be defined at the module level for multiprocessing to work.
+    
+    Args:
+        indices_and_data: Tuple containing (indices, all_regions, bigwig_path, config)
+    
+    Returns:
+        Results from process_region_batch
+    """
+    indices, all_regions, bigwig_path, config = indices_and_data
+    start_idx, end_idx = indices
+    # Extract the actual data when needed inside the worker process
+    batch_data = all_regions[start_idx:end_idx]
+    # Call the original function with the extracted data
+    return process_region_batch(batch_data, bigwig_path, config)
+
+def score_transcript_batch_by_indices(indices_and_data):
+    """
+    Score a batch of transcripts using indices.
+    This must be defined at the module level for multiprocessing to work.
+    
+    Args:
+        indices_and_data: Tuple containing (indices, transcripts_list, transcript_reads, orf_df, old_scoring, sru_range)
+    
+    Returns:
+        Results from score_transcript_batch
+    """
+    indices, transcripts_list, transcript_reads, orf_df, old_scoring, sru_range = indices_and_data
+    start_idx, end_idx = indices
+    batch = transcripts_list[start_idx:end_idx]
+    return score_transcript_batch(batch, transcript_reads, orf_df, old_scoring, sru_range)
+
+
 @profile  # Add the memory profiler decorator
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
     """

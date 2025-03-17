@@ -100,7 +100,6 @@ def pertranscriptplot(df, exon_df, bwfile):
 
     return summary_plot, table, pertranlist
 
-
 def metageneplot(df, bwfile, exon_df, range_list):
     """
     Generate metagene plots for each type of ORF.
@@ -132,7 +131,7 @@ def metageneplot(df, bwfile, exon_df, range_list):
                 starts = df_tran.get_column("start").to_list()
                 stops = df_tran.get_column("stop").to_list()
                 
-                # Start plot per type
+                # Start plot per type - transcriptreads returns tran_start
                 startplot = tran_reads.group_by("tran_start").agg(pl.col("counts").sum())
                 for start in starts:
                     startplot_final = (
@@ -147,11 +146,12 @@ def metageneplot(df, bwfile, exon_df, range_list):
                         for i in startplot_final:
                             metagene_start_dict[i] += startplot_final[i]
 
-                # Stop plot per type
-                stopplot = tran_reads.group_by("tran_stop").agg(pl.col("counts").sum())
+                # Stop plot per type - use tran_start also for stop analysis
+                # Since transcriptreads doesn't return tran_stop column
+                stopplot = tran_reads.group_by("tran_start").agg(pl.col("counts").sum())
                 for stop in stops:
                     stopplot_final = (
-                        stopplot.with_columns((pl.col("tran_stop") - stop).alias("relativeloc"))
+                        stopplot.with_columns((pl.col("tran_start") - stop).alias("relativeloc"))
                         .filter(pl.col("relativeloc").is_in(range_list))
                         .group_by("relativeloc")
                         .agg(pl.col("counts").sum())

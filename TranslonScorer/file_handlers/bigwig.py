@@ -439,7 +439,6 @@ def score_transcript_batch_by_indices(indices_and_data):
     batch = transcripts_list[start_idx:end_idx]
     return score_transcript_batch(batch, transcript_reads, orf_df, old_scoring, sru_range)
 
-
 @profile  # Add the memory profiler decorator
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
@@ -537,14 +536,6 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     # Free up memory before parallel processing
     gc.collect()
     
-    # Modified process_region_batch function to work with indices instead of data slices
-    def process_region_batch_by_indices(indices, all_regions, bwfile_path, config):
-        start_idx, end_idx = indices
-        # Extract the actual data when needed inside the worker process
-        batch_data = all_regions[start_idx:end_idx]
-        # Call the original function with the extracted data
-        return process_region_batch(batch_data, bwfile_path, config)
-    
     # Staggered parallelization constants
     max_concurrent_jobs = min(max_workers * 2, 16)  # Limit concurrent jobs
     stagger_size = min(len(region_batches) // 10 + 1, max_concurrent_jobs)  # Process ~10% at a time
@@ -565,12 +556,10 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
             futures = []
             for i in range(start_batch, end_batch):
                 indices = region_batches[i]
+                # Pass all data as a single tuple to avoid pickle issues
                 futures.append(executor.submit(
                     process_region_batch_by_indices, 
-                    indices, 
-                    all_regions, 
-                    bwfile_path, 
-                    config
+                    (indices, all_regions, bwfile_path, config)
                 ))
             
             # Process results as they complete for this group
@@ -628,12 +617,6 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     # Free memory before second parallel processing
     gc.collect()
     
-    # Define function that works with indices
-    def score_transcript_batch_by_indices(indices, transcripts_list, transcript_reads, orf_df, old_scoring, sru_range):
-        start_idx, end_idx = indices
-        batch = transcripts_list[start_idx:end_idx]
-        return score_transcript_batch(batch, transcript_reads, orf_df, old_scoring, sru_range)
-    
     # Staggered parallelization for scoring
     scoring_stagger_size = min(len(transcript_indices) // 4 + 1, max_workers)  # Process ~25% at a time
     
@@ -649,14 +632,10 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
             futures = []
             for i in range(start_batch, end_batch):
                 indices = transcript_indices[i]
+                # Pass all data as a single tuple to avoid pickle issues
                 futures.append(executor.submit(
                     score_transcript_batch_by_indices,
-                    indices,
-                    available_transcripts,
-                    transcript_reads,
-                    orf_df,
-                    old_scoring,
-                    sru_range
+                    (indices, available_transcripts, transcript_reads, orf_df, old_scoring, sru_range)
                 ))
             
             # Process results as they complete for this group

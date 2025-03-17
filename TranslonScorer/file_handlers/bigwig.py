@@ -423,21 +423,20 @@ def process_region_batch_by_indices(indices_and_data):
     # Call the original function with the extracted data
     return process_region_batch(batch_data, bigwig_path, config)
 
+
 def score_transcript_batch_by_indices(indices_and_data):
-    """
-    Score a batch of transcripts using indices.
-    This must be defined at the module level for multiprocessing to work.
-    
-    Args:
-        indices_and_data: Tuple containing (indices, transcripts_list, transcript_reads, orf_df, old_scoring, sru_range)
-    
-    Returns:
-        Results from score_transcript_batch
-    """
     indices, transcripts_list, transcript_reads, orf_df, old_scoring, sru_range = indices_and_data
     start_idx, end_idx = indices
-    batch = transcripts_list[start_idx:end_idx]
-    return score_transcript_batch(batch, transcript_reads, orf_df, old_scoring, sru_range)
+    batch_transcripts = transcripts_list[start_idx:end_idx]
+    
+    # Create a filtered dictionary with only the needed transcripts
+    filtered_reads = {tran: transcript_reads[tran] for tran in batch_transcripts if tran in transcript_reads}
+    
+    # Create a filtered orf_df with only the needed transcript IDs
+    filtered_orf_df = orf_df.filter(pl.col("tran_id").is_in(batch_transcripts))
+    
+    return score_transcript_batch(batch_transcripts, filtered_reads, filtered_orf_df, old_scoring, sru_range)
+
 
 @profile  # Add the memory profiler decorator
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):

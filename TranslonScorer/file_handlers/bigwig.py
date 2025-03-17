@@ -20,9 +20,8 @@ from dataclasses import dataclass, field
 from contextlib import contextmanager
 import tempfile
 import pickle
-import itertools
 import gc
-from memory_profiler import profile  # Import the memory profiler
+from collections import defaultdict
 
 
 @dataclass
@@ -61,6 +60,8 @@ class BigWigCache:
         self.max_cache_size = max_cache_size
         self.cache = {}
         self.chroms = set()
+        self.hits = 0
+        self.misses = 0
         
         # Initialize with chromosome information
         with open_bigwig(bigwig_path) as bwfile:
@@ -79,15 +80,17 @@ class BigWigCache:
         # Check cache
         cache_key = (chrom, start, stop)
         if cache_key in self.cache:
+            self.hits += 1
             return self.cache[cache_key]
         
         # Fetch from file
+        self.misses += 1
         with open_bigwig(self.bigwig_path) as bwfile:
             values = bwfile.values(chrom, start, stop)
             
-            # Manage cache size
+            # Manage cache size with LRU-like behavior
             if len(self.cache) >= self.max_cache_size:
-                # Remove a random item (simple strategy)
+                # Remove oldest item (simple approximation)
                 self.cache.pop(next(iter(self.cache)))
             
             self.cache[cache_key] = values
@@ -105,11 +108,15 @@ def _flatten_list_or_value(value: Any) -> List:
         return [value]
 
 
-def extract_regions(exon_df: pl.DataFrame) -> List[Tuple[str, int, int, str]]:
+def extract_regions(exon_df: pl.DataFrame, orf_tran_ids=None) -> List[Tuple[str, int, int, str]]:
     """
     Extract regions (chr, start, stop, tran_id) from exon DataFrame.
     Handles both list and scalar values.
     
+    Args:
+        exon_df: DataFrame with exon data
+        orf_tran_ids: Optional set of transcript IDs to filter by
+        
     Returns:
         List of (chr, start, stop, tran_id) tuples
     """
@@ -119,6 +126,10 @@ def extract_regions(exon_df: pl.DataFrame) -> List[Tuple[str, int, int, str]]:
     for row in exon_df.iter_rows(named=True):
         chrom = row["chr"]
         tran_id = row["tran_id"]
+        
+        # Skip if we're filtering by transcript ID and this one isn't in the list
+        if orf_tran_ids is not None and tran_id not in orf_tran_ids:
+            continue
         
         # Handle both single values and lists for start/stop
         starts = _flatten_list_or_value(row["start"])
@@ -146,152 +157,141 @@ def extract_regions(exon_df: pl.DataFrame) -> List[Tuple[str, int, int, str]]:
     return regions
 
 
-def process_df_in_chunks(df, chunk_size=10000, func=None):
+def process_batch(batch_data):
     """
-    Process a large DataFrame in chunks to reduce memory usage.
+    Process a batch of regions - module level function for multiprocessing
     
     Args:
-        df: Polars DataFrame
-        chunk_size: Number of rows to process at once
-        func: Function to apply to each chunk
-        
-    Returns:
-        List of results from processing each chunk
-    """
-    results = []
-    total_rows = df.height
-    
-    for i in range(0, total_rows, chunk_size):
-        end = min(i + chunk_size, total_rows)
-        chunk = df.slice(i, end - i)
-        
-        if func:
-            result = func(chunk)
-            results.append(result)
-        else:
-            results.append(chunk)
-            
-        # Force garbage collection after processing each chunk
-        chunk = None
-        gc.collect()
-        
-    return results
-
-
-def process_batch_memory_efficient(batch_data):
-    """
-    Process a batch of regions using memory-efficient approach.
-    
-    Args:
-        batch_data: Tuple containing (indices, all_regions, bwfile_path, chunk_size)
+        batch_data: Tuple containing (regions, bigwig_path)
         
     Returns:
         Dictionary with processing results
     """
-    batch_indices, all_regions, bwfile_path, chunk_size = batch_data
-    start_idx, end_idx = batch_indices
-    batch_regions = all_regions[start_idx:end_idx]
+    regions, bigwig_path = batch_data
     
-    # Use BigWigCache for faster access
-    bw_cache = BigWigCache(bwfile_path, max_cache_size=2000)  # Larger cache
+    # Use an optimized cache size based on batch size
+    cache_size = min(2000, max(500, len(regions) // 4))
+    bw_cache = BigWigCache(bigwig_path, max_cache_size=cache_size)
     
-    # Group regions by transcript to minimize BigWig access
+    # Group regions by transcript AND chromosome for better locality
     regions_by_transcript = {}
-    for chrom, start, stop, tran_id in batch_regions:
+    for region in regions:
+        chrom, start, stop, tran_id = region
         if tran_id not in regions_by_transcript:
-            regions_by_transcript[tran_id] = []
-        regions_by_transcript[tran_id].append((chrom, start, stop))
+            regions_by_transcript[tran_id] = {}
+        
+        if chrom not in regions_by_transcript[tran_id]:
+            regions_by_transcript[tran_id][chrom] = []
+            
+        regions_by_transcript[tran_id][chrom].append((start, stop))
     
     batch_results = {}
     processed = 0
     failed = 0
     
     # Process each transcript's regions
-    for tran_id, regions in regions_by_transcript.items():
-        # For small transcripts, use a regular list
-        # For larger ones, use a NumPy array directly
-        all_reads = []
-        total_length = sum(stop - start for _, start, stop in regions)
+    for tran_id, chroms in regions_by_transcript.items():
+        # Store as sparse representation
+        positions = []
+        values = []
+        max_position = 0
         
-        # If the total length is large, pre-allocate a numpy array
-        if total_length > 50000:
-            all_reads = np.zeros(total_length, dtype=np.float32)
-            current_pos = 0
+        # Process each chromosome separately for better BigWig cache efficiency
+        for chrom, regions in chroms.items():
+            # Sort regions by position for better sequential access
+            regions.sort()
             
-            for chrom, start, stop in regions:
+            current_position = len(positions)
+            
+            for start, stop in regions:
                 try:
                     region_size = stop - start
-                    values = bw_cache.get_values(chrom, start, stop)
+                    raw_values = bw_cache.get_values(chrom, start, stop)
                     
-                    if values and any(v is not None for v in values):
-                        for i, v in enumerate(values):
-                            if v is not None:
-                                all_reads[current_pos + i] = v
+                    if raw_values is None:
+                        # Region not in bigwig
+                        processed += 1
+                        continue
                     
-                    current_pos += region_size
+                    # Only store non-zero values to save memory
+                    for i, v in enumerate(raw_values):
+                        if v is not None and v > 0:
+                            positions.append(current_position + i)
+                            values.append(v)
+                    
+                    # Update max position and current position
+                    max_position = max(max_position, current_position + len(raw_values))
+                    current_position += len(raw_values)
                     processed += 1
-                except Exception:
+                except Exception as e:
+                    log_error(f"Error processing region {chrom}:{start}-{stop}: {str(e)}")
                     failed += 1
-                    # Skip filling, already zeros
-                    current_pos += stop - start
-            
-            # Only store if there are non-zero values
-            if np.any(all_reads):
-                batch_results[tran_id] = all_reads
-        else:
-            # For small regions, use the original approach (faster for small data)
-            for chrom, start, stop in regions:
-                try:
-                    values = bw_cache.get_values(chrom, start, stop)
-                    if values and any(v is not None for v in values):
-                        all_reads.extend(v if v is not None else 0.0 for v in values)
-                    else:
-                        all_reads.extend([0.0] * (stop - start))
-                    
-                    processed += 1
-                except Exception:
-                    failed += 1
-                    all_reads.extend([0.0] * (stop - start))
-            
-            # Only keep non-empty results
-            if all_reads and any(v > 0 for v in all_reads):
-                batch_results[tran_id] = np.array(all_reads, dtype=np.float32)
+                    current_position += (stop - start)  # Still increment position
+        
+        # Only store if we have data
+        if positions and values:
+            batch_results[tran_id] = {
+                'positions': positions,
+                'values': values,
+                'max_pos': max_position
+            }
+    
+    # Clear references to help garbage collection
+    bw_cache = None
+    regions_by_transcript = None
+    gc.collect()
     
     return {"results": batch_results, "processed": processed, "failed": failed}
 
 
-def score_transcripts_memory_efficient(batch_data):
+def score_transcript(args):
     """
-    Score a batch of transcripts with memory-efficient approach.
+    Score a single transcript - module level function for multiprocessing
     
     Args:
-        batch_data: Tuple containing necessary data
+        args: Tuple containing (tran_id, transcript_data, orf_data, old_scoring, sru_range)
         
     Returns:
-        List of scored ORF DataFrames
+        Scored ORF DataFrame or None
     """
-    batch_indices, available_transcripts, transcript_data, orf_df, old_scoring, sru_range = batch_data
-    start_idx, end_idx = batch_indices
-    batch_transcripts = available_transcripts[start_idx:end_idx]
+    tran_id, tran_data, orf_data, old_scoring, sru_range = args
     
-    batch_results = []
-    
-    for tran in batch_transcripts:
-        if tran not in transcript_data:
-            continue
+    try:
+        # Create DataFrame from transcript data
+        if isinstance(tran_data, dict) and 'positions' in tran_data:
+            # Convert from sparse representation
+            max_pos = tran_data['max_pos'] + 1
+            full_array = np.zeros(max_pos, dtype=np.float32)
             
-        # Convert NumPy array to DataFrame
-        tran_array = transcript_data[tran]
-        tran_reads = pl.DataFrame({
-            "tran_start": pl.arange(0, len(tran_array), eager=True),
-            "counts": tran_array
-        })
+            # Fill in non-zero values
+            for pos, val in zip(tran_data['positions'], tran_data['values']):
+                if pos < max_pos:  # Safety check
+                    full_array[pos] = val
+            
+            # Create DataFrame from full array
+            tran_reads = pl.DataFrame({
+                "tran_start": pl.arange(0, max_pos, eager=True),
+                "counts": full_array
+            })
+        elif isinstance(tran_data, list):
+            # Convert from simple list
+            tran_reads = pl.DataFrame({
+                "tran_start": pl.arange(0, len(tran_data), eager=True),
+                "counts": tran_data
+            })
+        else:
+            # Invalid data format
+            return None
         
-        orfs = orf_df.filter(pl.col("tran_id") == tran)
+        # Create ORF DataFrame
+        orfs = pl.DataFrame(orf_data)
         
         if orfs.is_empty() or tran_reads.is_empty():
-            continue
-            
+            return None
+        
+        results = []
+        
+        # Score each ORF type separately
         for typeorf in orfs["type"].unique():
             orfs_filtered = orfs.filter(pl.col("type") == typeorf)
             
@@ -300,25 +300,43 @@ def score_transcripts_memory_efficient(batch_data):
                 
             try:
                 if old_scoring:
-                    orfs_filtered = oldscoring(
+                    # Use classic scoring method
+                    scored_orfs = oldscoring(
                         orfs_filtered, tran_reads, sru_range, typeorf
                     )
-                    batch_results.append(orfs_filtered)
+                    results.append(scored_orfs)
                 else:
-                    emptyscore_df = existingscore(orfs_filtered, typeorf, {"rise_up": {}, "step_down": {}})
+                    # Use modern scoring method with score caching
+                    empty_dict = {"rise_up": defaultdict(float), "step_down": defaultdict(float)}
+                    
+                    # Find ORFs that need scoring
+                    emptyscore_df = existingscore(orfs_filtered, typeorf, empty_dict)
+                    
                     if not emptyscore_df.is_empty():
+                        # Calculate new scores
                         scoredict = newscoring(
-                            emptyscore_df, tran_reads, sru_range, typeorf, {"rise_up": {}, "step_down": {}}
+                            emptyscore_df, tran_reads, sru_range, typeorf, empty_dict
                         )
+                        
+                        # Assign scores to ORFs
                         orfs_filtered = assigningscore(
                             orfs_filtered, scoredict, typeorf
                         )
+                        
+                        # Calculate global scores
                         orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
-                        batch_results.append(orfs_filtered)
+                        results.append(orfs_filtered)
             except Exception as e:
-                log_error(f"Error scoring ORFs for transcript {tran}, type {typeorf}: {str(e)}")
-    
-    return batch_results
+                log_error(f"Error scoring ORFs for transcript {tran_id}, type {typeorf}: {str(e)}")
+        
+        # Combine results for this transcript
+        if results:
+            return pl.concat(results).to_dict(as_series=False)
+        
+        return None
+    except Exception as e:
+        log_error(f"Error in score_transcript for {tran_id}: {str(e)}")
+        return None
 
 
 def stream_results_to_disk(results_batch, output_file):
@@ -340,27 +358,21 @@ def stream_results_to_disk(results_batch, output_file):
     
     if file_exists:
         # Append to existing file
-        # Read the existing header first
         try:
-            with open(output_file, 'r') as f:
-                header = f.readline().strip()
-            
-            # Write without header
-            with open(output_file, 'a') as f:
-                combined.write_csv(f, include_header=False)
+            combined.write_csv(output_file, mode="a", include_header=False)
         except Exception as e:
             log_error(f"Error appending to CSV: {e}")
     else:
         # Create new file
         try:
-            with open(output_file, 'w') as f:
-                combined.write_csv(f, include_header=True)
+            combined.write_csv(output_file)
         except Exception as e:
             log_error(f"Error writing to CSV: {e}")
     
     # Clear the batch
     for i in range(len(results_batch)):
         results_batch[i] = None
+
 
 def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     """
@@ -487,7 +499,6 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     })
 
 
-@profile
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
     Score ORFs using bigwig coverage data with memory-efficient streaming.
@@ -504,445 +515,292 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     Returns:
         DataFrame: Scored ORFs
     """
-    import gc
-    import os
-    import time
-    import tempfile
-    import concurrent.futures
-    import numpy as np
-    from functools import partial
-    import polars as pl
-    from ..utils.logging import log_info, log_warning, log_error
-    
     start_time = time.time()
-    config = ProcessingConfig(batch_size=batch_size, sru_range=sru_range)
+    log_info(f"Starting scoring with BigWig file: {bigwig}")
     
-    bwfile_path = bigwig
+    # Determine optimal worker count based on system resources
+    if max_workers is None:
+        try:
+            import psutil
+            mem_gb = psutil.virtual_memory().available / (1024**3)
+            # More conservative worker allocation
+            max_workers = max(1, min(os.cpu_count(), int(mem_gb / 2)))
+            max_workers = min(max_workers, 6)  # Cap at 6 workers for stability
+        except ImportError:
+            # Conservative default if psutil not available
+            max_workers = min(os.cpu_count() or 4, 4)
     
-    # Load data efficiently
-    log_info("Loading exon and ORF data...")
+    log_info(f"Using {max_workers} worker processes")
     
-    # Load exon data with optimized approach
+    # Load exon data efficiently
+    log_info("Loading exon data...")
     if isinstance(exon, str):
-        # Use streaming approach for large files
         if os.path.exists(exon) and os.path.getsize(exon) > 1e9:  # 1 GB
-            # Stream read with specific columns - much more memory efficient
+            # For large files, stream and select only needed columns
             exon_df = pl.scan_csv(exon).select(["chr", "start", "stop", "tran_id"]).collect()
         else:
             exon_df = pl.read_csv(exon)
     else:
         exon_df = exon
     
-    # For ORFs - similar optimization
+    # Load ORF data efficiently
+    log_info("Loading ORF data...")
     if isinstance(orfs, str):
         if os.path.exists(orfs) and os.path.getsize(orfs) > 1e9:  # 1 GB
-            # Create a LazyFrame for large ORF files
-            orf_scan = pl.scan_csv(orfs)
-            # Only collect essential columns and materialize only once
+            # For large files, stream and select only needed columns
             needed_cols = ["tran_id", "type", "start", "stop", "length"]
+            orf_scan = pl.scan_csv(orfs)
+            
             # Add any scoring-related columns
-            all_cols = orf_scan.columns
-            for col in all_cols:
-                if "score" in col.lower() or col in ["rise_up", "step_down"]:
+            for col in orf_scan.columns:
+                if "score" in col.lower() or col in ["rise_up", "step_down", "hrf", "avg", "nzc"]:
                     needed_cols.append(col)
+                    
             orf_df = orf_scan.select(needed_cols).collect()
         else:
             orf_df = pl.read_csv(orfs)
     else:
         orf_df = orfs
-
-    # Pre-compute and cache ORF transcript IDs to reduce repeated computations
+    
+    # Get transcript IDs from ORFs for filtering
+    log_info("Identifying transcripts with ORFs...")
     orf_tran_ids = set(orf_df["tran_id"].unique().to_list())
+    log_info(f"Found {len(orf_tran_ids)} transcripts with ORFs")
     
-    # Only process exons that have corresponding ORFs to save time
+    # Filter exons to only include transcripts with ORFs
     exon_df = exon_df.filter(pl.col("tran_id").is_in(orf_tran_ids))
+    log_info(f"Filtered exon data to {exon_df.height} rows with relevant transcripts")
     
-    # Optimize worker count based on system resources
-    if max_workers is None:
-        try:
-            import psutil
-            # Use available memory to determine worker count
-            available_memory_gb = psutil.virtual_memory().available / (1024**3)
-            # Estimate 1GB per worker as baseline with safety margin
-            suggested_workers = max(1, min(os.cpu_count(), int(available_memory_gb * 0.75)))
-            max_workers = min(suggested_workers, 8)  # Cap at 8 workers for stability
-        except ImportError:
-            # If psutil is not available, use a conservative approach
-            max_workers = min(os.cpu_count() or 4, 4)  # Lower default cap
+    # Extract regions from exon data
+    log_info("Extracting genomic regions...")
+    regions = extract_regions(exon_df, orf_tran_ids)
+    log_info(f"Extracted {len(regions)} regions to process")
     
-    log_info(f"Using {max_workers} workers for parallel processing")
-    
-    # Extract regions more efficiently using Polars' native operations
-    log_info("Extracting regions from exon data...")
-    
-    # Handle different data formats for start/stop
-    # This is a critical optimization to avoid exploding memory with Python lists
-    flat_regions = []
-    
-    # Process exon data to extract regions
-    for row in exon_df.iter_rows(named=True):
-        chrom = row["chr"]
-        tran_id = row["tran_id"]
-        
-        # Skip if transcript has no ORFs (using pre-computed set)
-        if tran_id not in orf_tran_ids:
-            continue
-        
-        # Handle both single values and lists for start/stop
-        if isinstance(row["start"], list):
-            starts = row["start"]
-            stops = row["stop"] if isinstance(row["stop"], list) else [row["stop"]] * len(starts)
-        else:
-            starts = [row["start"]]
-            stops = [row["stop"]]
-        
-        # Ensure equal length
-        min_len = min(len(starts), len(stops))
-        if min_len == 0:
-            continue
-            
-        starts = starts[:min_len]
-        stops = stops[:min_len]
-        
-        # Process regions
-        for start, stop in zip(starts, stops):
-            try:
-                start = int(start)
-                stop = int(stop)
-                
-                if start >= stop:
-                    continue
-                    
-                flat_regions.append((chrom, start, stop, tran_id))
-            except (TypeError, ValueError):
-                continue
-    
-    # Clear exon_df to free memory
+    # Free memory from exon data as it's no longer needed
     exon_df = None
     gc.collect()
     
-    total_regions = len(flat_regions)
-    log_info(f"Found {total_regions} regions to process from {len(orf_tran_ids)} transcripts with ORFs")
-    
-    if total_regions == 0:
+    if not regions:
         log_warning("No valid regions found to process")
         return pl.DataFrame()
     
-    # Group regions by transcript to improve data locality and reduce BigWig access
-    regions_by_transcript = {}
-    for chrom, start, stop, tran_id in flat_regions:
-        if tran_id not in regions_by_transcript:
-            regions_by_transcript[tran_id] = []
-        regions_by_transcript[tran_id].append((chrom, start, stop))
+    # Create balanced batches for parallel processing
+    log_info("Creating balanced processing batches...")
     
-    # Clear flat_regions to free memory
-    flat_regions = None
-    gc.collect()
-    
-    # Create a more efficient batching strategy - group by chromosomes for better cache locality
-    # This improves BigWig access patterns since the file is indexed by chromosome
+    # Group regions by chromosome for better BigWig performance
     regions_by_chrom = {}
-    for tran_id, regions in regions_by_transcript.items():
-        for chrom, start, stop in regions:
-            if chrom not in regions_by_chrom:
-                regions_by_chrom[chrom] = []
-            regions_by_chrom[chrom].append((start, stop, tran_id))
+    for region in regions:
+        chrom = region[0]
+        if chrom not in regions_by_chrom:
+            regions_by_chrom[chrom] = []
+        regions_by_chrom[chrom].append(region)
     
-    # Create balanced batches that keep chromosome locality
+    # Create batches that preserve chromosome locality
     batches = []
-    chrom_order = sorted(regions_by_chrom.keys())
+    target_size = max(1, len(regions) // (max_workers * 3))  # Aim for 3x batches per worker
     
-    # Target a specific number of batches based on worker count
-    target_batch_count = max_workers * 3  # Create 3x as many batches as workers for better load balancing
-    target_batch_size = max(1, total_regions // target_batch_count)
-    
-    current_batch = []
-    current_size = 0
-    
-    for chrom in chrom_order:
-        chrom_regions = regions_by_chrom[chrom]
-        # Sort by position to improve cache locality
-        chrom_regions.sort()  # Sort by start position
+    for chrom, chrom_regions in regions_by_chrom.items():
+        # Sort regions by start position for better locality
+        chrom_regions.sort(key=lambda r: r[1])
         
-        for region in chrom_regions:
-            current_batch.append((chrom,) + region)
-            current_size += 1
-            
-            if current_size >= target_batch_size:
-                batches.append(current_batch)
-                current_batch = []
-                current_size = 0
+        # Create batches of appropriate size
+        for i in range(0, len(chrom_regions), target_size):
+            batch = chrom_regions[i:min(i+target_size, len(chrom_regions))]
+            if batch:
+                batches.append((batch, bigwig))
     
-    # Add the last batch if it has any regions
-    if current_batch:
-        batches.append(current_batch)
+    log_info(f"Created {len(batches)} processing batches")
     
-    # Clear region mappings to free memory
+    # Free memory from regions data
+    regions = None
     regions_by_chrom = None
-    regions_by_transcript = None
     gc.collect()
     
-    log_info(f"Created {len(batches)} balanced processing batches")
-    
-    # Process batches with improved parallelism
+    # Process batches in parallel
+    log_info("Starting BigWig data extraction...")
     transcript_data = {}
-    
-    # Custom worker function with better memory management
-    def process_batch(batch):
-        # Use BigWigCache only for this batch
-        bw_cache = BigWigCache(bwfile_path, max_cache_size=1000)
-        
-        # Group by transcript again
-        local_transcript_regions = {}
-        for chrom, start, stop, tran_id in batch:
-            if tran_id not in local_transcript_regions:
-                local_transcript_regions[tran_id] = []
-            local_transcript_regions[tran_id].append((chrom, start, stop))
-        
-        batch_results = {}
-        processed = 0
-        failed = 0
-        
-        # Process each transcript
-        for tran_id, regions in local_transcript_regions.items():
-            # Skip transcripts that don't have ORFs
-            if tran_id not in orf_tran_ids:
-                continue
-                
-            try:
-                # Calculate total region size to preallocate array
-                total_size = sum(stop - start for _, start, stop in regions)
-                
-                # Use a NumPy array directly to save memory and improve performance
-                position_data = []
-                read_data = []
-                
-                # Process regions
-                for chrom, start, stop in regions:
-                    try:
-                        region_size = stop - start
-                        values = bw_cache.get_values(chrom, start, stop)
-                        
-                        if values is None:
-                            # Region not in bigwig, add zeros
-                            read_data.extend([0.0] * region_size)
-                            position_data.extend(range(len(position_data), len(position_data) + region_size))
-                            processed += 1
-                            continue
-                        
-                        # Process valid values
-                        current_position = len(position_data)
-                        
-                        for i, v in enumerate(values):
-                            read_data.append(v if v is not None else 0.0)
-                            position_data.append(current_position + i)
-                        
-                        processed += 1
-                    except Exception as e:
-                        failed += 1
-                        # Handle error by filling with zeros
-                        read_data.extend([0.0] * region_size)
-                        position_data.extend(range(len(position_data), len(position_data) + region_size))
-                
-                # Only keep non-empty results and convert to NumPy arrays
-                if read_data and any(v > 0 for v in read_data):
-                    # Store as compressed tuple of position and reads - more memory efficient
-                    # Only store non-zero values to save memory
-                    non_zero_indices = [i for i, v in enumerate(read_data) if v > 0]
-                    if non_zero_indices:
-                        # Store sparse representation
-                        batch_results[tran_id] = {
-                            'positions': [position_data[i] for i in non_zero_indices],
-                            'values': [read_data[i] for i in non_zero_indices],
-                            'max_pos': max(position_data) if position_data else 0
-                        }
-            except Exception as e:
-                log_error(f"Error processing transcript {tran_id}: {str(e)}")
-        
-        # Clear local variables
-        bw_cache = None
-        local_transcript_regions = None
-        gc.collect()
-        
-        return {"results": batch_results, "processed": processed, "failed": failed}
-    
-    # Process batches with better parallelism
-    # Use a context manager for better resource management
     total_processed = 0
     total_failed = 0
     
-    # Create a temporary file for streaming results
-    temp_results_file = os.path.join(tempfile.gettempdir(), f"translonscorer_results_{int(time.time())}.csv")
-    log_info(f"Will stream results to temporary file: {temp_results_file}")
+    # Process in smaller groups to manage memory
+    group_size = min(len(batches), max_workers * 2)
+    batch_groups = [batches[i:i+group_size] for i in range(0, len(batches), group_size)]
     
-    # Process batches in staggered groups to limit memory pressure
-    stagger_size = min(len(batches), max_workers * 2)
-    
-    for batch_start in range(0, len(batches), stagger_size):
-        batch_end = min(batch_start + stagger_size, len(batches))
-        current_batches = batches[batch_start:batch_end]
-        
-        log_info(f"Processing batch group {batch_start//stagger_size + 1}/{(len(batches) + stagger_size - 1)//stagger_size}")
+    for group_idx, batch_group in enumerate(batch_groups):
+        log_info(f"Processing batch group {group_idx+1}/{len(batch_groups)}")
         
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(process_batch, batch): i for i, batch in enumerate(current_batches)}
+            future_to_batch = {executor.submit(process_batch, batch_data): i 
+                              for i, batch_data in enumerate(batch_group)}
             
-            for future in concurrent.futures.as_completed(futures):
+            for future in concurrent.futures.as_completed(future_to_batch):
                 try:
                     result = future.result()
                     
-                    # Update transcript data with results
+                    # Update transcript data
                     for tran_id, data in result["results"].items():
                         transcript_data[tran_id] = data
                     
                     total_processed += result["processed"]
                     total_failed += result["failed"]
-                    
-                    # Log progress periodically
-                    if len(transcript_data) % 100 == 0:
-                        log_info(f"Processed data for {len(transcript_data)} transcripts so far")
                 except Exception as e:
                     log_error(f"Error processing batch: {str(e)}")
         
-        # Force garbage collection between batch groups
+        # Force garbage collection between groups
         gc.collect()
+        
+        # Log progress
+        current_transcripts = len(transcript_data)
+        log_info(f"Processed {current_transcripts} transcripts so far "
+                f"({total_processed} regions, {total_failed} failed)")
     
-    log_info(f"Completed BigWig data extraction: {total_processed} regions processed, {total_failed} failed")
-    log_info(f"Extracted data for {len(transcript_data)} transcripts")
+    log_info(f"Completed BigWig data extraction for {len(transcript_data)} transcripts")
     
-    # Clear batches to free memory
+    # Free memory
     batches = None
+    batch_groups = None
     gc.collect()
     
-    # Convert sparse transcript data to DataFrame format for scoring
-    def prepare_transcript_reads(tran_id, data):
-        # Convert sparse representation to DataFrame
-        max_pos = data['max_pos']
-        sparse_positions = data['positions']
-        sparse_values = data['values']
-        
-        # Create DataFrame directly with sparse data
-        # This avoids creating full arrays with mostly zeros
-        tran_reads = pl.DataFrame({
-            "tran_start": sparse_positions,
-            "counts": sparse_values
-        })
-        
-        return tran_id, tran_reads
+    # Create a temporary file for streaming results
+    temp_dir = tempfile.gettempdir()
+    temp_results_file = os.path.join(temp_dir, f"translonscorer_results_{int(time.time())}.csv")
+    log_info(f"Will stream results to temporary file: {temp_results_file}")
     
-    # Score ORFs using more efficient batching
-    available_transcripts = list(transcript_data.keys())
-    log_info(f"Scoring {len(available_transcripts)} transcripts with available data")
+    # Prepare scoring tasks
+    log_info("Preparing scoring tasks...")
     
-    # Create a more memory-efficient way to score ORFs
-    # Process one transcript at a time to limit memory usage
-    def score_transcript(tran_id):
+    # Group ORFs by transcript and type
+    log_info("Organizing ORF data by transcript...")
+    orfs_by_tran = {}
+    
+    for row in orf_df.iter_rows(named=True):
+        tran_id = row["tran_id"]
+        
+        # Skip transcripts with no BigWig data
         if tran_id not in transcript_data:
-            return None
+            continue
             
-        # Create DataFrame from sparse data
-        data = transcript_data[tran_id]
-        _, tran_reads = prepare_transcript_reads(tran_id, data)
+        if tran_id not in orfs_by_tran:
+            orfs_by_tran[tran_id] = {}
         
-        # Filter ORFs for this transcript
-        orfs_for_tran = orf_df.filter(pl.col("tran_id") == tran_id)
-        
-        if orfs_for_tran.is_empty() or tran_reads.is_empty():
-            return None
+        # Group by ORF type
+        typeorf = row["type"]
+        if typeorf not in orfs_by_tran[tran_id]:
+            orfs_by_tran[tran_id][typeorf] = []
             
-        results = []
-        
-        # Score each ORF type
-        for typeorf in orfs_for_tran["type"].unique():
-            orfs_filtered = orfs_for_tran.filter(pl.col("type") == typeorf)
+        orfs_by_tran[tran_id][typeorf].append(row)
+    
+    # Create scoring tasks
+    scoring_tasks = []
+    
+    for tran_id in transcript_data.keys():
+        if tran_id not in orfs_by_tran:
+            continue
             
-            if orfs_filtered.is_empty():
-                continue
-                
-            try:
-                if old_scoring:
-                    orfs_filtered = oldscoring(
-                        orfs_filtered, tran_reads, sru_range, typeorf
-                    )
-                    results.append(orfs_filtered)
-                else:
-                    # Optimize dictionary handling - use defaultdict to avoid key checks
-                    from collections import defaultdict
-                    empty_dict = {"rise_up": defaultdict(float), "step_down": defaultdict(float)}
-                    
-                    # Check existing scores
-                    emptyscore_df = existingscore(orfs_filtered, typeorf, empty_dict)
-                    if not emptyscore_df.is_empty():
-                        # Calculate new scores
-                        scoredict = newscoring(
-                            emptyscore_df, tran_reads, sru_range, typeorf, empty_dict
-                        )
-                        # Assign scores
-                        orfs_filtered = assigningscore(
-                            orfs_filtered, scoredict, typeorf
-                        )
-                        # Calculate global scores
-                        orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
-                        results.append(orfs_filtered)
-            except Exception as e:
-                log_error(f"Error scoring ORFs for transcript {tran_id}, type {typeorf}: {str(e)}")
+        # Combine ORFs for this transcript
+        orf_rows = []
+        for typeorf, type_rows in orfs_by_tran[tran_id].items():
+            orf_rows.extend(type_rows)
         
-        # Combine results for this transcript
-        if results:
-            return pl.concat(results)
-        return None
+        if not orf_rows:
+            continue
+            
+        # Convert to dictionary format for serialization
+        orf_dict = {}
+        for key in orf_rows[0].keys():
+            orf_dict[key] = [row[key] for row in orf_rows]
+            
+        # Add task
+        scoring_tasks.append((tran_id, transcript_data[tran_id], orf_dict, old_scoring, sru_range))
     
-    # Process transcripts in batches to control memory usage
-    scoring_batch_size = max(5, min(50, (len(available_transcripts) + max_workers - 1) // max_workers))
-    log_info(f"Using batch size of {scoring_batch_size} for scoring")
+    # Free memory
+    orfs_by_tran = None
+    orf_df = None
+    gc.collect()
     
-    all_results = []
-    processed_count = 0
+    log_info(f"Created {len(scoring_tasks)} scoring tasks")
     
-    # Use a reduced worker count for scoring to manage memory
+    # Score in batches to manage memory
+    log_info("Starting ORF scoring...")
+    
+    # Use fewer workers for scoring to manage memory
     scoring_workers = max(1, min(max_workers, 4))
-    log_info(f"Using {scoring_workers} workers for scoring to manage memory usage")
+    log_info(f"Using {scoring_workers} workers for scoring phase")
     
-    for batch_start in range(0, len(available_transcripts), scoring_batch_size):
-        batch_end = min(batch_start + scoring_batch_size, len(available_transcripts))
-        batch_transcripts = available_transcripts[batch_start:batch_end]
+    # Process in smaller batches
+    score_batch_size = min(100, max(10, len(scoring_tasks) // (scoring_workers * 4)))
+    task_batches = [scoring_tasks[i:i+score_batch_size] 
+                   for i in range(0, len(scoring_tasks), score_batch_size)]
+    
+    total_orfs = 0
+    
+    for batch_idx, task_batch in enumerate(task_batches):
+        log_info(f"Processing scoring batch {batch_idx+1}/{len(task_batches)}")
         
         with concurrent.futures.ProcessPoolExecutor(max_workers=scoring_workers) as executor:
-            batch_results = list(filter(None, executor.map(score_transcript, batch_transcripts)))
-        
-        # Stream results to disk instead of keeping in memory
-        if batch_results:
-            stream_results_to_disk(batch_results, temp_results_file)
-        
-        processed_count += len(batch_transcripts)
-        completion_pct = (processed_count / len(available_transcripts)) * 100
-        log_info(f"Processed {processed_count}/{len(available_transcripts)} transcripts ({completion_pct:.1f}%)")
-        
-        # Clear batch results to free memory
-        batch_results = None
+            results = list(filter(None, executor.map(score_transcript, task_batch)))
+            
+        # Convert results to DataFrames
+        if results:
+            result_dfs = [pl.DataFrame(res) for res in results if res]
+            
+            if result_dfs:
+                # Stream to disk
+                if batch_idx == 0:
+                    # First batch - create file
+                    pl.concat(result_dfs).write_csv(temp_results_file)
+                else:
+                    # Append to existing file
+                    pl.concat(result_dfs).write_csv(temp_results_file, mode="a", include_header=False)
+                
+                # Update counts
+                total_orfs += sum(df.height for df in result_dfs)
+                
+                # Log progress
+                log_info(f"Processed {total_orfs} ORFs so far")
+                
+        # Force garbage collection between batches
+        result_dfs = None
+        results = None
         gc.collect()
     
-    # Load the final results
+    # Free memory
+    scoring_tasks = None
+    task_batches = None
+    transcript_data = None
+    gc.collect()
+    
+    # Load final results
     if os.path.exists(temp_results_file) and os.path.getsize(temp_results_file) > 0:
-        log_info("Reading final results from disk...")
+        log_info(f"Loading final results from {temp_results_file}")
         
-        # Use streaming for large files
-        if os.path.getsize(temp_results_file) > 1e9:  # > 1GB
-            final_df = pl.scan_csv(temp_results_file).collect()
-        else:
-            final_df = pl.read_csv(temp_results_file)
-            
-        log_info(f"Loaded {final_df.height} scored ORFs successfully")
-        
-        # Clean up
         try:
-            os.remove(temp_results_file)
-        except:
-            log_warning(f"Could not remove temporary file: {temp_results_file}")
-        
-        duration = time.time() - start_time
-        log_info(f"Scoring completed in {duration:.2f} seconds")
-        return final_df
+            # For large files, use lazy loading
+            if os.path.getsize(temp_results_file) > 1e9:  # 1 GB
+                final_df = pl.scan_csv(temp_results_file).collect()
+            else:
+                final_df = pl.read_csv(temp_results_file)
+                
+            log_info(f"Successfully loaded {final_df.height} scored ORFs")
+            
+            # Clean up temp file# Clean up temp file
+            try:
+                os.remove(temp_results_file)
+                log_info(f"Temporary file removed: {temp_results_file}")
+            except Exception as e:
+                log_warning(f"Could not remove temporary file: {temp_results_file}")
+            
+            # Calculate and log performance metrics
+            duration = time.time() - start_time
+            orfs_per_second = final_df.height / max(0.001, duration)
+            
+            log_info(f"Scoring completed in {duration:.2f} seconds")
+            log_info(f"Performance: {orfs_per_second:.2f} ORFs/second")
+            
+            return final_df
+        except Exception as e:
+            log_error(f"Error loading results: {str(e)}")
+            return pl.DataFrame()
     else:
-        log_warning("No ORFs were scored or result file is empty")
+        log_warning("No results were generated or temporary file is empty")
         return pl.DataFrame()

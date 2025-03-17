@@ -5,6 +5,7 @@ from .orffinder import classify_orf
 from .orffinder import getexons_and_cds
 
 
+
 def sru_score(position, tran_reads, sru_range, direction):
     """
     Calculate the SRU (Start/Stop Ramp Up/Down) score for a given position.
@@ -20,36 +21,55 @@ def sru_score(position, tran_reads, sru_range, direction):
         float: Calculated SRU score
     """
     try:
-        # Convert to lazy - use to_lazy() as is_lazy() doesn't exist
-        lazy_reads = tran_reads.lazy()
+        # To ensure lazy evaluation works consistently
+        if not isinstance(tran_reads, pl.LazyFrame):
+            lazy_reads = tran_reads.lazy()
+        else:
+            lazy_reads = tran_reads
         
-        if direction == 0:
-            # Calculate rise up score - more efficient lazy filtering
-            before_mean = lazy_reads.filter(
+        if direction == 0:  # Start (rise up)
+            # Calculate before mean - positions before 'position'
+            before_filter = lazy_reads.filter(
                 (pl.col("tran_start") >= position - sru_range) &
                 (pl.col("tran_start") < position)
-            ).select(pl.col("counts").mean()).collect().item()
+            )
             
-            after_mean = lazy_reads.filter(
+            # Calculate after mean - positions after 'position'
+            after_filter = lazy_reads.filter(
                 (pl.col("tran_start") >= position) &
                 (pl.col("tran_start") < position + sru_range)
-            ).select(pl.col("counts").mean()).collect().item()
-        else:
-            # Calculate step down score - more efficient lazy filtering
-            before_mean = lazy_reads.filter(
+            )
+        else:  # Stop (step down)
+            # Calculate before mean - positions before 'position + sru_range'
+            before_filter = lazy_reads.filter(
                 (pl.col("tran_start") >= position) &
                 (pl.col("tran_start") < position + sru_range)
-            ).select(pl.col("counts").mean()).collect().item()
+            )
             
-            after_mean = lazy_reads.filter(
+            # Calculate after mean - positions after 'position + sru_range'
+            after_filter = lazy_reads.filter(
                 (pl.col("tran_start") >= position + sru_range) &
                 (pl.col("tran_start") < position + (2 * sru_range))
-            ).select(pl.col("counts").mean()).collect().item()
+            )
         
-        # Convert None to 0.0 for consistency
-        before_mean = before_mean if before_mean is not None else 0.0
-        after_mean = after_mean if after_mean is not None else 0.0
+        # Calculate means with proper error handling
+        try:
+            before_mean_df = before_filter.select(pl.mean("counts").alias("mean")).collect()
+            before_mean = before_mean_df[0, 0] if before_mean_df.height > 0 else 0.0
+        except Exception:
+            before_mean = 0.0
+            
+        try:
+            after_mean_df = after_filter.select(pl.mean("counts").alias("mean")).collect()
+            after_mean = after_mean_df[0, 0] if after_mean_df.height > 0 else 0.0
+        except Exception:
+            after_mean = 0.0
         
+        # Handle None values
+        before_mean = 0.0 if before_mean is None else before_mean
+        after_mean = 0.0 if after_mean is None else after_mean
+        
+        # Return the appropriate score based on direction
         if direction == 0:
             return after_mean - before_mean
         else:

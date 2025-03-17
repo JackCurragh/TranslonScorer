@@ -56,7 +56,6 @@ def find_orfs(sequence, tran_id, startautomaton, stopautomaton, minlength=0, max
             - startorf: Start codon sequence
             - stoporf: Stop codon sequence
     """
-    log_info(f"Finding ORFs in transcript {tran_id}")
     
     orf_list = []
     startpositions, start_codons = find_all_positions(sequence, startautomaton)

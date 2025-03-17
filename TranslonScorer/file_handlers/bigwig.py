@@ -332,19 +332,35 @@ def stream_results_to_disk(results_batch, output_file):
     if not results_batch:
         return
         
-    # Create the file if it doesn't exist
-    mode = "a" if os.path.exists(output_file) else "w"
+    # Check if file already exists
+    file_exists = os.path.exists(output_file)
     
     # Concatenate the batch
     combined = pl.concat(results_batch)
     
-    # Write to CSV
-    combined.write_csv(output_file, mode=mode, has_header=(mode == "w"))
+    if file_exists:
+        # Append to existing file
+        # Read the existing header first
+        try:
+            with open(output_file, 'r') as f:
+                header = f.readline().strip()
+            
+            # Write without header
+            with open(output_file, 'a') as f:
+                combined.write_csv(f, include_header=False)
+        except Exception as e:
+            log_error(f"Error appending to CSV: {e}")
+    else:
+        # Create new file
+        try:
+            with open(output_file, 'w') as f:
+                combined.write_csv(f, include_header=True)
+        except Exception as e:
+            log_error(f"Error writing to CSV: {e}")
     
     # Clear the batch
     for i in range(len(results_batch)):
         results_batch[i] = None
-
 
 def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     """

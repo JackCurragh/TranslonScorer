@@ -257,6 +257,8 @@ def score_transcript(args):
     tran_id, tran_data, orf_data, old_scoring, sru_range = args
     
     try:
+        start_time = time.time()  # Start timing the function
+        
         # Create DataFrame from transcript data
         if isinstance(tran_data, dict) and 'positions' in tran_data:
             # Convert from sparse representation
@@ -264,9 +266,12 @@ def score_transcript(args):
             full_array = np.zeros(max_pos, dtype=np.float32)
             
             # Fill in non-zero values
+            fill_start_time = time.time()  # Start timing this stage
             for pos, val in zip(tran_data['positions'], tran_data['values']):
                 if pos < max_pos:  # Safety check
                     full_array[pos] = val
+            fill_duration = time.time() - fill_start_time
+            log_info(f"Time taken to fill array for {tran_id}: {fill_duration:.4f} seconds")
             
             # Create DataFrame from full array
             tran_reads = pl.DataFrame({
@@ -284,7 +289,10 @@ def score_transcript(args):
             return None
         
         # Create ORF DataFrame
+        orfs_start_time = time.time()  # Start timing ORF DataFrame creation
         orfs = pl.DataFrame(orf_data)
+        orf_duration = time.time() - orfs_start_time
+        log_info(f"Time taken to create ORF DataFrame for {tran_id}: {orf_duration:.4f} seconds")
         
         if orfs.is_empty() or tran_reads.is_empty():
             return None
@@ -299,6 +307,7 @@ def score_transcript(args):
                 continue
                 
             try:
+                scoring_start_time = time.time()  # Start timing scoring
                 if old_scoring:
                     # Use classic scoring method
                     scored_orfs = oldscoring(
@@ -326,11 +335,15 @@ def score_transcript(args):
                         # Calculate global scores
                         orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
                         results.append(orfs_filtered)
+                scoring_duration = time.time() - scoring_start_time
+                log_info(f"Time taken to score ORF type {typeorf} for {tran_id}: {scoring_duration:.4f} seconds")
             except Exception as e:
                 log_error(f"Error scoring ORFs for transcript {tran_id}, type {typeorf}: {str(e)}")
         
         # Combine results for this transcript
         if results:
+            total_duration = time.time() - start_time
+            log_info(f"Total time taken for transcript {tran_id}: {total_duration:.4f} seconds")
             return pl.concat(results).to_dict(as_series=False)
         
         return None

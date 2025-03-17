@@ -630,7 +630,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     log_info(f"Streaming results to temporary file: {temp_results_file}")
     
     # Use adaptive batch size
-    scoring_batch_size = max(5, min(20, len(available_transcripts) // (max_workers * 3) + 1))
+    scoring_batch_size = max(5, min(50, len(available_transcripts) // (max_workers * 3) + 1))
     transcript_indices = []
     for i in range(0, len(available_transcripts), scoring_batch_size):
         end = min(i + scoring_batch_size, len(available_transcripts))

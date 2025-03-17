@@ -750,9 +750,9 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
                     # First batch - create file
                     pl.concat(result_dfs).write_csv(temp_results_file)
                 else:
-                    # Append to existing file
-                    pl.concat(result_dfs).write_csv(temp_results_file, mode="a", include_header=False)
-                
+                    # Append to existing file - open in append mode and write without header
+                    with open(temp_results_file, 'a') as f:
+                        pl.concat(result_dfs).write_csv(f, include_header=False)
                 # Update counts
                 total_orfs += sum(df.height for df in result_dfs)
                 

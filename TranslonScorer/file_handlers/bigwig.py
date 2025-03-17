@@ -423,98 +423,21 @@ def process_region_batch_by_indices(indices_and_data):
     # Call the original function with the extracted data
     return process_region_batch(batch_data, bigwig_path, config)
 
-
 def score_transcript_batch_by_indices(indices_and_data):
+    """
+    Score a batch of transcripts using indices.
+    This must be defined at the module level for multiprocessing to work.
+    
+    Args:
+        indices_and_data: Tuple containing (indices, transcripts_list, transcript_reads, orf_df, old_scoring, sru_range)
+    
+    Returns:
+        Results from score_transcript_batch
+    """
     indices, transcripts_list, transcript_reads, orf_df, old_scoring, sru_range = indices_and_data
     start_idx, end_idx = indices
-    batch_transcripts = transcripts_list[start_idx:end_idx]
-    
-    # Create a filtered dictionary with only the needed transcripts
-    filtered_reads = {tran: transcript_reads[tran] for tran in batch_transcripts if tran in transcript_reads}
-    
-    # Create a filtered orf_df with only the needed transcript IDs
-    filtered_orf_df = orf_df.filter(pl.col("tran_id").is_in(batch_transcripts))
-    
-    return score_transcript_batch(batch_transcripts, filtered_reads, filtered_orf_df, old_scoring, sru_range)
-
-
-# Function to prepare data for workers
-def prepare_transcript_batch_data(indices, available_transcripts, transcript_reads, orf_df):
-    """
-    Prepare a filtered subset of data for a specific batch of transcripts.
-    This significantly reduces memory usage by only sending the necessary data to each worker.
-    
-    Args:
-        indices: Tuple of (start_idx, end_idx) for the batch
-        available_transcripts: List of all transcript IDs
-        transcript_reads: Dictionary of all transcript reads
-        orf_df: DataFrame of all ORFs
-        
-    Returns:
-        Tuple of (batch_transcripts, filtered_reads, filtered_orf_df)
-    """
-    start_idx, end_idx = indices
-    batch_transcripts = available_transcripts[start_idx:end_idx]
-    
-    # Create a filtered dictionary with only the needed transcripts
-    filtered_reads = {tran: transcript_reads[tran] for tran in batch_transcripts if tran in transcript_reads}
-    
-    # Create a filtered orf_df with only the needed transcript IDs
-    filtered_orf_df = orf_df.filter(pl.col("tran_id").is_in(batch_transcripts))
-    
-    return (batch_transcripts, filtered_reads, filtered_orf_df)
-
-# Updated function that works with pre-filtered data
-def score_filtered_transcript_batch(data_tuple):
-    """
-    Score a batch of transcripts using pre-filtered data.
-    
-    Args:
-        data_tuple: Tuple containing (batch_transcripts, filtered_reads, filtered_orf_df, old_scoring, sru_range)
-        
-    Returns:
-        List of scored ORF DataFrames
-    """
-    batch_transcripts, filtered_reads, filtered_orf_df, old_scoring, sru_range = data_tuple
-    batch_results = []
-    
-    for tran in batch_transcripts:
-        if tran not in filtered_reads:
-            continue
-            
-        tran_reads = filtered_reads[tran]
-        orfs = filtered_orf_df.filter(pl.col("tran_id") == tran)
-        
-        if orfs.is_empty() or tran_reads.is_empty():
-            continue
-            
-        for typeorf in orfs["type"].unique():
-            orfs_filtered = orfs.filter(pl.col("type") == typeorf)
-            
-            if orfs_filtered.is_empty():
-                continue
-                
-            try:
-                if old_scoring:
-                    orfs_filtered = oldscoring(
-                        orfs_filtered, tran_reads, sru_range, typeorf
-                    )
-                    batch_results.append(orfs_filtered)
-                else:
-                    emptyscore_df = existingscore(orfs_filtered, typeorf, {"rise_up": {}, "step_down": {}})
-                    if not emptyscore_df.is_empty():
-                        scoredict = newscoring(
-                            emptyscore_df, tran_reads, sru_range, typeorf, {"rise_up": {}, "step_down": {}}
-                        )
-                        orfs_filtered = assigningscore(
-                            orfs_filtered, scoredict, typeorf
-                        )
-                        orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
-                        batch_results.append(orfs_filtered)
-            except Exception as e:
-                log_error(f"Error scoring ORFs for transcript {tran}, type {typeorf}: {str(e)}")
-    
-    return batch_results
+    batch = transcripts_list[start_idx:end_idx]
+    return score_transcript_batch(batch, transcript_reads, orf_df, old_scoring, sru_range)
 
 @profile  # Add the memory profiler decorator
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
@@ -617,58 +540,50 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     max_concurrent_jobs = min(max_workers * 2, 16)  # Limit concurrent jobs
     stagger_size = min(len(region_batches) // 10 + 1, max_concurrent_jobs)  # Process ~10% at a time
     log_interval = max(1, len(region_batches) // 20)  # Log ~20 times during processing
-    gc.collect()
-
-    # Removed premature reference to transcript_indices
-
+    
+    completed_batches = 0
+    total_batches = len(region_batches)
+    
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Process region batches in a staggered fashion
-        for start_batch in range(0, len(region_batches), stagger_size):
-            end_batch = min(start_batch + stagger_size, len(region_batches))
+        # Process batches in a staggered fashion
+        for start_batch in range(0, total_batches, stagger_size):
+            end_batch = min(start_batch + stagger_size, total_batches)
+            current_batch_count = end_batch - start_batch
             
-            log_info(f"Processing batch group {start_batch//stagger_size + 1}: "
-                     f"batches {start_batch} to {end_batch-1}")
+            log_info(f"Processing batch group {start_batch//stagger_size + 1}: batches {start_batch} to {end_batch-1}")
             
             # Submit a group of batches
             futures = []
             for i in range(start_batch, end_batch):
-                # Each batch is a tuple of indices
                 indices = region_batches[i]
-                
-                # Pass data as a single tuple to avoid repeated serialization
-                batch_arg = (indices, all_regions, bwfile_path, config)
-                futures.append(executor.submit(process_region_batch_by_indices, batch_arg))
+                # Pass all data as a single tuple to avoid pickle issues
+                futures.append(executor.submit(
+                    process_region_batch_by_indices, 
+                    (indices, all_regions, bwfile_path, config)
+                ))
             
             # Process results as they complete for this group
-            completed = 0
-            total_futures = len(futures)
-            
             for future in concurrent.futures.as_completed(futures):
                 try:
                     result = future.result()
+                    completed_batches += 1
                     
-                    # Update the transcript reads with new data
-                    for tran_id, reads_df in result["results"].items():
-                        transcript_reads[tran_id] = reads_df
-                    
-                    # Track statistics
+                    # Merge results
+                    transcript_reads.update(result["results"])
                     total_processed += result["processed"]
                     total_failed += result["failed"]
                     
-                    completed += 1
-                    if completed % max(1, total_futures // 5) == 0 or completed == total_futures:
-                        progress = (completed / total_futures) * 100
-                        log_info(f"Processed batch {completed}/{total_futures} ({progress:.1f}%)")
+                    # Log progress less frequently
+                    if completed_batches % log_interval == 0 or completed_batches == total_batches:
+                        progress = completed_batches / total_batches * 100
+                        log_info(f"Processed {completed_batches}/{total_batches} region batches ({progress:.1f}%) "
+                                 f"- {len(transcript_reads)}/{total_unique_transcripts} transcripts with data")
                         
                 except Exception as exc:
-                    log_error(f"Batch processing error: {exc}")
+                    log_error(f"Region batch processing error: {exc}")
             
-            # Force garbage collection after each stagger group
+            # Optional: force garbage collection after each stagger group
             gc.collect()
-    
-    # Free memory after processing
-    transcript_reads = None
-    gc.collect()
     
     # Clear regions data as it's no longer needed
     all_regions = None
@@ -713,29 +628,14 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
             log_info(f"Processing scoring batch group {start_batch//scoring_stagger_size + 1}: "
                      f"batches {start_batch} to {end_batch-1}")
             
-            # First prepare the data for each batch before submitting to executor
-            log_info("Preparing filtered data for batch processing...")
-            batch_data_list = []
-            
+            # Submit a group of scoring batches
+            futures = []
             for i in range(start_batch, end_batch):
                 indices = transcript_indices[i]
-                # Pre-filter the data for this batch
-                batch_transcripts, filtered_reads, filtered_orf_df = prepare_transcript_batch_data(
-                    indices, 
-                    available_transcripts, 
-                    transcript_reads, 
-                    orf_df
-                )
-                batch_data_list.append((batch_transcripts, filtered_reads, filtered_orf_df, old_scoring, sru_range))
-            
-            log_info(f"Data preparation complete. Submitting {len(batch_data_list)} batches to worker processes.")
-            
-            # Submit a group of scoring batches with pre-filtered data
-            futures = []
-            for batch_data in batch_data_list:
+                # Pass all data as a single tuple to avoid pickle issues
                 futures.append(executor.submit(
-                    score_filtered_transcript_batch,
-                    batch_data
+                    score_transcript_batch_by_indices,
+                    (indices, available_transcripts, transcript_reads, orf_df, old_scoring, sru_range)
                 ))
             
             # Process results as they complete for this group
@@ -756,10 +656,8 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
                     log_error(f"Transcript batch scoring error: {exc}")
             
             # Force garbage collection after each stagger group
-            # Also explicitly delete the batch data we prepared
-            batch_data_list = None
             gc.collect()
-
+    
     # Free memory after processing
     transcript_reads = None
     gc.collect()

@@ -24,191 +24,6 @@ import itertools
 import gc
 from memory_profiler import profile  # Import the memory profiler
 
-import numpy as np
-import tempfile
-import mmap
-import os
-
-def create_memory_mapped_array(data, dtype=np.float32):
-    """
-    Create a memory-mapped numpy array to store large datasets.
-    
-    Args:
-        data: Data to store in memory-mapped array
-        dtype: Data type for the array
-        
-    Returns:
-        tuple: (temp_file, np_array) - Keep the temp_file reference to prevent garbage collection
-    """
-    # Create a temporary file
-    temp_file = tempfile.NamedTemporaryFile(delete=False)
-    temp_filename = temp_file.name
-    temp_file.close()
-    
-    # Create a memory-mapped array
-    shape = (len(data),)
-    np_array = np.memmap(temp_filename, dtype=dtype, mode='w+', shape=shape)
-    
-    # Copy data to the memory-mapped array
-    np_array[:] = data
-    np_array.flush()
-    
-    return temp_filename, np_array
-
-# 2. Chunked dataframe processing for Polars
-def process_df_in_chunks(df, chunk_size=10000, func=None):
-    """
-    Process a large DataFrame in chunks to reduce memory usage.
-    
-    Args:
-        df: Polars DataFrame
-        chunk_size: Number of rows to process at once
-        func: Function to apply to each chunk
-        
-    Returns:
-        List of results from processing each chunk
-    """
-    results = []
-    total_rows = df.height
-    
-    for i in range(0, total_rows, chunk_size):
-        end = min(i + chunk_size, total_rows)
-        chunk = df.slice(i, end - i)
-        
-        if func:
-            result = func(chunk)
-            results.append(result)
-        else:
-            results.append(chunk)
-            
-        # Force garbage collection after processing each chunk
-        chunk = None
-        gc.collect()
-        
-    return results
-
-# 3. Optimized BigWig reading with memory mapping
-class MemoryEfficientBigWigReader:
-    """A memory-efficient BigWig reader that uses memory mapping."""
-    
-    def __init__(self, bigwig_path):
-        self.bigwig_path = bigwig_path
-        self.temp_files = []  # Keep track of temp files
-        
-    def __del__(self):
-        # Clean up temp files
-        for file_path in self.temp_files:
-            try:
-                os.unlink(file_path)
-            except:
-                pass
-                
-    def get_values(self, chrom, start, stop, chunk_size=100000):
-        """
-        Get values from BigWig file for a region, using memory mapping for large regions.
-        
-        Args:
-            chrom: Chromosome name
-            start: Start position
-            stop: End position
-            chunk_size: Size of chunks to process
-            
-        Returns:
-            numpy array with values
-        """
-        region_size = stop - start
-        
-        # For small regions, just read directly
-        if region_size <= chunk_size:
-            with open_bigwig(self.bigwig_path) as bwfile:
-                values = bwfile.values(chrom, start, stop)
-                if values is None:
-                    return np.zeros(region_size, dtype=np.float32)
-                return np.array(values, dtype=np.float32)
-        
-        # For large regions, use memory mapping
-        result_filename, result_array = create_memory_mapped_array(
-            np.zeros(region_size, dtype=np.float32)
-        )
-        self.temp_files.append(result_filename)
-        
-        # Process in chunks
-        with open_bigwig(self.bigwig_path) as bwfile:
-            for chunk_start in range(start, stop, chunk_size):
-                chunk_end = min(chunk_start + chunk_size, stop)
-                chunk_size_actual = chunk_end - chunk_start
-                
-                values = bwfile.values(chrom, chunk_start, chunk_end)
-                if values is not None and any(v is not None for v in values):
-                    # Copy valid values to the memory-mapped array
-                    for i, v in enumerate(values):
-                        if v is not None:
-                            result_array[chunk_start - start + i] = v
-                
-                # Force flush after each chunk
-                result_array.flush()
-        
-        return result_array
-
-# 4. Improved transcript reads storage with numpy memory mapping
-class MemoryEfficientTranscriptStorage:
-    """
-    Store transcript reads data in a memory-efficient way using memory mapping.
-    """
-    
-    def __init__(self):
-        self.transcript_data = {}  # Maps transcript ID to (filename, array) tuple
-        self.temp_files = []
-        
-    def __del__(self):
-        # Clean up temp files
-        for file_path in self.temp_files:
-            try:
-                os.unlink(file_path)
-            except:
-                pass
-                
-    def add_transcript(self, tran_id, counts):
-        """
-        Add transcript data using memory mapping.
-        
-        Args:
-            tran_id: Transcript ID
-            counts: List of count values
-        """
-        if not counts:
-            return
-            
-        # Create memory-mapped array for counts
-        filename, array = create_memory_mapped_array(counts)
-        self.temp_files.append(filename)
-        self.transcript_data[tran_id] = (filename, array)
-        
-    def get_transcript_df(self, tran_id):
-        """
-        Get transcript data as a Polars DataFrame.
-        
-        Args:
-            tran_id: Transcript ID
-            
-        Returns:
-            Polars DataFrame with transcript data
-        """
-        if tran_id not in self.transcript_data:
-            return pl.DataFrame({"tran_start": [], "counts": []})
-            
-        _, array = self.transcript_data[tran_id]
-        
-        # Convert to DataFrame efficiently
-        return pl.DataFrame({
-            "tran_start": pl.arange(0, len(array), eager=True),
-            "counts": array.copy()  # Make a copy to avoid issues with the memmap
-        })
-        
-    def get_transcript_ids(self):
-        """Get all transcript IDs in the storage."""
-        return list(self.transcript_data.keys())
-    
 
 @dataclass
 class ProcessingConfig:
@@ -290,13 +105,13 @@ def _flatten_list_or_value(value: Any) -> List:
         return [value]
 
 
-def extract_regions(exon_df: pl.DataFrame) -> List[Tuple[str, int, int]]:
+def extract_regions(exon_df: pl.DataFrame) -> List[Tuple[str, int, int, str]]:
     """
-    Extract regions (chr, start, stop) from exon DataFrame.
+    Extract regions (chr, start, stop, tran_id) from exon DataFrame.
     Handles both list and scalar values.
     
     Returns:
-        List of (chr, start, stop) tuples
+        List of (chr, start, stop, tran_id) tuples
     """
     regions = []
     
@@ -331,106 +146,147 @@ def extract_regions(exon_df: pl.DataFrame) -> List[Tuple[str, int, int]]:
     return regions
 
 
-def process_region_batch(region_batch, bigwig_path, config=None):
+def process_df_in_chunks(df, chunk_size=10000, func=None):
     """
-    Process a batch of regions from the BigWig file.
+    Process a large DataFrame in chunks to reduce memory usage.
     
     Args:
-        region_batch: List of (chrom, start, stop, tran_id) tuples
-        bigwig_path: Path to BigWig file
-        config: ProcessingConfig object
+        df: Polars DataFrame
+        chunk_size: Number of rows to process at once
+        func: Function to apply to each chunk
         
     Returns:
-        Dictionary mapping transcript IDs to reads DataFrames
+        List of results from processing each chunk
     """
-    if config is None:
-        config = ProcessingConfig()
-        
-    # Create BigWig cache
-    bw_cache = BigWigCache(bigwig_path)
+    results = []
+    total_rows = df.height
     
-    # Group regions by transcript
+    for i in range(0, total_rows, chunk_size):
+        end = min(i + chunk_size, total_rows)
+        chunk = df.slice(i, end - i)
+        
+        if func:
+            result = func(chunk)
+            results.append(result)
+        else:
+            results.append(chunk)
+            
+        # Force garbage collection after processing each chunk
+        chunk = None
+        gc.collect()
+        
+    return results
+
+
+def process_batch_memory_efficient(batch_data):
+    """
+    Process a batch of regions using memory-efficient approach.
+    
+    Args:
+        batch_data: Tuple containing (indices, all_regions, bwfile_path, chunk_size)
+        
+    Returns:
+        Dictionary with processing results
+    """
+    batch_indices, all_regions, bwfile_path, chunk_size = batch_data
+    start_idx, end_idx = batch_indices
+    batch_regions = all_regions[start_idx:end_idx]
+    
+    # Use BigWigCache for faster access
+    bw_cache = BigWigCache(bwfile_path, max_cache_size=2000)  # Larger cache
+    
+    # Group regions by transcript to minimize BigWig access
     regions_by_transcript = {}
-    for chrom, start, stop, tran_id in region_batch:
+    for chrom, start, stop, tran_id in batch_regions:
         if tran_id not in regions_by_transcript:
             regions_by_transcript[tran_id] = []
         regions_by_transcript[tran_id].append((chrom, start, stop))
     
-    results = {}
-    processed_regions = 0
-    failed_regions = 0
+    batch_results = {}
+    processed = 0
+    failed = 0
     
-    # Process each transcript
+    # Process each transcript's regions
     for tran_id, regions in regions_by_transcript.items():
+        # For small transcripts, use a regular list
+        # For larger ones, use a NumPy array directly
         all_reads = []
+        total_length = sum(stop - start for _, start, stop in regions)
         
-        for chrom, start, stop in regions:
-            # Check if region is too large
-            region_size = stop - start
-            if region_size > config.max_region_size:
-                # Process in chunks
-                for chunk_start in range(start, stop, config.chunk_size):
-                    chunk_end = min(chunk_start + config.chunk_size, stop)
+        # If the total length is large, pre-allocate a numpy array
+        if total_length > 50000:
+            all_reads = np.zeros(total_length, dtype=np.float32)
+            current_pos = 0
+            
+            for chrom, start, stop in regions:
+                try:
+                    region_size = stop - start
+                    values = bw_cache.get_values(chrom, start, stop)
                     
-                    try:
-                        values = bw_cache.get_values(chrom, chunk_start, chunk_end)
-                        if values and any(v is not None for v in values):
-                            all_reads.extend(v if v is not None else 0.0 for v in values)
-                        else:
-                            all_reads.extend([0.0] * (chunk_end - chunk_start))
-                            
-                        processed_regions += 1
-                    except Exception as e:
-                        failed_regions += 1
-                        all_reads.extend([0.0] * (chunk_end - chunk_start))
-            else:
-                # Process the whole region
+                    if values and any(v is not None for v in values):
+                        for i, v in enumerate(values):
+                            if v is not None:
+                                all_reads[current_pos + i] = v
+                    
+                    current_pos += region_size
+                    processed += 1
+                except Exception:
+                    failed += 1
+                    # Skip filling, already zeros
+                    current_pos += stop - start
+            
+            # Only store if there are non-zero values
+            if np.any(all_reads):
+                batch_results[tran_id] = all_reads
+        else:
+            # For small regions, use the original approach (faster for small data)
+            for chrom, start, stop in regions:
                 try:
                     values = bw_cache.get_values(chrom, start, stop)
                     if values and any(v is not None for v in values):
                         all_reads.extend(v if v is not None else 0.0 for v in values)
                     else:
                         all_reads.extend([0.0] * (stop - start))
-                        
-                    processed_regions += 1
+                    
+                    processed += 1
                 except Exception:
-                    failed_regions += 1
+                    failed += 1
                     all_reads.extend([0.0] * (stop - start))
-        
-        # Create DataFrame for this transcript
-        if all_reads:
-            results[tran_id] = pl.DataFrame({
-                "tran_start": list(range(len(all_reads))),
-                "counts": all_reads
-            })
+            
+            # Only keep non-empty results
+            if all_reads and any(v > 0 for v in all_reads):
+                batch_results[tran_id] = np.array(all_reads, dtype=np.float32)
     
-    return {
-        "results": results, 
-        "processed": processed_regions,
-        "failed": failed_regions
-    }
+    return {"results": batch_results, "processed": processed, "failed": failed}
 
-def score_transcript_batch(transcript_batch, transcript_reads, orf_df, old_scoring, sru_range):
+
+def score_transcripts_memory_efficient(batch_data):
     """
-    Score a batch of transcripts.
+    Score a batch of transcripts with memory-efficient approach.
     
     Args:
-        transcript_batch: List of transcript IDs
-        transcript_reads: Dictionary mapping transcript IDs to reads DataFrames
-        orf_df: DataFrame containing all ORF data
-        old_scoring: Whether to use old scoring method
-        sru_range: Range for SRU score calculation
+        batch_data: Tuple containing necessary data
         
     Returns:
         List of scored ORF DataFrames
     """
+    batch_indices, available_transcripts, transcript_data, orf_df, old_scoring, sru_range = batch_data
+    start_idx, end_idx = batch_indices
+    batch_transcripts = available_transcripts[start_idx:end_idx]
+    
     batch_results = []
     
-    for tran in transcript_batch:
-        if tran not in transcript_reads:
+    for tran in batch_transcripts:
+        if tran not in transcript_data:
             continue
             
-        tran_reads = transcript_reads[tran]
+        # Convert NumPy array to DataFrame
+        tran_array = transcript_data[tran]
+        tran_reads = pl.DataFrame({
+            "tran_start": pl.arange(0, len(tran_array), eager=True),
+            "counts": tran_array
+        })
+        
         orfs = orf_df.filter(pl.col("tran_id") == tran)
         
         if orfs.is_empty() or tran_reads.is_empty():
@@ -463,6 +319,31 @@ def score_transcript_batch(transcript_batch, transcript_reads, orf_df, old_scori
                 log_error(f"Error scoring ORFs for transcript {tran}, type {typeorf}: {str(e)}")
     
     return batch_results
+
+
+def stream_results_to_disk(results_batch, output_file):
+    """
+    Stream results to a disk file to save memory.
+    
+    Args:
+        results_batch: List of DataFrames to save
+        output_file: Path to save the results
+    """
+    if not results_batch:
+        return
+        
+    # Create the file if it doesn't exist
+    mode = "a" if os.path.exists(output_file) else "w"
+    
+    # Concatenate the batch
+    combined = pl.concat(results_batch)
+    
+    # Write to CSV
+    combined.write_csv(output_file, mode=mode, has_header=(mode == "w"))
+    
+    # Clear the batch
+    for i in range(len(results_batch)):
+        results_batch[i] = None
 
 
 def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
@@ -590,164 +471,10 @@ def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
     })
 
 
-def process_region_batch_by_indices(indices_and_data):
-    """
-    Process a batch of regions from the BigWig file using indices.
-    This must be defined at the module level for multiprocessing to work.
-    
-    Args:
-        indices_and_data: Tuple containing (indices, all_regions, bigwig_path, config)
-    
-    Returns:
-        Results from process_region_batch
-    """
-    indices, all_regions, bigwig_path, config = indices_and_data
-    start_idx, end_idx = indices
-    # Extract the actual data when needed inside the worker process
-    batch_data = all_regions[start_idx:end_idx]
-    # Call the original function with the extracted data
-    return process_region_batch(batch_data, bigwig_path, config)
-
-def score_transcript_batch_by_indices(indices_and_data):
-    """
-    Score a batch of transcripts using indices.
-    This must be defined at the module level for multiprocessing to work.
-    
-    Args:
-        indices_and_data: Tuple containing (indices, transcripts_list, transcript_reads, orf_df, old_scoring, sru_range)
-    
-    Returns:
-        Results from score_transcript_batch
-    """
-    indices, transcripts_list, transcript_reads, orf_df, old_scoring, sru_range = indices_and_data
-    start_idx, end_idx = indices
-    batch = transcripts_list[start_idx:end_idx]
-    return score_transcript_batch(batch, transcript_reads, orf_df, old_scoring, sru_range)
-
-
-# Add this function at the module level, outside of any other functions
-def process_batch_memory_efficient(batch_data):
-    """
-    Process a batch of regions using memory-efficient approach.
-    This must be defined at the module level for multiprocessing to work.
-    
-    Args:
-        batch_data: Tuple containing (indices, all_regions, bw_reader)
-        
-    Returns:
-        Dictionary with processing results
-    """
-    batch_indices, all_regions, bwfile_path = batch_data
-    start_idx, end_idx = batch_indices
-    batch_regions = all_regions[start_idx:end_idx]
-    
-    # Create the reader here inside the worker
-    bw_reader = MemoryEfficientBigWigReader(bwfile_path)
-    
-    # Group regions by transcript to minimize BigWig access
-    regions_by_transcript = {}
-    for chrom, start, stop, tran_id in batch_regions:
-        if tran_id not in regions_by_transcript:
-            regions_by_transcript[tran_id] = []
-        regions_by_transcript[tran_id].append((chrom, start, stop))
-    
-    batch_results = {}
-    processed = 0
-    failed = 0
-    
-    # Process each transcript's regions
-    for tran_id, regions in regions_by_transcript.items():
-        all_reads = []
-        
-        for chrom, start, stop in regions:
-            try:
-                # Use the memory-efficient reader
-                values = bw_reader.get_values(chrom, start, stop)
-                if values is not None and len(values) > 0:
-                    all_reads.extend(values)
-                else:
-                    all_reads.extend([0.0] * (stop - start))
-                
-                processed += 1
-            except Exception as e:
-                failed += 1
-                all_reads.extend([0.0] * (stop - start))
-        
-        # Only keep non-empty results
-        if all_reads:
-            batch_results[tran_id] = all_reads
-    
-    return {"results": batch_results, "processed": processed, "failed": failed}
-
-# Also define this function at the module level
-def score_transcripts_memory_efficient(batch_data):
-    """
-    Score a batch of transcripts using memory-efficient approach.
-    This must be defined at the module level for multiprocessing to work.
-    
-    Args:
-        batch_data: Tuple containing all necessary data
-        
-    Returns:
-        List of scored ORF DataFrames
-    """
-    batch_indices, available_transcripts, transcript_storage, orf_df, old_scoring, sru_range = batch_data
-    start_idx, end_idx = batch_indices
-    batch_transcripts = available_transcripts[start_idx:end_idx]
-    
-    # Score each transcript
-    batch_results = []
-    for tran in batch_transcripts:
-        # Get transcript data as DataFrame
-        tran_reads = transcript_storage.get_transcript_df(tran)
-        if tran_reads.is_empty():
-            continue
-            
-        # Filter ORFs for this transcript
-        orfs_for_tran = orf_df.filter(pl.col("tran_id") == tran)
-        if orfs_for_tran.is_empty():
-            continue
-            
-        for typeorf in orfs_for_tran["type"].unique():
-            orfs_filtered = orfs_for_tran.filter(pl.col("type") == typeorf)
-            
-            if orfs_filtered.is_empty():
-                continue
-                
-            try:
-                if old_scoring:
-                    orfs_filtered = oldscoring(
-                        orfs_filtered, tran_reads, sru_range, typeorf
-                    )
-                    batch_results.append(orfs_filtered)
-                else:
-                    emptyscore_df = existingscore(orfs_filtered, typeorf, {"rise_up": {}, "step_down": {}})
-                    if not emptyscore_df.is_empty():
-                        scoredict = newscoring(
-                            emptyscore_df, tran_reads, sru_range, typeorf, {"rise_up": {}, "step_down": {}}
-                        )
-                        orfs_filtered = assigningscore(
-                            orfs_filtered, scoredict, typeorf
-                        )
-                        orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
-                        batch_results.append(orfs_filtered)
-            except Exception as e:
-                log_error(f"Error scoring ORFs for transcript {tran}, type {typeorf}: {str(e)}")
-            
-            # Free memory after processing each ORF type
-            orfs_filtered = None
-            gc.collect()
-    
-    return batch_results
-
-@profile  # Keep only one @profile decorator
+@profile
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
-    Score ORFs using bigwig coverage data with high-performance optimization and memory efficiency.
-    
-    This implementation uses a two-stage approach:
-    1. Extract all BigWig data in parallel by region batches using memory mapping
-    2. Score all transcripts in parallel using the pre-extracted data
+    Score ORFs using bigwig coverage data with memory-efficient streaming.
     
     Args:
         bigwig (str): Path to bigwig file
@@ -761,239 +488,216 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     Returns:
         DataFrame: Scored ORFs
     """
-    import gc  # Add garbage collection
+    import gc
     
     start_time = time.time()
     config = ProcessingConfig(batch_size=batch_size, sru_range=sru_range)
     
-    bwfile_path = bigwig  # Store the path instead of opening it here
+    bwfile_path = bigwig
     
-    # Load data with memory-efficient approach
+    # Load data efficiently
     log_info("Loading exon and ORF data...")
     
-    # Check if exon is a file path or a DataFrame - use lazy loading for large files
+    # Check if exon is a file path or a DataFrame
     if isinstance(exon, str):
-        if os.path.getsize(exon) > 1e9:  # 1 GB
-            # Use scan_csv with lazy evaluation and filter/select only needed columns
-            exon_scan = pl.scan_csv(exon, has_header=True, separator=",")
-            # Only select columns we actually need to reduce memory usage
-            needed_cols = ["chr", "start", "stop", "tran_id"]
-            exon_df = exon_scan.select([col for col in needed_cols if col in exon_scan.columns]).collect()
+        if os.path.exists(exon) and os.path.getsize(exon) > 1e9:  # 1 GB
+            # For large files, only load needed columns
+            exon_df = pl.read_csv(exon, columns=["chr", "start", "stop", "tran_id"])
         else:
-            exon_df = pl.read_csv(exon, has_header=True, separator=",")
+            exon_df = pl.read_csv(exon)
     else:
         exon_df = exon
 
-    # For ORFs, use lazy loading with streaming for large files
+    # For ORFs
     if isinstance(orfs, str):
-        if os.path.getsize(orfs) > 1e9:  # 1 GB
-            # Create a scanning DataFrame and filter out any unnecessary columns
-            orf_scan = pl.scan_csv(orfs, has_header=True, separator=",")
-            orf_df = orf_scan.collect()  
-            # Immediately after collecting, clean up any unused columns
+        if os.path.exists(orfs) and os.path.getsize(orfs) > 1e9:  # 1 GB
+            # Create a LazyFrame for large ORF files
+            orf_scan = pl.scan_csv(orfs)
+            # Only collect essential columns
             needed_cols = ["tran_id", "type", "start", "stop", "length"]
-            all_cols = set(orf_df.columns)
-            for col in all_cols:
-                if col not in needed_cols and col not in ["rise_up", "step_down"]:
-                    orf_df = orf_df.drop(col)
+            # Add any scoring-related columns
+            for col in orf_scan.columns:
+                if "score" in col.lower() or col in ["rise_up", "step_down"]:
+                    needed_cols.append(col)
+            orf_df = orf_scan.select(needed_cols).collect()
         else:
-            orf_df = pl.read_csv(orfs, has_header=True, separator=",")
+            orf_df = pl.read_csv(orfs)
     else:
         orf_df = orfs
 
-    # Set max workers if not specified
+    # Optimize worker count based on system resources
     if max_workers is None:
-        max_workers = min(os.cpu_count() or 4, 8)  # Limit to 8 workers to avoid memory pressure
-    config.max_workers = max_workers
+        try:
+            import psutil
+            # Use available memory to determine worker count
+            available_memory_gb = psutil.virtual_memory().available / (1024**3)
+            # Estimate 1GB per worker as baseline
+            suggested_workers = max(1, min(os.cpu_count(), int(available_memory_gb)))
+            max_workers = min(suggested_workers, 12)  # Cap at 12 workers
+        except ImportError:
+            # If psutil is not available, use a conservative approach
+            max_workers = min(os.cpu_count() or 4, 6)  # Use at most 6 workers
     
     log_info(f"Using {max_workers} workers for parallel processing")
     
-    # STEP 1: Extract all regions from exon data
+    # STEP 1: Extract regions in chunks to reduce memory pressure
     log_info("Extracting regions from exon data...")
     all_regions = []
     
-    # Process in smaller chunks to avoid memory spikes
-    chunk_size = 10000
-    total_rows = exon_df.height
-    total_chunks = (total_rows + chunk_size - 1) // chunk_size  # Ceiling division
-    unique_transcripts = set()
-    
-    for i in range(total_chunks):
-        start_idx = i * chunk_size
-        end_idx = min(start_idx + chunk_size, total_rows)
-        
-        # Extract chunk and process
-        chunk = exon_df.slice(start_idx, end_idx - start_idx)
-        chunk_regions = extract_regions(chunk)
+    # Process in manageable chunks
+    chunk_size = min(10000, exon_df.height // 10 + 1)  # Adaptive chunk size
+    for chunk_df in process_df_in_chunks(exon_df, chunk_size):
+        chunk_regions = extract_regions(chunk_df)
         all_regions.extend(chunk_regions)
-        
-        # Track unique transcripts
-        for region in chunk_regions:
-            unique_transcripts.add(region[3])  # tran_id is the 4th element
-        
-        # Clear chunk to free memory
-        chunk = None
-        
-        # Force garbage collection
-        if i > 0 and i % 5 == 0:  # Every 5 chunks
-            gc.collect()
-            
-    # Get count of regions
+        gc.collect()  # Clean up after each chunk
+    
     total_regions = len(all_regions)
-    total_unique_transcripts = len(unique_transcripts)
-    log_info(f"Found {total_regions} regions to process across {total_unique_transcripts} transcripts")
+    log_info(f"Found {total_regions} regions to process")
     
-    # Free up memory
-    unique_transcripts = None
-    gc.collect()
-    
-    # Group regions into batches for better work distribution - using indices only
+    # STEP 2: Process region batches more efficiently
+    # Create balanced batches for better throughput
+    region_batch_size = min(config.max_regions_per_worker * 2, 500)  # Larger batch size for better performance
     region_batches = []
-    batch_size = min(config.max_regions_per_worker, 200)  # Limit batch size to avoid memory issues
-    for i in range(0, total_regions, batch_size):
-        end = min(i + batch_size, total_regions)
-        # Store only indices, not data copies
+    for i in range(0, total_regions, region_batch_size):
+        end = min(i + region_batch_size, total_regions)
         region_batches.append((i, end))
     
-    log_info(f"Distributing regions into {len(region_batches)} balanced batches")
+    log_info(f"Distributing regions into {len(region_batches)} batches")
     
-    # Create a memory-efficient transcript storage
-    log_info("Creating memory-efficient transcript storage...")
-    transcript_storage = MemoryEfficientTranscriptStorage()
-    
-    # STEP 2: Process all region batches with memory-efficient approach
+    # Use a dictionary to store transcript data
+    transcript_data = {}
     total_processed = 0
     total_failed = 0
     
-    # Staggered parallelization constants
-    max_concurrent_jobs = min(max_workers, 8)  # Limit concurrent jobs even more
-    stagger_size = min(len(region_batches) // 10 + 1, max_concurrent_jobs)  # Process ~10% at a time
-    log_interval = max(1, len(region_batches) // 20)  # Log ~20 times during processing
+    # Process in staggered groups
+    stagger_size = min(len(region_batches) // 5 + 1, max_workers * 2)  # Process ~20% at a time
     
-    log_info(f"Processing {len(region_batches)} region batches...")
-    
-    # Process batches in sequential staggered groups to limit memory usage
     for start_batch in range(0, len(region_batches), stagger_size):
         end_batch = min(start_batch + stagger_size, len(region_batches))
         batch_group = region_batches[start_batch:end_batch]
         
-        log_info(f"Processing batch group {start_batch//stagger_size + 1}: "
+        log_info(f"Processing BigWig batch group {start_batch//stagger_size + 1}/{(len(region_batches) + stagger_size - 1)//stagger_size}: "
                  f"batches {start_batch} to {end_batch-1}")
         
-        # Process this group in parallel
+        # Process this group with better parallelism
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            # Prepare batch data - send only what's needed to each worker
-            batch_data_list = [
-                (indices, all_regions, bwfile_path) for indices in batch_group
-            ]
+            # Include chunk size parameter for performance tuning
+            chunk_size = config.chunk_size
+            batch_data_list = [(indices, all_regions, bwfile_path, chunk_size) for indices in batch_group]
             
-            # Submit each batch to the worker process
-            futures = [executor.submit(process_batch_memory_efficient, batch_data) 
-                      for batch_data in batch_data_list]
-            
-            # Process results as they complete
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    result = future.result()
-                    
-                    # Add transcript data to storage
-                    for tran_id, reads in result["results"].items():
-                        transcript_storage.add_transcript(tran_id, reads)
-                    
-                    # Track statistics
-                    total_processed += result["processed"]
-                    total_failed += result["failed"]
-                    
-                except Exception as exc:
-                    log_error(f"Batch processing error: {exc}")
+            # Use a map instead of submitting individual futures for better scheduling
+            for result in executor.map(process_batch_memory_efficient, batch_data_list):
+                # Add transcript data directly to the dictionary
+                for tran_id, reads in result["results"].items():
+                    transcript_data[tran_id] = reads
+                
+                total_processed += result["processed"]
+                total_failed += result["failed"]
         
-        # Force garbage collection after each stagger group
+        # Only do garbage collection between batch groups
         gc.collect()
     
-    # Clear regions data as it's no longer needed
+    # Clear regions data
     all_regions = None
     region_batches = None
     gc.collect()
     
     log_info(f"Completed BigWig data extraction: {total_processed} regions processed, {total_failed} failed")
+    log_info(f"Extracted data for {len(transcript_data)} transcripts")
     
-    # Get list of transcript IDs with data
-    available_transcripts = transcript_storage.get_transcript_ids()
-    log_info(f"Extracted data for {len(available_transcripts)} transcripts")
-    
-    # STEP 3: Score transcripts using the extracted reads
+    # STEP 3: Score transcripts with streaming to disk
+    available_transcripts = list(transcript_data.keys())
     log_info(f"Scoring {len(available_transcripts)} transcripts with available data")
     
-    # Create batches for scoring - indices only
+    # Create a temporary file for results
+    temp_results_file = os.path.join(tempfile.gettempdir(), f"translonscorer_results_{int(time.time())}.csv")
+    log_info(f"Streaming results to temporary file: {temp_results_file}")
+    
+    # Use adaptive batch size
+    scoring_batch_size = max(5, min(20, len(available_transcripts) // (max_workers * 3) + 1))
     transcript_indices = []
-    batch_size = min(config.batch_size, 25)  # Smaller batches to reduce memory pressure
-    for i in range(0, len(available_transcripts), batch_size):
-        end = min(i + batch_size, len(available_transcripts))
+    for i in range(0, len(available_transcripts), scoring_batch_size):
+        end = min(i + scoring_batch_size, len(available_transcripts))
         transcript_indices.append((i, end))
     
-    # Score in parallel with staggered execution to limit memory
-    all_results = []
-    scoring_stagger_size = min(len(transcript_indices) // 4 + 1, max_workers)  # Process ~25% at a time
+    # Reduce worker count for scoring to minimize memory pressure
+    scoring_workers = max(2, min(max_workers, 4))  # Use at most 4 workers for scoring
+    log_info(f"Using {scoring_workers} workers for scoring to reduce memory pressure")
     
-    for start_batch in range(0, len(transcript_indices), scoring_stagger_size):
-        end_batch = min(start_batch + scoring_stagger_size, len(transcript_indices))
-        batch_group = transcript_indices[start_batch:end_batch]
-        
-        log_info(f"Processing scoring batch group {start_batch//scoring_stagger_size + 1}: "
-                 f"batches {start_batch} to {end_batch-1}")
-        
-        # Process this group in parallel
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            # Prepare batch data for each worker
-            batch_data_list = [
-                (indices, available_transcripts, transcript_storage, orf_df, old_scoring, sru_range) 
-                for indices in batch_group
-            ]
-            
-            # Submit each batch to the worker process
-            futures = [executor.submit(score_transcripts_memory_efficient, batch_data) 
-                      for batch_data in batch_data_list]
-            
-            # Process results as they complete
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    batch_results = future.result()
-                    if batch_results:
-                        all_results.extend(batch_results)
-                except Exception as exc:
-                    log_error(f"Transcript batch scoring error: {exc}")
-        
-        # Force garbage collection after each stagger group
-        gc.collect()
-    
-    # Combine all results
-    if not all_results:
-        log_warning("No ORFs were scored")
-        return pl.DataFrame()
+    # Track progress
+    total_batches = len(transcript_indices)
+    processed_batches = 0
     
     try:
-        # Combine results in chunks to avoid memory issues
-        chunk_size = min(100, len(all_results))
-        final_dfs = []
+        # Process in smaller staggered groups
+        scoring_stagger_size = min(len(transcript_indices) // 5 + 1, scoring_workers)
         
-        for i in range(0, len(all_results), chunk_size):
-            end = min(i + chunk_size, len(all_results))
-            chunk_df = pl.concat(all_results[i:end])
-            final_dfs.append(chunk_df)
+        for start_batch in range(0, len(transcript_indices), scoring_stagger_size):
+            end_batch = min(start_batch + scoring_stagger_size, len(transcript_indices))
+            batch_group = transcript_indices[start_batch:end_batch]
             
-            # Clear processed results to free memory
-            for j in range(i, end):
-                all_results[j] = None
+            progress = (processed_batches / total_batches) * 100
+            log_info(f"Processing scoring batch group {start_batch//scoring_stagger_size + 1}/{(len(transcript_indices) + scoring_stagger_size - 1)//scoring_stagger_size}: "
+                     f"batches {start_batch} to {end_batch-1} ({progress:.1f}% complete)")
             
+            # Process this group with fewer workers
+            with concurrent.futures.ProcessPoolExecutor(max_workers=scoring_workers) as executor:
+                batch_data_list = [
+                    (indices, available_transcripts, transcript_data, orf_df, old_scoring, sru_range) 
+                    for indices in batch_group
+                ]
+                
+                # Process batches and stream results as they complete
+                futures = [executor.submit(score_transcripts_memory_efficient, data) for data in batch_data_list]
+                
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        batch_results = future.result()
+                        if batch_results:
+                            # Stream results to disk instead of keeping in memory
+                            stream_results_to_disk(batch_results, temp_results_file)
+                        processed_batches += 1
+                    except Exception as exc:
+                        log_error(f"Transcript batch scoring error: {exc}")
+            
+            # Force garbage collection between groups
             gc.collect()
         
-        # Final concatenation
-        final_df = pl.concat(final_dfs)
+        log_info(f"Finished scoring. Reading results from temporary file.")
         
-        duration = time.time() - start_time
-        transcripts_per_second = len(available_transcripts) / duration
-        log_info(f"Scoring completed in {duration:.2f} seconds ({transcripts_per_second:.2f} transcripts/sec)")
-        return final_df
+        # Read the final results from disk
+        if os.path.exists(temp_results_file) and os.path.getsize(temp_results_file) > 0:
+            # Load in chunks if file is large
+            if os.path.getsize(temp_results_file) > 1e9:  # > 1GB
+                log_info("Result file is large, reading in chunks...")
+                final_df = pl.scan_csv(temp_results_file).collect()
+            else:
+                final_df = pl.read_csv(temp_results_file)
+                
+            log_info(f"Successfully loaded {final_df.height} scored ORFs")
+            
+            # Clean up the temporary file
+            try:
+                os.remove(temp_results_file)
+                log_info("Temporary file removed")
+            except:
+                log_warning(f"Could not remove temporary file: {temp_results_file}")
+                
+            duration = time.time() - start_time
+            transcripts_per_second = len(available_transcripts) / duration
+            log_info(f"Scoring completed in {duration:.2f} seconds ({transcripts_per_second:.2f} transcripts/sec)")
+            return final_df
+        else:
+            log_warning("No ORFs were scored or temporary file is empty")
+            return pl.DataFrame()
+            
     except Exception as exc:
-        log_error(f"Error combining all results: {exc}")
+        log_error(f"Error during scoring process: {exc}")
         return pl.DataFrame()
+    finally:
+        # Ensure temp file is removed even on error
+        if os.path.exists(temp_results_file):
+            try:
+                os.remove(temp_results_file)
+            except:
+                pass

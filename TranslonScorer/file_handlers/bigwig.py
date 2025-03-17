@@ -661,6 +661,42 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     batch_groups = None
     gc.collect()
     
+        # Add after creating transcript_data but before scoring:
+    log_info("Filtering transcripts by coverage...")
+    min_nonzero_reads = 10  # Minimum number of positions with non-zero coverage
+    min_mean_coverage = 0.5  # Minimum mean coverage across transcript
+
+    filtered_transcripts = {}
+    for tran_id, tran_data in transcript_data.items():
+        # For sparse representation
+        if isinstance(tran_data, dict) and 'positions' in tran_data:
+            # Check if we have enough non-zero positions
+            if len(tran_data['positions']) < min_nonzero_reads:
+                continue
+                
+            # Check mean coverage (only consider positions with data)
+            if np.mean(tran_data['values']) < min_mean_coverage:
+                continue
+                
+            filtered_transcripts[tran_id] = tran_data
+        # For list representation
+        elif isinstance(tran_data, list):
+            nonzero_count = sum(1 for v in tran_data if v > 0)
+            if nonzero_count < min_nonzero_reads:
+                continue
+                
+            mean_coverage = sum(tran_data) / max(1, len(tran_data))
+            if mean_coverage < min_mean_coverage:
+                continue
+                
+            filtered_transcripts[tran_id] = tran_data
+
+    log_info(f"Filtered out {len(transcript_data) - len(filtered_transcripts)} transcripts with insufficient coverage")
+    log_info(f"Proceeding with {len(filtered_transcripts)} well-covered transcripts")
+
+    # Then replace transcript_data with filtered_transcripts
+    transcript_data = filtered_transcripts
+
     # Create a temporary file for streaming results
     temp_dir = tempfile.gettempdir()
     temp_results_file = os.path.join(temp_dir, f"translonscorer_results_{int(time.time())}.csv")

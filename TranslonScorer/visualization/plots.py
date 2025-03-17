@@ -194,9 +194,9 @@ def plottop10(df, bigwig, exon, range_param, filename, parameters=None):
     Generate plots and tables summarizing top 10 ORFs per type and metagene profiles.
 
     Args:
-        df (str): Path to CSV file containing ORF information
+        df (str or DataFrame): Path to CSV file or DataFrame containing ORF information
         bigwig (str): Path to BigWig file
-        exon (str): Path to CSV file containing exon information
+        exon (str or DataFrame): Path to CSV file or DataFrame containing exon information
         range_param (int): Range for relative coordinates
         filename (str): Output filename for report
         parameters (dict, optional): Additional parameters for report generation
@@ -205,12 +205,20 @@ def plottop10(df, bigwig, exon, range_param, filename, parameters=None):
     
     range_list = list(range(-range_param, range_param + 1))
     
-    # Read input files
-    df = pl.read_csv(df, has_header=True, separator=",")
+    # Read input files if paths are provided, otherwise use the DataFrame directly
+    if isinstance(df, str):
+        df = pl.read_csv(df, has_header=True, separator=",")
+        
     bwfile = bw.open(bigwig)
-    exon_df = pl.read_csv(exon, has_header=True, separator=",")
+    
+    if isinstance(exon, str):
+        exon_df = pl.read_csv(exon, has_header=True, separator=",")
+    else:
+        exon_df = exon  # Use the DataFrame directly
+        
+    # Ensure exon_df has the correct column formats
     exon_df = exon_df.with_columns(
-        pl.col("start", "stop", "tran_start", "tran_stop").apply(lambda x: x.split(","))
+        pl.col("start", "stop", "tran_start", "tran_stop").apply(lambda x: x.split(",") if isinstance(x, str) else x)
     )
 
     # Generate plots
@@ -220,4 +228,4 @@ def plottop10(df, bigwig, exon, range_param, filename, parameters=None):
     # Generate report
     generate_report(plotlist, tranplot, parameters, table, filename, pertranscript)
     
-    log_info("Plots generated successfully") 
+    log_info("Plots generated successfully")

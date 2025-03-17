@@ -624,7 +624,123 @@ def score_transcript_batch_by_indices(indices_and_data):
     batch = transcripts_list[start_idx:end_idx]
     return score_transcript_batch(batch, transcript_reads, orf_df, old_scoring, sru_range)
 
-@profile
+
+# Add this function at the module level, outside of any other functions
+def process_batch_memory_efficient(batch_data):
+    """
+    Process a batch of regions using memory-efficient approach.
+    This must be defined at the module level for multiprocessing to work.
+    
+    Args:
+        batch_data: Tuple containing (indices, all_regions, bw_reader)
+        
+    Returns:
+        Dictionary with processing results
+    """
+    batch_indices, all_regions, bwfile_path = batch_data
+    start_idx, end_idx = batch_indices
+    batch_regions = all_regions[start_idx:end_idx]
+    
+    # Create the reader here inside the worker
+    bw_reader = MemoryEfficientBigWigReader(bwfile_path)
+    
+    # Group regions by transcript to minimize BigWig access
+    regions_by_transcript = {}
+    for chrom, start, stop, tran_id in batch_regions:
+        if tran_id not in regions_by_transcript:
+            regions_by_transcript[tran_id] = []
+        regions_by_transcript[tran_id].append((chrom, start, stop))
+    
+    batch_results = {}
+    processed = 0
+    failed = 0
+    
+    # Process each transcript's regions
+    for tran_id, regions in regions_by_transcript.items():
+        all_reads = []
+        
+        for chrom, start, stop in regions:
+            try:
+                # Use the memory-efficient reader
+                values = bw_reader.get_values(chrom, start, stop)
+                if values is not None and len(values) > 0:
+                    all_reads.extend(values)
+                else:
+                    all_reads.extend([0.0] * (stop - start))
+                
+                processed += 1
+            except Exception as e:
+                failed += 1
+                all_reads.extend([0.0] * (stop - start))
+        
+        # Only keep non-empty results
+        if all_reads:
+            batch_results[tran_id] = all_reads
+    
+    return {"results": batch_results, "processed": processed, "failed": failed}
+
+# Also define this function at the module level
+def score_transcripts_memory_efficient(batch_data):
+    """
+    Score a batch of transcripts using memory-efficient approach.
+    This must be defined at the module level for multiprocessing to work.
+    
+    Args:
+        batch_data: Tuple containing all necessary data
+        
+    Returns:
+        List of scored ORF DataFrames
+    """
+    batch_indices, available_transcripts, transcript_storage, orf_df, old_scoring, sru_range = batch_data
+    start_idx, end_idx = batch_indices
+    batch_transcripts = available_transcripts[start_idx:end_idx]
+    
+    # Score each transcript
+    batch_results = []
+    for tran in batch_transcripts:
+        # Get transcript data as DataFrame
+        tran_reads = transcript_storage.get_transcript_df(tran)
+        if tran_reads.is_empty():
+            continue
+            
+        # Filter ORFs for this transcript
+        orfs_for_tran = orf_df.filter(pl.col("tran_id") == tran)
+        if orfs_for_tran.is_empty():
+            continue
+            
+        for typeorf in orfs_for_tran["type"].unique():
+            orfs_filtered = orfs_for_tran.filter(pl.col("type") == typeorf)
+            
+            if orfs_filtered.is_empty():
+                continue
+                
+            try:
+                if old_scoring:
+                    orfs_filtered = oldscoring(
+                        orfs_filtered, tran_reads, sru_range, typeorf
+                    )
+                    batch_results.append(orfs_filtered)
+                else:
+                    emptyscore_df = existingscore(orfs_filtered, typeorf, {"rise_up": {}, "step_down": {}})
+                    if not emptyscore_df.is_empty():
+                        scoredict = newscoring(
+                            emptyscore_df, tran_reads, sru_range, typeorf, {"rise_up": {}, "step_down": {}}
+                        )
+                        orfs_filtered = assigningscore(
+                            orfs_filtered, scoredict, typeorf
+                        )
+                        orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
+                        batch_results.append(orfs_filtered)
+            except Exception as e:
+                log_error(f"Error scoring ORFs for transcript {tran}, type {typeorf}: {str(e)}")
+            
+            # Free memory after processing each ORF type
+            orfs_filtered = None
+            gc.collect()
+    
+    return batch_results
+
+@profile  # Keep only one @profile decorator
 def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
     Score ORFs using bigwig coverage data with high-performance optimization and memory efficiency.
@@ -745,9 +861,6 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     log_info("Creating memory-efficient transcript storage...")
     transcript_storage = MemoryEfficientTranscriptStorage()
     
-    # Create a memory-efficient BigWig reader
-    bw_reader = MemoryEfficientBigWigReader(bwfile_path)
-    
     # STEP 2: Process all region batches with memory-efficient approach
     total_processed = 0
     total_failed = 0
@@ -756,46 +869,6 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     max_concurrent_jobs = min(max_workers, 8)  # Limit concurrent jobs even more
     stagger_size = min(len(region_batches) // 10 + 1, max_concurrent_jobs)  # Process ~10% at a time
     log_interval = max(1, len(region_batches) // 20)  # Log ~20 times during processing
-    
-    # Process batches in parallel with memory-efficient worker function
-    def process_batch_memory_efficient(batch_indices):
-        start_idx, end_idx = batch_indices
-        batch_regions = all_regions[start_idx:end_idx]
-        
-        # Group regions by transcript to minimize BigWig access
-        regions_by_transcript = {}
-        for chrom, start, stop, tran_id in batch_regions:
-            if tran_id not in regions_by_transcript:
-                regions_by_transcript[tran_id] = []
-            regions_by_transcript[tran_id].append((chrom, start, stop))
-        
-        batch_results = {}
-        processed = 0
-        failed = 0
-        
-        # Process each transcript's regions
-        for tran_id, regions in regions_by_transcript.items():
-            all_reads = []
-            
-            for chrom, start, stop in regions:
-                try:
-                    # Use the memory-efficient reader
-                    values = bw_reader.get_values(chrom, start, stop)
-                    if values is not None and len(values) > 0:
-                        all_reads.extend(values)
-                    else:
-                        all_reads.extend([0.0] * (stop - start))
-                    
-                    processed += 1
-                except Exception as e:
-                    failed += 1
-                    all_reads.extend([0.0] * (stop - start))
-            
-            # Only keep non-empty results
-            if all_reads:
-                batch_results[tran_id] = all_reads
-        
-        return {"results": batch_results, "processed": processed, "failed": failed}
     
     log_info(f"Processing {len(region_batches)} region batches...")
     
@@ -809,7 +882,14 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
         
         # Process this group in parallel
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(process_batch_memory_efficient, indices) for indices in batch_group]
+            # Prepare batch data - send only what's needed to each worker
+            batch_data_list = [
+                (indices, all_regions, bwfile_path) for indices in batch_group
+            ]
+            
+            # Submit each batch to the worker process
+            futures = [executor.submit(process_batch_memory_efficient, batch_data) 
+                      for batch_data in batch_data_list]
             
             # Process results as they complete
             for future in concurrent.futures.as_completed(futures):
@@ -851,56 +931,6 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
         end = min(i + batch_size, len(available_transcripts))
         transcript_indices.append((i, end))
     
-    # Define a memory-efficient function to score transcripts
-    def score_transcripts_memory_efficient(batch_indices):
-        start_idx, end_idx = batch_indices
-        batch_transcripts = available_transcripts[start_idx:end_idx]
-        
-        # Score each transcript
-        batch_results = []
-        for tran in batch_transcripts:
-            # Get transcript data as DataFrame
-            tran_reads = transcript_storage.get_transcript_df(tran)
-            if tran_reads.is_empty():
-                continue
-                
-            # Filter ORFs for this transcript
-            orfs_for_tran = orf_df.filter(pl.col("tran_id") == tran)
-            if orfs_for_tran.is_empty():
-                continue
-                
-            for typeorf in orfs_for_tran["type"].unique():
-                orfs_filtered = orfs_for_tran.filter(pl.col("type") == typeorf)
-                
-                if orfs_filtered.is_empty():
-                    continue
-                    
-                try:
-                    if old_scoring:
-                        orfs_filtered = oldscoring(
-                            orfs_filtered, tran_reads, sru_range, typeorf
-                        )
-                        batch_results.append(orfs_filtered)
-                    else:
-                        emptyscore_df = existingscore(orfs_filtered, typeorf, {"rise_up": {}, "step_down": {}})
-                        if not emptyscore_df.is_empty():
-                            scoredict = newscoring(
-                                emptyscore_df, tran_reads, sru_range, typeorf, {"rise_up": {}, "step_down": {}}
-                            )
-                            orfs_filtered = assigningscore(
-                                orfs_filtered, scoredict, typeorf
-                            )
-                            orfs_filtered = globalscores(orfs_filtered, tran_reads, typeorf)
-                            batch_results.append(orfs_filtered)
-                except Exception as e:
-                    log_error(f"Error scoring ORFs for transcript {tran}, type {typeorf}: {str(e)}")
-                
-                # Free memory after processing each ORF type
-                orfs_filtered = None
-                gc.collect()
-        
-        return batch_results
-    
     # Score in parallel with staggered execution to limit memory
     all_results = []
     scoring_stagger_size = min(len(transcript_indices) // 4 + 1, max_workers)  # Process ~25% at a time
@@ -914,7 +944,15 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
         
         # Process this group in parallel
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(score_transcripts_memory_efficient, indices) for indices in batch_group]
+            # Prepare batch data for each worker
+            batch_data_list = [
+                (indices, available_transcripts, transcript_storage, orf_df, old_scoring, sru_range) 
+                for indices in batch_group
+            ]
+            
+            # Submit each batch to the worker process
+            futures = [executor.submit(score_transcripts_memory_efficient, batch_data) 
+                      for batch_data in batch_data_list]
             
             # Process results as they complete
             for future in concurrent.futures.as_completed(futures):

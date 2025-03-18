@@ -472,8 +472,10 @@ def process_genomic_bigwig(bw_handle, exon_df):
     # Get chromosomes in BigWig
     bw_chroms = set(bw_handle.chroms().keys())
     
-    # Create a dictionary to store transcript coverage
-    transcript_coverage = {}
+    # Create lists to store transcript data
+    all_tran_ids = []
+    all_tran_starts = []
+    all_counts = []
     
     # Process each transcript
     for tran_id in exon_df["tran_id"].unique():
@@ -497,7 +499,7 @@ def process_genomic_bigwig(bw_handle, exon_df):
             else:
                 continue
         
-        # Initialize coverage array for this transcript
+        # Initialize transcript data
         coverage_dict = {}
         max_tran_pos = 0
         
@@ -523,7 +525,7 @@ def process_genomic_bigwig(bw_handle, exon_df):
                         for j, value in enumerate(values):
                             tran_pos = tran_start + j
                             if value is not None:
-                                coverage_dict[tran_pos] = value
+                                coverage_dict[tran_pos] = coverage_dict.get(tran_pos, 0) + value
                     except Exception as e:
                         log_warning(f"Error reading {chrom}:{start}-{stop}: {str(e)}")
             else:
@@ -544,45 +546,32 @@ def process_genomic_bigwig(bw_handle, exon_df):
                     for j, value in enumerate(values):
                         tran_pos = tran_start + j
                         if value is not None:
-                            coverage_dict[tran_pos] = value
+                            coverage_dict[tran_pos] = coverage_dict.get(tran_pos, 0) + value
                 except Exception as e:
                     log_warning(f"Error reading {chrom}:{start}-{stop}: {str(e)}")
         
-        # Store coverage for this transcript
+        # Add coverage data for this transcript
         if coverage_dict:
-            transcript_coverage[tran_id] = (coverage_dict, max_tran_pos)
+            # Create coverage array
+            for tran_pos in range(max_tran_pos + 1):
+                all_tran_ids.append(tran_id)
+                all_tran_starts.append(tran_pos)
+                all_counts.append(coverage_dict.get(tran_pos, 0.0))
     
-    # Combine all transcripts into a single DataFrame
-    results = []
-    
-    for tran_id, (coverage_dict, max_pos) in transcript_coverage.items():
-        # Create array for this transcript
-        coverage_array = np.zeros(max_pos + 1)
-        
-        # Fill in coverage values
-        for pos, value in coverage_dict.items():
-            if pos < len(coverage_array):
-                coverage_array[pos] = value
-        
-        # Create DataFrame for this transcript
-        tran_df = pl.DataFrame({
-            "tran_id": [tran_id] * len(coverage_array),
-            "tran_start": pl.arange(0, len(coverage_array)),
-            "counts": coverage_array
+    # Create DataFrame from collected data
+    if all_tran_ids:
+        return pl.DataFrame({
+            "tran_id": all_tran_ids,
+            "tran_start": all_tran_starts,
+            "counts": all_counts
         })
-        
-        results.append(tran_df)
-    
-    # Combine all transcripts
-    if results:
-        return pl.concat(results)
     else:
         # Return empty DataFrame with correct structure
         return pl.DataFrame({
             "tran_id": [],
             "tran_start": [],
             "counts": []
-        })
+        })  
 
 
 def process_transcriptomic_bigwig(bw_handle, exon_df):
@@ -798,9 +787,15 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
     import time
     import tempfile
     import concurrent.futures
-    from ..utils.logging import log_info
+    from ..utils.logging import log_info, log_error, log_warning
     
     start_time = time.time()
+    
+    # Ensure we have concrete DataFrames, not lazy expressions
+    if hasattr(exon_df, "collect"):
+        exon_df = exon_df.collect()
+    if hasattr(orf_df, "collect"):
+        orf_df = orf_df.collect()
     
     # Determine optimal worker count based on system resources
     if max_workers is None:
@@ -829,50 +824,60 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
     transcript_batches = [list(transcript_ids)[i:i+batch_size] for i in range(0, len(transcript_ids), batch_size)]
     
     processed_count = 0
+    
+    # Exit early if no transcripts to process
+    if not transcript_batches:
+        log_warning("No transcripts to process")
+        return pl.DataFrame()
+    
+    # Function to process a transcript in the correct context
+    def process_transcript_wrapper(args):
+        tran_id, bigwig_path, old_scoring, sru_range = args
+        
+        # Get ORFs for this transcript
+        tran_orfs = orf_df.filter(pl.col("tran_id") == tran_id)
+        
+        if tran_orfs.is_empty():
+            return None
+        
+        # Get exons for this transcript
+        tran_exons = exon_df.filter(pl.col("tran_id") == tran_id)
+        
+        if tran_exons.is_empty():
+            return None
+        
+        try:
+            # Score this transcript
+            result = score_single_transcript(
+                bigwig_path, 
+                tran_exons, 
+                tran_orfs, 
+                old_scoring, 
+                sru_range
+            )
+            return result
+        except Exception as e:
+            log_error(f"Error processing transcript {tran_id}: {str(e)}", raise_exception=False)
+            return None
+    
     for batch_idx, transcript_batch in enumerate(transcript_batches):
         log_info(f"Processing batch {batch_idx+1}/{len(transcript_batches)} ({len(transcript_batch)} transcripts)")
         
+        # Prepare tasks
+        tasks = [(tran_id, bigwig_path, old_scoring, sru_range) for tran_id in transcript_batch]
+        
         # Process transcripts in parallel
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            for tran_id in transcript_batch:
-                # Get ORFs for this transcript
-                tran_orfs = orf_df.filter(pl.col("tran_id") == tran_id)
-                
-                if tran_orfs.is_empty():
-                    continue
-                
-                # Get exons for this transcript
-                tran_exons = exon_df.filter(pl.col("tran_id") == tran_id)
-                
-                if tran_exons.is_empty():
-                    continue
-                
-                # Submit task
-                future = executor.submit(
-                    score_single_transcript, 
-                    bigwig_path, 
-                    tran_exons, 
-                    tran_orfs, 
-                    old_scoring, 
-                    sru_range
-                )
-                futures.append(future)
-            
-            # Process results
-            results = []
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    result = future.result()
-                    if result:
-                        results.append(result)
-                        processed_count += 1
-                except Exception as e:
-                    log_info(f"Error processing transcript: {str(e)}")
-            
-            # Combine and save batch results
-            if results:
+            results = list(filter(None, executor.map(process_transcript_wrapper, tasks)))
+        
+        # Combine results for this batch
+        if results:
+            try:
                 batch_df = pl.concat(results)
+                
+                # Ensure it's a concrete DataFrame
+                if hasattr(batch_df, "collect"):
+                    batch_df = batch_df.collect()
                 
                 # Write to temp file
                 if batch_idx == 0:
@@ -880,7 +885,10 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
                 else:
                     batch_df.write_csv(temp_results_file, mode="a", include_header=False)
                 
+                processed_count += len(results)
                 log_info(f"Processed {processed_count}/{len(transcript_ids)} transcripts")
+            except Exception as e:
+                log_error(f"Error combining results: {str(e)}", raise_exception=False)
         
         # Clear memory between batches
         gc.collect()
@@ -890,7 +898,7 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
         log_info(f"Loading final results from {temp_results_file}")
         
         try:
-            # For large files, use lazy loading
+            # For large files, use lazy loading but ensure we collect at the end
             if os.path.getsize(temp_results_file) > 1e9:  # 1 GB
                 final_df = pl.scan_csv(temp_results_file).collect()
             else:
@@ -903,7 +911,7 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
                 os.remove(temp_results_file)
                 log_info(f"Temporary file removed: {temp_results_file}")
             except Exception as e:
-                log_info(f"Could not remove temporary file: {temp_results_file}")
+                log_warning(f"Could not remove temporary file: {temp_results_file}")
             
             # Calculate and log performance metrics
             duration = time.time() - start_time
@@ -914,12 +922,12 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
             
             return final_df
         except Exception as e:
-            log_info(f"Error loading results: {str(e)}")
+            log_error(f"Error loading results: {str(e)}", raise_exception=False)
             return pl.DataFrame()
     else:
-        log_info("No results were generated or temporary file is empty")
+        log_warning("No results were generated or temporary file is empty")
         return pl.DataFrame()
-
+        
 
 def score_single_transcript(bigwig_path, exon_df, orf_df, old_scoring, sru_range):
     """
@@ -939,56 +947,69 @@ def score_single_transcript(bigwig_path, exon_df, orf_df, old_scoring, sru_range
     import pyBigWig as bw
     from ..utils.logging import log_info
     
-    # Get transcript ID (should be the same for all ORFs)
-    tran_id = orf_df["tran_id"][0]
-    
-    # Open BigWig file
-    with bw.open(bigwig_path) as bw_file:
-        # Get transcript coverage
-        coverage_df = transcriptreads(bw_file, exon_df, tran_id)
+    try:
+        # Get transcript ID (should be the same for all ORFs)
+        tran_id = orf_df["tran_id"][0]
         
-        if coverage_df.is_empty():
-            return None
-        
-        # Process different ORF types separately
-        results = []
-        
-        for orf_type in orf_df["type"].unique():
-            type_orfs = orf_df.filter(pl.col("type") == orf_type)
+        # Open BigWig file
+        with bw.open(bigwig_path) as bw_file:
+            # Get transcript coverage
+            coverage_df = transcriptreads(bw_file, exon_df, tran_id)
             
-            # Score ORFs based on method
-            if old_scoring:
-                from ..core.scoring import oldscoring
-                scored_orfs = oldscoring(type_orfs, coverage_df, sru_range, orf_type)
-            else:
-                from ..core.scoring import globalscores, existingscore, assigningscore, newscoring
+            if coverage_df.is_empty():
+                return None
+            
+            # Ensure coverage_df is a concrete DataFrame, not a lazy expression
+            if hasattr(coverage_df, "collect"):
+                coverage_df = coverage_df.collect()
+            
+            # Process different ORF types separately
+            results = []
+            
+            for orf_type in orf_df["type"].unique():
+                type_orfs = orf_df.filter(pl.col("type") == orf_type)
                 
-                # Create empty score dict
-                score_dict = {"rise_up": {}, "step_down": {}}
-                
-                # Find ORFs that need scoring
-                empty_score_df = existingscore(type_orfs, orf_type, score_dict)
-                
-                if not empty_score_df.is_empty():
-                    # Calculate new scores
-                    score_dict = newscoring(empty_score_df, coverage_df, sru_range, orf_type, score_dict)
-                    
-                    # Assign scores to ORFs
-                    type_orfs = assigningscore(type_orfs, score_dict, orf_type)
-                    
-                    # Calculate global scores
-                    scored_orfs = globalscores(type_orfs, coverage_df, orf_type)
+                # Score ORFs based on method
+                if old_scoring:
+                    from ..core.scoring import oldscoring
+                    scored_orfs = oldscoring(type_orfs, coverage_df, sru_range, orf_type)
                 else:
-                    scored_orfs = type_orfs
+                    from ..core.scoring import globalscores, existingscore, assigningscore, newscoring
+                    
+                    # Create empty score dict
+                    score_dict = {"rise_up": {}, "step_down": {}}
+                    
+                    # Find ORFs that need scoring
+                    empty_score_df = existingscore(type_orfs, orf_type, score_dict)
+                    
+                    if not empty_score_df.is_empty():
+                        # Calculate new scores
+                        score_dict = newscoring(empty_score_df, coverage_df, sru_range, orf_type, score_dict)
+                        
+                        # Assign scores to ORFs
+                        type_orfs = assigningscore(type_orfs, score_dict, orf_type)
+                        
+                        # Calculate global scores
+                        scored_orfs = globalscores(type_orfs, coverage_df, orf_type)
+                    else:
+                        scored_orfs = type_orfs
+                
+                results.append(scored_orfs)
             
-            results.append(scored_orfs)
+            # Combine results
+            if results:
+                combined = pl.concat(results)
+                # Ensure it's a concrete DataFrame
+                if hasattr(combined, "collect"):
+                    combined = combined.collect()
+                return combined
+            else:
+                return None
+    except Exception as e:
+        from ..utils.logging import log_error
+        log_error(f"Error in score_single_transcript for {tran_id}: {str(e)}", raise_exception=False)
+        return None
         
-        # Combine results
-        if results:
-            return pl.concat(results)
-        else:
-            return None
-
 
 def add_strand_to_orfs(orf_df, exon_df):
     """

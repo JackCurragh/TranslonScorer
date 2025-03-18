@@ -435,12 +435,14 @@ def transcriptreads(bigwig_file, exon_df, transcript_id=None):
         
         # Determine if this is a genomic or transcriptomic BigWig
         is_genomic = chrom_match >= trans_match
+        if is_genomic:
+            log_info("Processing genomic BigWig file")
+        else:
+            log_info("Processing transcriptomic BigWig file")
         
         if is_genomic:
-            log_info("Detected genomic BigWig, mapping to transcript coordinates")
             return process_genomic_bigwig(bw_handle, exon_df)
         else:
-            log_info("Detected transcriptomic BigWig, using directly")
             return process_transcriptomic_bigwig(bw_handle, exon_df)
     
     finally:
@@ -916,11 +918,13 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
                     if hasattr(batch_df, "collect"):
                         batch_df = batch_df.collect()
                     
-                    # Write to temp file
+                    # Write to temp file using compatible approach
                     if batch_idx == 0:
+                        # First batch, create the file
                         batch_df.write_csv(temp_results_file)
                     else:
-                        batch_df.write_csv(temp_results_file, mode="a", include_header=False)
+                        # Append to the existing file
+                        append_to_csv(batch_df, temp_results_file)
                     
                     processed_count += len(result_dfs)
                     log_info(f"Processed {processed_count}/{len(transcript_ids)} transcripts")
@@ -965,6 +969,57 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
         log_warning("No results were generated or temporary file is empty")
         return pl.DataFrame()
 
+
+def append_to_csv(df, file_path):
+    """
+    Append a DataFrame to an existing CSV file.
+    
+    Args:
+        df (DataFrame): DataFrame to append
+        file_path (str): Path to CSV file
+    """
+    import csv
+    from ..utils.logging import log_info
+    
+    try:
+        # Get column names from DataFrame
+        columns = df.columns
+        
+        # Convert DataFrame to list of dictionaries
+        rows = []
+        for row in df.iter_rows(named=True):
+            rows.append(row)
+        
+        # Open file for writing
+        with open(file_path, 'a', newline='') as f:
+            # Create CSV writer
+            writer = csv.DictWriter(f, fieldnames=columns)
+            
+            # Write rows without header
+            writer.writerows(rows)
+            
+        return True
+    except Exception as e:
+        log_info(f"Error appending to CSV: {str(e)}")
+        
+        # Fallback approach
+        try:
+            # Read existing data
+            import polars as pl
+            existing_df = pl.read_csv(file_path)
+            
+            # Combine with new data
+            combined_df = pl.concat([existing_df, df])
+            
+            # Write back to file
+            combined_df.write_csv(file_path)
+            
+            return True
+        except Exception as e2:
+            log_info(f"Fallback also failed: {str(e2)}")
+            return False
+
+            
 def score_single_transcript(bigwig_path, exon_df, orf_df, old_scoring, sru_range):
     """
     Score ORFs for a single transcript.

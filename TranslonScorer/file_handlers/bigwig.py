@@ -853,3 +853,418 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     else:
         log_warning("No results were generated or temporary file is empty")
         return pl.DataFrame()
+
+
+
+def genomic_to_transcript_bigwig(bigwig_path, exon_df, output_prefix, stranded=False):
+    """
+    Convert genomic BigWig file(s) to transcript coordinates.
+    
+    This function reads genomic BigWig file(s), maps the coverage to transcript 
+    coordinates using exon information, and creates new transcript-based BigWig file(s).
+    
+    Parameters:
+        bigwig_path (str or dict): Path to genomic BigWig file, or dict with 'forward' and 'reverse' paths
+        exon_df (DataFrame): DataFrame containing exon information
+        output_prefix (str): Prefix for output files
+        stranded (bool): Whether to process strands separately
+        
+    Returns:
+        str or dict: Path(s) to output transcript-based BigWig file(s)
+    """
+    import pyBigWig as bw
+    import polars as pl
+    from pathlib import Path
+    import tempfile
+    import os
+    from ..utils.logging import log_info, log_warning, log_error
+    
+    log_info("Converting genomic BigWig to transcript coordinates...")
+    
+    # Handle different input formats
+    if isinstance(bigwig_path, dict) and 'forward' in bigwig_path and 'reverse' in bigwig_path:
+        # We have separate forward and reverse BigWig files
+        stranded = True
+        forward_path = bigwig_path['forward']
+        reverse_path = bigwig_path['reverse']
+    else:
+        # We have a single BigWig file
+        forward_path = reverse_path = bigwig_path
+    
+    # Create output paths
+    if stranded:
+        output_forward = f"{output_prefix}_fwd_transcript.bw"
+        output_reverse = f"{output_prefix}_rev_transcript.bw"
+        outputs = {'forward': output_forward, 'reverse': output_reverse}
+    else:
+        output_path = f"{output_prefix}_transcript.bw"
+        outputs = output_path
+    
+    # Extract regions from exon DataFrame
+    log_info("Extracting exon regions...")
+    regions = extract_regions_from_exons(exon_df)
+    
+    # Group regions by chromosome for efficient processing
+    regions_by_chrom = {}
+    for region in regions:
+        chrom, start, end, tran_id, tran_start, strand = region
+        if chrom not in regions_by_chrom:
+            regions_by_chrom[chrom] = []
+        regions_by_chrom[chrom].append((start, end, tran_id, tran_start, strand))
+    
+    # Process forward and reverse strands if needed
+    if stranded:
+        # Process forward strand
+        log_info("Processing forward strand...")
+        with open_bigwig(forward_path) as fwd_bw:
+            forward_transcript_data = process_genomic_bigwig(fwd_bw, regions_by_chrom, '+')
+        
+        # Process reverse strand
+        log_info("Processing reverse strand...")
+        with open_bigwig(reverse_path) as rev_bw:
+            reverse_transcript_data = process_genomic_bigwig(rev_bw, regions_by_chrom, '-')
+        
+        # Create temporary bedGraph files
+        temp_dir = tempfile.gettempdir()
+        fwd_bedgraph = os.path.join(temp_dir, f"{Path(output_prefix).stem}_fwd_temp.bedgraph")
+        rev_bedgraph = os.path.join(temp_dir, f"{Path(output_prefix).stem}_rev_temp.bedgraph")
+        
+        # Write transcript data to bedGraph files
+        write_transcript_bedgraph(forward_transcript_data, fwd_bedgraph)
+        write_transcript_bedgraph(reverse_transcript_data, rev_bedgraph)
+        
+        # Convert bedGraph to BigWig
+        log_info("Converting forward strand bedGraph to BigWig...")
+        create_transcript_bigwig(fwd_bedgraph, forward_transcript_data, output_forward)
+        
+        log_info("Converting reverse strand bedGraph to BigWig...")
+        create_transcript_bigwig(rev_bedgraph, reverse_transcript_data, output_reverse)
+        
+        # Clean up temporary files
+        os.remove(fwd_bedgraph)
+        os.remove(rev_bedgraph)
+    else:
+        # Process combined strands
+        log_info("Processing combined strands...")
+        with open_bigwig(bigwig_path) as big_w:
+            transcript_data = process_genomic_bigwig(big_w, regions_by_chrom)
+        
+        # Create temporary bedGraph file
+        temp_dir = tempfile.gettempdir()
+        temp_bedgraph = os.path.join(temp_dir, f"{Path(output_prefix).stem}_temp.bedgraph")
+        
+        # Write transcript data to bedGraph file
+        write_transcript_bedgraph(transcript_data, temp_bedgraph)
+        
+        # Convert bedGraph to BigWig
+        log_info("Converting bedGraph to BigWig...")
+        create_transcript_bigwig(temp_bedgraph, transcript_data, output_path)
+        
+        # Clean up temporary file
+        os.remove(temp_bedgraph)
+    
+    log_info("Genomic BigWig conversion complete.")
+    return outputs
+
+
+def extract_regions_from_exons(exon_df):
+    """
+    Extract genomic and transcript regions from exon DataFrame.
+    
+    Parameters:
+        exon_df (DataFrame): DataFrame containing exon information
+        
+    Returns:
+        list: List of tuples (chrom, start, end, tran_id, tran_start, strand)
+    """
+    regions = []
+    
+    for row in exon_df.iter_rows(named=True):
+        chrom = row["chr"]
+        tran_id = row["tran_id"]
+        
+        # Handle both list and scalar values
+        if isinstance(row["start"], list):
+            starts = row["start"]
+            stops = row["stop"]
+            tran_starts = row["tran_start"]
+            tran_stops = row["tran_stop"]
+            
+            # Get strand - assume consistent for all exons
+            strand = "+" if isinstance(row.get("strand"), list) else row.get("strand", "+")
+            if isinstance(strand, list):
+                strand = strand[0]
+            
+            # Process each exon
+            for i in range(len(starts)):
+                start = int(starts[i])
+                end = int(stops[i])
+                tran_start = int(tran_starts[i])
+                
+                regions.append((chrom, start, end, tran_id, tran_start, strand))
+        else:
+            # Single exon case
+            start = int(row["start"])
+            end = int(row["stop"])
+            tran_start = int(row["tran_start"])
+            strand = row.get("strand", "+")
+            
+            regions.append((chrom, start, end, tran_id, tran_start, strand))
+    
+    return regions
+
+
+def open_bigwig(path):
+    """Context manager for safely opening BigWig files."""
+    import pyBigWig as bw
+    import contextlib
+    
+    @contextlib.contextmanager
+    def _open_bigwig():
+        bw_file = None
+        try:
+            bw_file = bw.open(path)
+            yield bw_file
+        finally:
+            if bw_file:
+                bw_file.close()
+    
+    return _open_bigwig()
+
+
+def process_genomic_bigwig(bw_file, regions_by_chrom, strand_filter=None):
+    """
+    Process a genomic BigWig file and convert to transcript coordinates.
+    
+    Parameters:
+        bw_file: Open BigWig file
+        regions_by_chrom: Dictionary of regions by chromosome
+        strand_filter: If provided, only process regions with this strand
+        
+    Returns:
+        dict: Dictionary mapping transcript IDs to coverage data
+    """
+    from ..utils.logging import log_info
+    import numpy as np
+    
+    transcript_data = {}
+    total_chroms = len(regions_by_chrom)
+    processed = 0
+    
+    # Get chromosomes from BigWig
+    bw_chroms = set(bw_file.chroms().keys())
+    
+    for chrom, regions in regions_by_chrom.items():
+        processed += 1
+        
+        if processed % 10 == 0:
+            log_info(f"Processed {processed}/{total_chroms} chromosomes")
+        
+        # Skip if chromosome not in BigWig
+        if chrom not in bw_chroms:
+            continue
+        
+        # Process each region on this chromosome
+        for start, end, tran_id, tran_start, strand in regions:
+            # Skip if filtering by strand and this doesn't match
+            if strand_filter and strand != strand_filter:
+                continue
+                
+            # Get genomic coverage
+            try:
+                values = bw_file.values(chrom, start, end)
+                
+                # Initialize transcript data if needed
+                if tran_id not in transcript_data:
+                    transcript_data[tran_id] = {}
+                
+                # Map genomic positions to transcript positions
+                for i, value in enumerate(values):
+                    if value is None:
+                        value = 0.0
+                    
+                    # Calculate transcript position
+                    if strand == "+":
+                        tran_pos = tran_start + i
+                    else:
+                        # For reverse strand, count from end of region
+                        tran_pos = tran_start + (end - start - 1 - i)
+                    
+                    # Add to transcript data (sum if position already exists)
+                    if tran_pos in transcript_data[tran_id]:
+                        transcript_data[tran_id][tran_pos] += value
+                    else:
+                        transcript_data[tran_id][tran_pos] = value
+            except Exception as e:
+                log_warning(f"Error reading {chrom}:{start}-{end}: {str(e)}")
+    
+    return transcript_data
+
+
+def write_transcript_bedgraph(transcript_data, output_path):
+    """
+    Write transcript coverage data to a bedGraph file.
+    
+    Parameters:
+        transcript_data: Dictionary mapping transcript IDs to coverage data
+        output_path: Path to output bedGraph file
+    """
+    with open(output_path, 'w') as f:
+        for tran_id, positions in transcript_data.items():
+            for pos, value in sorted(positions.items()):
+                # Write in bedGraph format (chrom, start, end, value)
+                # For transcript data, we use transcript ID as chromosome
+                f.write(f"{tran_id}\t{pos}\t{pos+1}\t{value}\n")
+
+
+def create_transcript_bigwig(bedgraph_path, transcript_data, output_path):
+    """
+    Create a BigWig file from a transcript bedGraph file.
+    
+    Parameters:
+        bedgraph_path: Path to input bedGraph file
+        transcript_data: Dictionary mapping transcript IDs to coverage data
+        output_path: Path to output BigWig file
+    """
+    import pyBigWig as bw
+    
+    # Calculate chromosome sizes from transcript data
+    chrom_sizes = {}
+    for tran_id, positions in transcript_data.items():
+        if positions:
+            # Maximum position + 1 gives the transcript length
+            chrom_sizes[tran_id] = max(positions.keys()) + 1
+    
+    # Create BigWig file
+    bw_out = bw.open(output_path, 'w')
+    
+    # Add header with "chromosome" (transcript) sizes
+    bw_out.addHeader([(tran_id, size) for tran_id, size in chrom_sizes.items()])
+    
+    # Load bedGraph data
+    chroms = []
+    starts = []
+    ends = []
+    values = []
+    
+    with open(bedgraph_path, 'r') as f:
+        for line in f:
+            parts = line.strip().split('\t')
+            if len(parts) == 4:
+                chrom, start, end, value = parts
+                chroms.append(chrom)
+                starts.append(int(start))
+                ends.append(int(end))
+                values.append(float(value))
+    
+    # Add entries to BigWig
+    if chroms:
+        bw_out.addEntries(chroms, starts, ends=ends, values=values)
+    
+    bw_out.close()
+
+    def detect_and_process_bigwig(bigwig_path, exon_df, annotation_file, output_prefix, stranded=False):
+    """
+    Detect BigWig type (genomic or transcriptomic) and process accordingly.
+    
+    Parameters:
+        bigwig_path (str or dict): Path to BigWig file(s) or dict with 'forward' and 'reverse' paths
+        exon_df (DataFrame): DataFrame containing exon information
+        annotation_file (str): Path to annotation file (GTF/GFF)
+        output_prefix (str): Prefix for output files
+        stranded (bool): Whether to process strands separately
+        
+    Returns:
+        str or dict: Path(s) to transcript-based BigWig file(s) to use for scoring
+    """
+    import pyBigWig as bw
+    from ..utils.logging import log_info, log_warning, log_error
+    
+    # Determine if we have stranded input
+    if isinstance(bigwig_path, dict) and 'forward' in bigwig_path and 'reverse' in bigwig_path:
+        stranded_input = True
+        bw_to_check = bigwig_path['forward']  # Check the forward file
+    else:
+        stranded_input = False
+        bw_to_check = bigwig_path
+    
+    # Get chromosomes from BigWig
+    with bw.open(bw_to_check) as bw_file:
+        bw_chroms = set(bw_file.chroms().keys())
+    
+    # Get chromosomes from annotation
+    exon_chroms = set(exon_df["chr"].unique())
+    
+    # Get transcripts from annotation
+    transcript_ids = set(exon_df["tran_id"].unique())
+    
+    # Check if BigWig contains transcript IDs or chromosome names
+    transcript_match = len(bw_chroms.intersection(transcript_ids))
+    chrom_match = len(bw_chroms.intersection(exon_chroms))
+    
+    log_info(f"BigWig chromosome match: {chrom_match}, transcript match: {transcript_match}")
+    
+    # If more transcript matches than chromosome matches, it's likely transcriptomic
+    if transcript_match > chrom_match:
+        log_info("Detected transcriptomic BigWig file, using directly.")
+        if stranded_input:
+            return bigwig_path  # Return the original dict with forward/reverse paths
+        else:
+            return bw_to_check  # Return the original path
+    else:
+        log_info("Detected genomic BigWig file, converting to transcript coordinates.")
+        # Convert genomic BigWig to transcript coordinates
+        return genomic_to_transcript_bigwig(bigwig_path, exon_df, output_prefix, stranded)
+
+
+def get_bigwig_paths_for_strands(bigwig_paths, exon_df, annotation_file, output_prefix, stranded=False):
+    """
+    Prepare BigWig paths for stranded or unstranded analysis.
+    
+    This function handles various input scenarios:
+    1. Single BigWig path (stranded=False): Process as combined strands
+    2. Single BigWig path (stranded=True): Process the same file for both strands
+    3. Dict with 'forward' and 'reverse' paths: Process as separate strands
+    
+    Parameters:
+        bigwig_paths (str or dict): Path to BigWig file(s) or dict with 'forward' and 'reverse' paths
+        exon_df (DataFrame): DataFrame containing exon information
+        annotation_file (str): Path to annotation file (GTF/GFF)
+        output_prefix (str): Prefix for output files
+        stranded (bool): Whether to process strands separately
+        
+    Returns:
+        dict: Dictionary with 'forward' and 'reverse' paths for BigWig files
+    """
+    from ..utils.logging import log_info
+    
+    # Case 1: Dict with 'forward' and 'reverse' paths
+    if isinstance(bigwig_paths, dict) and 'forward' in bigwig_paths and 'reverse' in bigwig_paths:
+        log_info("Using provided forward and reverse BigWig files.")
+        
+        # Process each file to ensure it's in transcript coordinates
+        forward_path = detect_and_process_bigwig(
+            bigwig_paths['forward'], exon_df, annotation_file, f"{output_prefix}_fwd"
+        )
+        
+        reverse_path = detect_and_process_bigwig(
+            bigwig_paths['reverse'], exon_df, annotation_file, f"{output_prefix}_rev"
+        )
+        
+        return {'forward': forward_path, 'reverse': reverse_path}
+    
+    # Case 2 and 3: Single BigWig path (stranded=True or False)
+    log_info(f"Processing BigWig file {'with' if stranded else 'without'} strand separation.")
+    bigwig_result = detect_and_process_bigwig(
+        bigwig_paths, exon_df, annotation_file, output_prefix, stranded
+    )
+    
+    # If the result is a dict, it's already separated by strand
+    if isinstance(bigwig_result, dict) and 'forward' in bigwig_result and 'reverse' in bigwig_result:
+        return bigwig_result
+    
+    # Otherwise, use the same file for both strands if needed
+    if stranded:
+        return {'forward': bigwig_result, 'reverse': bigwig_result}
+    else:
+        return {'forward': bigwig_result, 'reverse': bigwig_result}

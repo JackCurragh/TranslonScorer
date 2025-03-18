@@ -764,6 +764,60 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, stranded=False, batch_si
         return process_strand_orfs(forward_bw, exon_df, orf_df, old_scoring, sru_range, batch_size, max_workers)
 
 
+# Add this function outside of process_strand_orfs
+def process_transcript_wrapper(args):
+    """
+    Process a single transcript for scoring.
+    This function needs to be at module level for multiprocessing.
+    
+    Args:
+        args: Tuple containing (tran_id, bigwig_path, orf_df, exon_df, old_scoring, sru_range)
+        
+    Returns:
+        DataFrame or None: Scored ORFs for this transcript or None if error
+    """
+    from ..utils.logging import log_error
+    
+    tran_id, bigwig_path, orf_df_data, exon_df_data, old_scoring, sru_range = args
+    
+    try:
+        import polars as pl
+        
+        # Reconstruct DataFrames from dictionaries
+        orf_df = pl.DataFrame(orf_df_data)
+        exon_df = pl.DataFrame(exon_df_data)
+        
+        # Get ORFs for this transcript
+        tran_orfs = orf_df.filter(pl.col("tran_id") == tran_id)
+        
+        if tran_orfs.is_empty():
+            return None
+        
+        # Get exons for this transcript
+        tran_exons = exon_df.filter(pl.col("tran_id") == tran_id)
+        
+        if tran_exons.is_empty():
+            return None
+        
+        # Score this transcript
+        from .bigwig import score_single_transcript
+        result = score_single_transcript(
+            bigwig_path, 
+            tran_exons, 
+            tran_orfs, 
+            old_scoring, 
+            sru_range
+        )
+        
+        # Convert result to dictionary format for serialization
+        if result is not None:
+            return result.to_dict(as_series=False)
+        return None
+    except Exception as e:
+        log_error(f"Error processing transcript {tran_id}: {str(e)}", raise_exception=False)
+        return None
+
+# Then modify process_strand_orfs to use this function
 def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
     Process and score ORFs for a specific strand.
@@ -781,7 +835,6 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
         DataFrame: Scored ORFs
     """
     import polars as pl
-    import pyBigWig as bw
     import os
     import gc
     import time
@@ -796,6 +849,10 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
         exon_df = exon_df.collect()
     if hasattr(orf_df, "collect"):
         orf_df = orf_df.collect()
+    
+    # Convert DataFrames to dictionaries for serialization
+    exon_df_dict = exon_df.to_dict(as_series=False)
+    orf_df_dict = orf_df.to_dict(as_series=False)
     
     # Determine optimal worker count based on system resources
     if max_workers is None:
@@ -830,63 +887,43 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
         log_warning("No transcripts to process")
         return pl.DataFrame()
     
-    # Function to process a transcript in the correct context
-    def process_transcript_wrapper(args):
-        tran_id, bigwig_path, old_scoring, sru_range = args
-        
-        # Get ORFs for this transcript
-        tran_orfs = orf_df.filter(pl.col("tran_id") == tran_id)
-        
-        if tran_orfs.is_empty():
-            return None
-        
-        # Get exons for this transcript
-        tran_exons = exon_df.filter(pl.col("tran_id") == tran_id)
-        
-        if tran_exons.is_empty():
-            return None
-        
-        try:
-            # Score this transcript
-            result = score_single_transcript(
-                bigwig_path, 
-                tran_exons, 
-                tran_orfs, 
-                old_scoring, 
-                sru_range
-            )
-            return result
-        except Exception as e:
-            log_error(f"Error processing transcript {tran_id}: {str(e)}", raise_exception=False)
-            return None
-    
     for batch_idx, transcript_batch in enumerate(transcript_batches):
         log_info(f"Processing batch {batch_idx+1}/{len(transcript_batches)} ({len(transcript_batch)} transcripts)")
         
-        # Prepare tasks
-        tasks = [(tran_id, bigwig_path, old_scoring, sru_range) for tran_id in transcript_batch]
+        # Prepare tasks - include all necessary data
+        tasks = [
+            (tran_id, bigwig_path, orf_df_dict, exon_df_dict, old_scoring, sru_range) 
+            for tran_id in transcript_batch
+        ]
         
         # Process transcripts in parallel
+        batch_results = []
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            results = list(filter(None, executor.map(process_transcript_wrapper, tasks)))
+            for result in executor.map(process_transcript_wrapper, tasks):
+                if result:
+                    batch_results.append(result)
         
         # Combine results for this batch
-        if results:
+        if batch_results:
             try:
-                batch_df = pl.concat(results)
+                # Convert dictionaries back to DataFrames
+                result_dfs = [pl.DataFrame(res) for res in batch_results if res]
                 
-                # Ensure it's a concrete DataFrame
-                if hasattr(batch_df, "collect"):
-                    batch_df = batch_df.collect()
-                
-                # Write to temp file
-                if batch_idx == 0:
-                    batch_df.write_csv(temp_results_file)
-                else:
-                    batch_df.write_csv(temp_results_file, mode="a", include_header=False)
-                
-                processed_count += len(results)
-                log_info(f"Processed {processed_count}/{len(transcript_ids)} transcripts")
+                if result_dfs:
+                    batch_df = pl.concat(result_dfs)
+                    
+                    # Ensure it's a concrete DataFrame
+                    if hasattr(batch_df, "collect"):
+                        batch_df = batch_df.collect()
+                    
+                    # Write to temp file
+                    if batch_idx == 0:
+                        batch_df.write_csv(temp_results_file)
+                    else:
+                        batch_df.write_csv(temp_results_file, mode="a", include_header=False)
+                    
+                    processed_count += len(result_dfs)
+                    log_info(f"Processed {processed_count}/{len(transcript_ids)} transcripts")
             except Exception as e:
                 log_error(f"Error combining results: {str(e)}", raise_exception=False)
         
@@ -927,7 +964,6 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
     else:
         log_warning("No results were generated or temporary file is empty")
         return pl.DataFrame()
-        
 
 def score_single_transcript(bigwig_path, exon_df, orf_df, old_scoring, sru_range):
     """

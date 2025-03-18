@@ -171,10 +171,9 @@ def all(bam_path: str, chromsizes: str, sequence: str, annotation: str,
             bigwig_path = bigwig
     
     # Ensure exon_df is set when using BigWig directly
-    if exon_df is None:
-        log_info("Loading exon data from annotation file...")
-        cds_df, exon_df = bam.getexons_and_cds(annotation)
-    
+    log_info("Loading exon data from annotation file...")
+    cds_df, exon_df = bam.getexons_and_cds(annotation)
+
     # Ensure transcriptomic input for ORF finding
     log_info("Ensuring transcriptomic input for ORF finding...")
     transcript_fasta = sequence

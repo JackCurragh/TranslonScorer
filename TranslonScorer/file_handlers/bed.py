@@ -46,6 +46,7 @@ def asitecalc(df, offsets):
     Returns:
     - df_bed (DataFrame): DataFrame containing aggregated information of A-site positions, their counts, and chromosome information.
     """
+    print(df)
     # Process each length in streaming fashion
     results = []
     for length in df["length"].unique().sort():

@@ -16,6 +16,7 @@ from .core.scoring import orfrelativeposition
 from .utils.logging import setup_logging, log_info, log_error
 from .visualization import plots
 
+
 warnings.filterwarnings("ignore")
 
 @click.group()
@@ -187,7 +188,7 @@ def all(bam_path, chromsizes, sequence, annotation, bigwig_path, forward_bigwig,
     
     # Process BigWig files to ensure they're in transcript coordinates
     log_info("Processing BigWig files...")
-    bigwig_paths = get_bigwig_paths_for_strands(
+    bigwig_paths = bigwig.get_bigwig_paths_for_strands(
         bigwig_paths, exon_df, annotation, outfile, stranded
     )
     

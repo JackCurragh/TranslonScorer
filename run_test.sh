@@ -116,8 +116,8 @@ if [ $FW_BIGWIG_EXISTS -eq 1 ] & [ $RV_BIGWIG_EXISTS -eq 1 ]; then
     echo "Forward and reverse BigWig file found, using direct ORF finding path..."
     echo "Running TranslonScorer with memory monitoring..."
     PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer all \
-    --forward_bigwig all_forward.bigWig \
-    --reverse_bigwig all_reverse.bigWig \
+    --forward_bigwig $FW_BIGWIG \
+    --reverse_bigwig $RV_BIGWIG \
     --sequence "$GENOME_FA" \
     --annotation "$GTF_FILE" \
     --outfile "$OUTPUT_PREFIX" \

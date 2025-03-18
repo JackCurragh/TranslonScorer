@@ -112,7 +112,7 @@ check_file "$FW_BIGWIG" "Forward BigWig" && FW_BIGWIG_EXISTS=1
 check_file "$RV_BIGWIG" "Reverse BigWig" && RV_BIGWIG_EXISTS=1
 
 
-if [ $FW_BIGWIG_EXISTS -eq 1 & $RV_BIGWIG_EXISTS -eq 1 ]; then
+if [ $FW_BIGWIG_EXISTS -eq 1 ] & [ $RV_BIGWIG_EXISTS -eq 1 ]; then
     echo "BigWig file found, using direct ORF finding path..."
     echo "Running TranslonScorer with memory monitoring..."
     PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer all \

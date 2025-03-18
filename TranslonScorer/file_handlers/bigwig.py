@@ -386,140 +386,403 @@ def stream_results_to_disk(results_batch, output_file):
     for i in range(len(results_batch)):
         results_batch[i] = None
 
-
-def transcriptreads(bwfile: bw.pyBigWig, exon_df: pl.DataFrame) -> pl.DataFrame:
+def transcriptreads(bigwig_file, exon_df, transcript_id=None):
     """
-    Converts a BigWig file to a DataFrame based on provided exon annotation.
+    Extract transcript coverage from a BigWig file, supporting both 
+    genomic and transcriptomic BigWig inputs.
     
     Parameters:
     ----------
-    bwfile : pyBigWig.pyBigWig
-        An open BigWig file handle
+    bigwig_file : str or pyBigWig.pyBigWig
+        Path to a BigWig file or an open BigWig handle
     exon_df : polars.DataFrame
-        DataFrame containing exon annotations with columns: chr, start, stop
+        DataFrame containing exon annotations with columns: chr, start, stop, tran_id
+    transcript_id : str, optional
+        If provided, only process this specific transcript
         
     Returns:
     -------
     polars.DataFrame
-        DataFrame containing transcript information with columns: tran_start, counts
+        DataFrame containing transcript coverage with columns: tran_start, counts
     """
-    config = ProcessingConfig()
+    import pyBigWig as bw
+    import polars as pl
+    from ..utils.logging import log_info, log_warning, log_error
+    import numpy as np
     
-    if not isinstance(bwfile, bw.pyBigWig):
-        raise TypeError("bwfile must be a pyBigWig handle")
+    # Open BigWig file if a path was given
+    if isinstance(bigwig_file, str):
+        bw_handle = bw.open(bigwig_file)
+        need_close = True
+    else:
+        bw_handle = bigwig_file
+        need_close = False
     
-    if exon_df.is_empty():
-        raise ValueError("Empty exon DataFrame provided")
+    try:
+        # Get chromosomes in BigWig
+        bw_chroms = set(bw_handle.chroms().keys())
         
-    if not all(col in exon_df.columns for col in ["chr", "start", "stop"]):
-        raise ValueError("Exon DataFrame missing required columns (chr, start, stop)")
+        # Filter exon_df for specific transcript if requested
+        if transcript_id:
+            exon_df = exon_df.filter(pl.col("tran_id") == transcript_id)
+        
+        # Check BigWig type (genomic or transcriptomic)
+        exon_trans = set(exon_df["tran_id"].unique())
+        exon_chroms = set(exon_df["chr"].unique())
+        
+        trans_match = len(bw_chroms.intersection(exon_trans))
+        chrom_match = len(bw_chroms.intersection(exon_chroms))
+        
+        # Determine if this is a genomic or transcriptomic BigWig
+        is_genomic = chrom_match >= trans_match
+        
+        if is_genomic:
+            log_info("Detected genomic BigWig, mapping to transcript coordinates")
+            return process_genomic_bigwig(bw_handle, exon_df)
+        else:
+            log_info("Detected transcriptomic BigWig, using directly")
+            return process_transcriptomic_bigwig(bw_handle, exon_df)
     
-    reads = []
-    processed_regions = 0
-    failed_regions = 0
+    finally:
+        # Close BigWig handle if we opened it
+        if need_close:
+            bw_handle.close()
+
+
+def process_genomic_bigwig(bw_handle, exon_df):
+    """
+    Process a genomic BigWig file and map to transcript coordinates.
     
-    # Get chromosomes that exist in the bigwig file
-    valid_chroms = set(bwfile.chroms().keys())
+    Parameters:
+    ----------
+    bw_handle : pyBigWig.pyBigWig
+        Open BigWig handle
+    exon_df : polars.DataFrame
+        DataFrame containing exon annotations
+        
+    Returns:
+    -------
+    polars.DataFrame
+        DataFrame with transcript coordinates and coverage values
+    """
+    import polars as pl
+    import numpy as np
+    from ..utils.logging import log_info, log_warning
+    
+    # Get chromosomes in BigWig
+    bw_chroms = set(bw_handle.chroms().keys())
+    
+    # Create a dictionary to store transcript coverage
+    transcript_coverage = {}
+    
+    # Process each transcript
+    for tran_id in exon_df["tran_id"].unique():
+        tran_exons = exon_df.filter(pl.col("tran_id") == tran_id)
+        
+        # Skip if no exons
+        if tran_exons.is_empty():
+            continue
+            
+        # Get chromosome for this transcript
+        chrom = tran_exons["chr"][0]
+        
+        # Skip if chromosome not in BigWig
+        if chrom not in bw_chroms:
+            # Try without 'chr' prefix
+            if chrom.startswith('chr') and chrom[3:] in bw_chroms:
+                chrom = chrom[3:]
+            # Try with 'chr' prefix
+            elif f"chr{chrom}" in bw_chroms:
+                chrom = f"chr{chrom}"
+            else:
+                continue
+        
+        # Initialize coverage array for this transcript
+        coverage_dict = {}
+        max_tran_pos = 0
+        
+        # Process each exon in this transcript
+        for row in tran_exons.iter_rows(named=True):
+            # Get genomic coordinates
+            if isinstance(row["start"], list):
+                # Multiple exons case
+                for i in range(len(row["start"])):
+                    start = int(row["start"][i])
+                    stop = int(row["stop"][i])
+                    tran_start = int(row["tran_start"][i])
+                    
+                    # Calculate transcript length for this exon
+                    exon_length = stop - start
+                    max_tran_pos = max(max_tran_pos, tran_start + exon_length)
+                    
+                    try:
+                        # Get coverage values from BigWig
+                        values = bw_handle.values(chrom, start, stop)
+                        
+                        # Map to transcript coordinates
+                        for j, value in enumerate(values):
+                            tran_pos = tran_start + j
+                            if value is not None:
+                                coverage_dict[tran_pos] = value
+                    except Exception as e:
+                        log_warning(f"Error reading {chrom}:{start}-{stop}: {str(e)}")
+            else:
+                # Single exon case
+                start = int(row["start"])
+                stop = int(row["stop"])
+                tran_start = int(row["tran_start"])
+                
+                # Calculate transcript length for this exon
+                exon_length = stop - start
+                max_tran_pos = max(max_tran_pos, tran_start + exon_length)
+                
+                try:
+                    # Get coverage values from BigWig
+                    values = bw_handle.values(chrom, start, stop)
+                    
+                    # Map to transcript coordinates
+                    for j, value in enumerate(values):
+                        tran_pos = tran_start + j
+                        if value is not None:
+                            coverage_dict[tran_pos] = value
+                except Exception as e:
+                    log_warning(f"Error reading {chrom}:{start}-{stop}: {str(e)}")
+        
+        # Store coverage for this transcript
+        if coverage_dict:
+            transcript_coverage[tran_id] = (coverage_dict, max_tran_pos)
+    
+    # Combine all transcripts into a single DataFrame
+    results = []
+    
+    for tran_id, (coverage_dict, max_pos) in transcript_coverage.items():
+        # Create array for this transcript
+        coverage_array = np.zeros(max_pos + 1)
+        
+        # Fill in coverage values
+        for pos, value in coverage_dict.items():
+            if pos < len(coverage_array):
+                coverage_array[pos] = value
+        
+        # Create DataFrame for this transcript
+        tran_df = pl.DataFrame({
+            "tran_id": [tran_id] * len(coverage_array),
+            "tran_start": pl.arange(0, len(coverage_array)),
+            "counts": coverage_array
+        })
+        
+        results.append(tran_df)
+    
+    # Combine all transcripts
+    if results:
+        return pl.concat(results)
+    else:
+        # Return empty DataFrame with correct structure
+        return pl.DataFrame({
+            "tran_id": [],
+            "tran_start": [],
+            "counts": []
+        })
+
+
+def process_transcriptomic_bigwig(bw_handle, exon_df):
+    """
+    Process a transcriptomic BigWig file.
+    
+    Parameters:
+    ----------
+    bw_handle : pyBigWig.pyBigWig
+        Open BigWig handle
+    exon_df : polars.DataFrame
+        DataFrame containing exon annotations
+        
+    Returns:
+    -------
+    polars.DataFrame
+        DataFrame with transcript coordinates and coverage values
+    """
+    import polars as pl
+    import numpy as np
+    from ..utils.logging import log_warning
+    
+    # Get transcripts in BigWig
+    bw_trans = set(bw_handle.chroms().keys())
+    
+    # Create a dictionary to store transcript coverage
+    results = []
+    
+    # Process each transcript
+    for tran_id in exon_df["tran_id"].unique():
+        # Skip if transcript not in BigWig
+        if tran_id not in bw_trans:
+            continue
+            
+        try:
+            # Get transcript size from BigWig
+            tran_size = bw_handle.chroms()[tran_id]
+            
+            # Get coverage values for the entire transcript
+            values = bw_handle.values(tran_id, 0, tran_size)
+            
+            # Create DataFrame for this transcript
+            tran_df = pl.DataFrame({
+                "tran_id": [tran_id] * len(values),
+                "tran_start": pl.arange(0, len(values)),
+                "counts": [v if v is not None else 0.0 for v in values]
+            })
+            
+            results.append(tran_df)
+        except Exception as e:
+            log_warning(f"Error reading transcript {tran_id}: {str(e)}")
+    
+    # Combine all transcripts
+    if results:
+        return pl.concat(results)
+    else:
+        # Return empty DataFrame with correct structure
+        return pl.DataFrame({
+            "tran_id": [],
+            "tran_start": [],
+            "counts": []
+        })
+def scoring(bigwig, exon, orfs, old_scoring, sru_range, stranded=False, batch_size=50, max_workers=None):
+    """
+    Score ORFs using bigwig coverage data with memory-efficient streaming.
+    Now supports genomic BigWig files and strand-specific analysis.
+    
+    Args:
+        bigwig (str or dict): Path to bigwig file or dict with 'forward' and 'reverse' keys
+        exon (str or DataFrame): Path to exon file or DataFrame
+        orfs (str or DataFrame): Path to ORFs file or DataFrame
+        old_scoring (bool): Whether to use old scoring method
+        sru_range (int): Range for SRU score calculation
+        stranded (bool): Whether to process strands separately
+        batch_size (int): Size of transcript batches for processing
+        max_workers (int, optional): Maximum number of worker processes
+        
+    Returns:
+        DataFrame: Scored ORFs
+    """
+    import os
+    import polars as pl
+    import pyBigWig as bw
+    import time
+    import concurrent.futures
+    import gc
+    from ..utils.logging import log_info, log_warning, log_error
     
     start_time = time.time()
     
-    try:
-        # Process each row in the exon dataframe
-        for row in exon_df.iter_rows(named=True):
-            chrom = row["chr"]
-            
-            if chrom not in valid_chroms:
-                log_warning(f"Chromosome {chrom} not found in bigWig file")
-                continue
-            
-            # Handle both single values and lists for start/stop
-            starts = _flatten_list_or_value(row["start"])
-            stops = _flatten_list_or_value(row["stop"])
-            
-            # Make sure we have matching start/stop pairs
-            if len(starts) != len(stops):
-                log_warning(f"Mismatched start/stop lists: {len(starts)} starts, {len(stops)} stops")
-                failed_regions += 1
-                continue
-            
-            # Process each start/stop pair
-            for start, stop in zip(starts, stops):
-                # Ensure start and stop are integers
-                try:
-                    start = int(start)
-                    stop = int(stop)
-                except (ValueError, TypeError) as e:
-                    log_warning(f"Invalid start/stop values: {start}, {stop} - {str(e)}")
-                    failed_regions += 1
-                    continue
-                
-                if start >= stop:
-                    log_warning(f"Invalid region {chrom}:{start}-{stop} (start >= stop)")
-                    failed_regions += 1
-                    continue
-                
-                # Check if region is too large
-                region_size = stop - start
-                if region_size > config.max_region_size:
-                    log_warning(f"Very large region detected: {chrom}:{start}-{stop} ({region_size} bp). Chunking.")
-                    
-                    # Process in chunks to avoid memory issues
-                    for chunk_start in range(start, stop, config.chunk_size):
-                        chunk_end = min(chunk_start + config.chunk_size, stop)
-                        
-                        try:
-                            values = bwfile.values(chrom, chunk_start, chunk_end)
-                            if values and any(v is not None for v in values):
-                                reads.extend(v if v is not None else 0.0 for v in values)
-                            else:
-                                reads.extend([0.0] * (chunk_end - chunk_start))
-                        except Exception as e:
-                            log_error(f"Error processing chunk {chrom}:{chunk_start}-{chunk_end}: {str(e)}")
-                            reads.extend([0.0] * (chunk_end - chunk_start))
-                    
-                    processed_regions += 1
-                else:
-                    # Process the whole region at once
-                    try:
-                        values = bwfile.values(chrom, start, stop)
-                        if values and any(v is not None for v in values):
-                            reads.extend(v if v is not None else 0.0 for v in values)
-                            processed_regions += 1
-                        else:
-                            reads.extend([0.0] * (stop - start))
-                            processed_regions += 1
-                    except Exception as e:
-                        log_error(f"Could not read values for {chrom}:{start}-{stop}: {str(e)}")
-                        failed_regions += 1
-                    
-    except Exception as e:
-        log_error(f"Error processing exon data: {str(e)}")
-        raise
+    # Handle different bigwig input formats
+    if isinstance(bigwig, dict) and 'forward' in bigwig and 'reverse' in bigwig:
+        log_info("Using strand-specific BigWig files")
+        forward_bw = bigwig['forward']
+        reverse_bw = bigwig['reverse']
+        stranded = True
+    else:
+        log_info(f"Using single BigWig file: {bigwig}")
+        forward_bw = reverse_bw = bigwig
     
-    if not reads:
-        msg = f"No reads extracted. Processed: {processed_regions}, Failed: {failed_regions}"
-        log_error(msg, exception_type=ValueError)
-        raise ValueError(msg)
+    # Load exon data efficiently
+    log_info("Loading exon data...")
+    if isinstance(exon, str):
+        if os.path.exists(exon) and os.path.getsize(exon) > 1e9:  # 1 GB
+            # For large files, stream and select only needed columns
+            exon_df = pl.scan_csv(exon).select(["chr", "start", "stop", "tran_id", "tran_start", "tran_stop"]).collect()
+        else:
+            exon_df = pl.read_csv(exon)
+            
+            # Ensure exon coordinates are properly formatted (convert strings to lists if needed)
+            for col in ["start", "stop", "tran_start", "tran_stop"]:
+                if col in exon_df.columns:
+                    exon_df = exon_df.with_columns(
+                        pl.col(col).map_elements(lambda x: 
+                            x.split(",") if isinstance(x, str) else x
+                        ).alias(col)
+                    )
+    else:
+        exon_df = exon
+    
+    # Load ORF data efficiently
+    log_info("Loading ORF data...")
+    if isinstance(orfs, str):
+        if os.path.exists(orfs) and os.path.getsize(orfs) > 1e9:  # 1 GB
+            # For large files, stream and select only needed columns
+            needed_cols = ["tran_id", "type", "start", "stop", "length"]
+            
+            # Add strand if available
+            orf_scan = pl.scan_csv(orfs)
+            if "strand" in orf_scan.columns:
+                needed_cols.append("strand")
+                
+            # Add any scoring-related columns
+            for col in orf_scan.columns:
+                if "score" in col.lower() or col in ["rise_up", "step_down", "hrf", "avg", "nzc"]:
+                    needed_cols.append(col)
+                    
+            orf_df = orf_scan.select(needed_cols).collect()
+        else:
+            orf_df = pl.read_csv(orfs)
+    else:
+        orf_df = orfs
+    
+    # Add strand info if missing
+    if "strand" not in orf_df.columns:
+        log_info("Adding strand information to ORFs based on transcript annotation")
+        orf_df = add_strand_to_orfs(orf_df, exon_df)
+    
+    # Split ORFs by strand if using strand-specific data
+    if stranded:
+        log_info("Processing ORFs by strand")
         
-    duration = time.time() - start_time
-    rate = processed_regions / max(0.001, duration)
-    log_info(f"Successfully processed {processed_regions} regions ({rate:.2f} regions/sec), {failed_regions} failed")
-    
-    # Create DataFrame safely
-    return pl.DataFrame({
-        "tran_start": list(range(len(reads))),
-        "counts": reads
-    })
+        # Group ORFs by strand
+        pos_strand_orfs = orf_df.filter(pl.col("strand") == "+")
+        neg_strand_orfs = orf_df.filter(pl.col("strand") == "-")
+        unstrand_orfs = orf_df.filter(~pl.col("strand").is_in(["+", "-"]))
+        
+        log_info(f"Found {len(pos_strand_orfs)} positive strand, {len(neg_strand_orfs)} negative strand, and {len(unstrand_orfs)} unstranded ORFs")
+        
+        # Process each strand separately
+        results = []
+        
+        # Process positive strand ORFs with forward BigWig
+        if not pos_strand_orfs.is_empty():
+            log_info("Scoring positive strand ORFs")
+            pos_results = process_strand_orfs(forward_bw, exon_df, pos_strand_orfs, old_scoring, sru_range, batch_size, max_workers)
+            results.append(pos_results)
+        
+        # Process negative strand ORFs with reverse BigWig
+        if not neg_strand_orfs.is_empty():
+            log_info("Scoring negative strand ORFs")
+            neg_results = process_strand_orfs(reverse_bw, exon_df, neg_strand_orfs, old_scoring, sru_range, batch_size, max_workers)
+            results.append(neg_results)
+        
+        # Process unstranded ORFs with forward BigWig (default)
+        if not unstrand_orfs.is_empty():
+            log_info("Scoring unstranded ORFs using forward strand data")
+            unstrand_results = process_strand_orfs(forward_bw, exon_df, unstrand_orfs, old_scoring, sru_range, batch_size, max_workers)
+            results.append(unstrand_results)
+        
+        # Combine results
+        if results:
+            final_df = pl.concat(results)
+            log_info(f"Total scored ORFs: {len(final_df)}")
+            return final_df
+        else:
+            return pl.DataFrame()
+    else:
+        # Process all ORFs with the same BigWig (original behavior)
+        return process_strand_orfs(forward_bw, exon_df, orf_df, old_scoring, sru_range, batch_size, max_workers)
 
 
-def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_workers=None):
+def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, batch_size=50, max_workers=None):
     """
-    Score ORFs using bigwig coverage data with memory-efficient streaming.
+    Process and score ORFs for a specific strand.
     
     Args:
-        bigwig (str): Path to bigwig file
-        exon (str or DataFrame): Path to exon file or DataFrame
-        orfs (str or DataFrame): Path to ORFs file or DataFrame
+        bigwig_path (str): Path to bigwig file
+        exon_df (DataFrame): DataFrame containing exon information
+        orf_df (DataFrame): DataFrame containing ORF information
         old_scoring (bool): Whether to use old scoring method
         sru_range (int): Range for SRU score calculation
         batch_size (int): Size of transcript batches for processing
@@ -528,8 +791,16 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     Returns:
         DataFrame: Scored ORFs
     """
+    import polars as pl
+    import pyBigWig as bw
+    import os
+    import gc
+    import time
+    import tempfile
+    import concurrent.futures
+    from ..utils.logging import log_info
+    
     start_time = time.time()
-    log_info(f"Starting scoring with BigWig file: {bigwig}")
     
     # Determine optimal worker count based on system resources
     if max_workers is None:
@@ -545,281 +816,76 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
     
     log_info(f"Using {max_workers} worker processes")
     
-    # Load exon data efficiently
-    log_info("Loading exon data...")
-    if isinstance(exon, str):
-        if os.path.exists(exon) and os.path.getsize(exon) > 1e9:  # 1 GB
-            # For large files, stream and select only needed columns
-            exon_df = pl.scan_csv(exon).select(["chr", "start", "stop", "tran_id"]).collect()
-        else:
-            exon_df = pl.read_csv(exon)
-    else:
-        exon_df = exon
-    
-    # Load ORF data efficiently
-    log_info("Loading ORF data...")
-    if isinstance(orfs, str):
-        if os.path.exists(orfs) and os.path.getsize(orfs) > 1e9:  # 1 GB
-            # For large files, stream and select only needed columns
-            needed_cols = ["tran_id", "type", "start", "stop", "length"]
-            orf_scan = pl.scan_csv(orfs)
-            
-            # Add any scoring-related columns
-            for col in orf_scan.columns:
-                if "score" in col.lower() or col in ["rise_up", "step_down", "hrf", "avg", "nzc"]:
-                    needed_cols.append(col)
-                    
-            orf_df = orf_scan.select(needed_cols).collect()
-        else:
-            orf_df = pl.read_csv(orfs)
-    else:
-        orf_df = orfs
-    
-    # Get transcript IDs from ORFs for filtering
-    log_info("Identifying transcripts with ORFs...")
-    orf_tran_ids = set(orf_df["tran_id"].unique().to_list())
-    log_info(f"Found {len(orf_tran_ids)} transcripts with ORFs")
-    
-    # Filter exons to only include transcripts with ORFs
-    exon_df = exon_df.filter(pl.col("tran_id").is_in(orf_tran_ids))
-    log_info(f"Filtered exon data to {exon_df.height} rows with relevant transcripts")
-    
-    # Extract regions from exon data
-    log_info("Extracting genomic regions...")
-    regions = extract_regions(exon_df, orf_tran_ids)
-    log_info(f"Extracted {len(regions)} regions to process")
-    
-    # Free memory from exon data as it's no longer needed
-    exon_df = None
-    gc.collect()
-    
-    if not regions:
-        log_warning("No valid regions found to process")
-        return pl.DataFrame()
-    
-    # Create balanced batches for parallel processing
-    log_info("Creating balanced processing batches...")
-    
-    # Group regions by chromosome for better BigWig performance
-    regions_by_chrom = {}
-    for region in regions:
-        chrom = region[0]
-        if chrom not in regions_by_chrom:
-            regions_by_chrom[chrom] = []
-        regions_by_chrom[chrom].append(region)
-    
-    # Create batches that preserve chromosome locality
-    batches = []
-    target_size = max(1, len(regions) // (max_workers * 3))  # Aim for 3x batches per worker
-    
-    for chrom, chrom_regions in regions_by_chrom.items():
-        # Sort regions by start position for better locality
-        chrom_regions.sort(key=lambda r: r[1])
-        
-        # Create batches of appropriate size
-        for i in range(0, len(chrom_regions), target_size):
-            batch = chrom_regions[i:min(i+target_size, len(chrom_regions))]
-            if batch:
-                batches.append((batch, bigwig))
-    
-    log_info(f"Created {len(batches)} processing batches")
-    
-    # Free memory from regions data
-    regions = None
-    regions_by_chrom = None
-    gc.collect()
-    
-    # Process batches in parallel
-    log_info("Starting BigWig data extraction...")
-    transcript_data = {}
-    total_processed = 0
-    total_failed = 0
-    
-    # Process in smaller groups to manage memory
-    group_size = min(len(batches), max_workers * 2)
-    batch_groups = [batches[i:i+group_size] for i in range(0, len(batches), group_size)]
-    
-    for group_idx, batch_group in enumerate(batch_groups):
-        log_info(f"Processing batch group {group_idx+1}/{len(batch_groups)}")
-        
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            future_to_batch = {executor.submit(process_batch, batch_data): i 
-                              for i, batch_data in enumerate(batch_group)}
-            
-            for future in concurrent.futures.as_completed(future_to_batch):
-                try:
-                    result = future.result()
-                    
-                    # Update transcript data
-                    for tran_id, data in result["results"].items():
-                        transcript_data[tran_id] = data
-                    
-                    total_processed += result["processed"]
-                    total_failed += result["failed"]
-                except Exception as e:
-                    log_error(f"Error processing batch: {str(e)}")
-        
-        # Force garbage collection between groups
-        gc.collect()
-        
-        # Log progress
-        current_transcripts = len(transcript_data)
-        log_info(f"Processed {current_transcripts} transcripts so far "
-                f"({total_processed} regions, {total_failed} failed)")
-    
-    log_info(f"Completed BigWig data extraction for {len(transcript_data)} transcripts")
-    
-    # Free memory
-    batches = None
-    batch_groups = None
-    gc.collect()
-    
-        # Add after creating transcript_data but before scoring:
-    log_info("Filtering transcripts by coverage...")
-    min_nonzero_reads = 10  # Minimum number of positions with non-zero coverage
-    min_mean_coverage = 0.5  # Minimum mean coverage across transcript
-
-    filtered_transcripts = {}
-    for tran_id, tran_data in transcript_data.items():
-        # For sparse representation
-        if isinstance(tran_data, dict) and 'positions' in tran_data:
-            # Check if we have enough non-zero positions
-            if len(tran_data['positions']) < min_nonzero_reads:
-                continue
-                
-            # Check mean coverage (only consider positions with data)
-            if np.mean(tran_data['values']) < min_mean_coverage:
-                continue
-                
-            filtered_transcripts[tran_id] = tran_data
-        # For list representation
-        elif isinstance(tran_data, list):
-            nonzero_count = sum(1 for v in tran_data if v > 0)
-            if nonzero_count < min_nonzero_reads:
-                continue
-                
-            mean_coverage = sum(tran_data) / max(1, len(tran_data))
-            if mean_coverage < min_mean_coverage:
-                continue
-                
-            filtered_transcripts[tran_id] = tran_data
-
-    log_info(f"Filtered out {len(transcript_data) - len(filtered_transcripts)} transcripts with insufficient coverage")
-    log_info(f"Proceeding with {len(filtered_transcripts)} well-covered transcripts")
-
-    # Then replace transcript_data with filtered_transcripts
-    transcript_data = filtered_transcripts
-
     # Create a temporary file for streaming results
     temp_dir = tempfile.gettempdir()
     temp_results_file = os.path.join(temp_dir, f"translonscorer_results_{int(time.time())}.csv")
     log_info(f"Will stream results to temporary file: {temp_results_file}")
     
-    # Prepare scoring tasks
-    log_info("Preparing scoring tasks...")
+    # Get unique transcripts with ORFs
+    transcript_ids = set(orf_df["tran_id"].unique())
+    log_info(f"Processing {len(transcript_ids)} transcripts with ORFs")
     
-    # Group ORFs by transcript and type
-    log_info("Organizing ORF data by transcript...")
-    orfs_by_tran = {}
+    # Process in batches for memory efficiency
+    transcript_batches = [list(transcript_ids)[i:i+batch_size] for i in range(0, len(transcript_ids), batch_size)]
     
-    for row in orf_df.iter_rows(named=True):
-        tran_id = row["tran_id"]
+    processed_count = 0
+    for batch_idx, transcript_batch in enumerate(transcript_batches):
+        log_info(f"Processing batch {batch_idx+1}/{len(transcript_batches)} ({len(transcript_batch)} transcripts)")
         
-        # Skip transcripts with no BigWig data
-        if tran_id not in transcript_data:
-            continue
+        # Process transcripts in parallel
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            for tran_id in transcript_batch:
+                # Get ORFs for this transcript
+                tran_orfs = orf_df.filter(pl.col("tran_id") == tran_id)
+                
+                if tran_orfs.is_empty():
+                    continue
+                
+                # Get exons for this transcript
+                tran_exons = exon_df.filter(pl.col("tran_id") == tran_id)
+                
+                if tran_exons.is_empty():
+                    continue
+                
+                # Submit task
+                future = executor.submit(
+                    score_single_transcript, 
+                    bigwig_path, 
+                    tran_exons, 
+                    tran_orfs, 
+                    old_scoring, 
+                    sru_range
+                )
+                futures.append(future)
             
-        if tran_id not in orfs_by_tran:
-            orfs_by_tran[tran_id] = {}
-        
-        # Group by ORF type
-        typeorf = row["type"]
-        if typeorf not in orfs_by_tran[tran_id]:
-            orfs_by_tran[tran_id][typeorf] = []
+            # Process results
+            results = []
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                        processed_count += 1
+                except Exception as e:
+                    log_info(f"Error processing transcript: {str(e)}")
             
-        orfs_by_tran[tran_id][typeorf].append(row)
-    
-    # Create scoring tasks
-    scoring_tasks = []
-    
-    for tran_id in transcript_data.keys():
-        if tran_id not in orfs_by_tran:
-            continue
-            
-        # Combine ORFs for this transcript
-        orf_rows = []
-        for typeorf, type_rows in orfs_by_tran[tran_id].items():
-            orf_rows.extend(type_rows)
-        
-        if not orf_rows:
-            continue
-            
-        # Convert to dictionary format for serialization
-        orf_dict = {}
-        for key in orf_rows[0].keys():
-            orf_dict[key] = [row[key] for row in orf_rows]
-            
-        # Add task
-        scoring_tasks.append((tran_id, transcript_data[tran_id], orf_dict, old_scoring, sru_range))
-    
-    # Free memory
-    orfs_by_tran = None
-    orf_df = None
-    gc.collect()
-    
-    log_info(f"Created {len(scoring_tasks)} scoring tasks")
-    
-    # Score in batches to manage memory
-    log_info("Starting ORF scoring...")
-    
-    # Use fewer workers for scoring to manage memory
-    scoring_workers = max(1, min(max_workers, 4))
-    log_info(f"Using {scoring_workers} workers for scoring phase")
-    
-    # Process in smaller batches
-    score_batch_size = min(100, max(10, len(scoring_tasks) // (scoring_workers * 4)))
-    task_batches = [scoring_tasks[i:i+score_batch_size] 
-                   for i in range(0, len(scoring_tasks), score_batch_size)]
-    
-    total_orfs = 0
-    
-    for batch_idx, task_batch in enumerate(task_batches):
-        log_info(f"Processing scoring batch {batch_idx+1}/{len(task_batches)}")
-        
-        with concurrent.futures.ProcessPoolExecutor(max_workers=scoring_workers) as executor:
-            results = list(filter(None, executor.map(score_transcript, task_batch)))
-            
-        # Convert results to DataFrames
-        if results:
-            result_dfs = [pl.DataFrame(res) for res in results if res]
-            
-            if result_dfs:
-                # Stream to disk
+            # Combine and save batch results
+            if results:
+                batch_df = pl.concat(results)
+                
+                # Write to temp file
                 if batch_idx == 0:
-                    # First batch - create file
-                    pl.concat(result_dfs).write_csv(temp_results_file)
+                    batch_df.write_csv(temp_results_file)
                 else:
-                    # Append to existing file - open in append mode and write without header
-                    with open(temp_results_file, 'a') as f:
-                        pl.concat(result_dfs).write_csv(f, include_header=False)
-                # Update counts
-                total_orfs += sum(df.height for df in result_dfs)
+                    batch_df.write_csv(temp_results_file, mode="a", include_header=False)
                 
-                # Log progress
-                log_info(f"Processed {total_orfs} ORFs so far")
-                
-        # Force garbage collection between batches
-        result_dfs = None
-        results = None
+                log_info(f"Processed {processed_count}/{len(transcript_ids)} transcripts")
+        
+        # Clear memory between batches
         gc.collect()
     
-    # Free memory
-    scoring_tasks = None
-    task_batches = None
-    transcript_data = None
-    gc.collect()
-    
-    # Load final results
+    # Load and return final results
     if os.path.exists(temp_results_file) and os.path.getsize(temp_results_file) > 0:
         log_info(f"Loading final results from {temp_results_file}")
         
@@ -832,12 +898,12 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
                 
             log_info(f"Successfully loaded {final_df.height} scored ORFs")
             
-            # Clean up temp file# Clean up temp file
+            # Clean up temp file
             try:
                 os.remove(temp_results_file)
                 log_info(f"Temporary file removed: {temp_results_file}")
             except Exception as e:
-                log_warning(f"Could not remove temporary file: {temp_results_file}")
+                log_info(f"Could not remove temporary file: {temp_results_file}")
             
             # Calculate and log performance metrics
             duration = time.time() - start_time
@@ -848,423 +914,118 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, batch_size=50, max_worke
             
             return final_df
         except Exception as e:
-            log_error(f"Error loading results: {str(e)}")
+            log_info(f"Error loading results: {str(e)}")
             return pl.DataFrame()
     else:
-        log_warning("No results were generated or temporary file is empty")
+        log_info("No results were generated or temporary file is empty")
         return pl.DataFrame()
 
 
-
-def genomic_to_transcript_bigwig(bigwig_path, exon_df, output_prefix, stranded=False):
+def score_single_transcript(bigwig_path, exon_df, orf_df, old_scoring, sru_range):
     """
-    Convert genomic BigWig file(s) to transcript coordinates.
+    Score ORFs for a single transcript.
     
-    This function reads genomic BigWig file(s), maps the coverage to transcript 
-    coordinates using exon information, and creates new transcript-based BigWig file(s).
-    
-    Parameters:
-        bigwig_path (str or dict): Path to genomic BigWig file, or dict with 'forward' and 'reverse' paths
-        exon_df (DataFrame): DataFrame containing exon information
-        output_prefix (str): Prefix for output files
-        stranded (bool): Whether to process strands separately
+    Args:
+        bigwig_path (str): Path to bigwig file
+        exon_df (DataFrame): DataFrame containing exon information for one transcript
+        orf_df (DataFrame): DataFrame containing ORF information for one transcript
+        old_scoring (bool): Whether to use old scoring method
+        sru_range (int): Range for SRU score calculation
         
     Returns:
-        str or dict: Path(s) to output transcript-based BigWig file(s)
+        DataFrame: Scored ORFs
     """
-    import pyBigWig as bw
     import polars as pl
-    from pathlib import Path
-    import tempfile
-    import os
-    from ..utils.logging import log_info, log_warning, log_error
+    import pyBigWig as bw
+    from ..utils.logging import log_info
     
-    log_info("Converting genomic BigWig to transcript coordinates...")
+    # Get transcript ID (should be the same for all ORFs)
+    tran_id = orf_df["tran_id"][0]
     
-    # Handle different input formats
-    if isinstance(bigwig_path, dict) and 'forward' in bigwig_path and 'reverse' in bigwig_path:
-        # We have separate forward and reverse BigWig files
-        stranded = True
-        forward_path = bigwig_path['forward']
-        reverse_path = bigwig_path['reverse']
-    else:
-        # We have a single BigWig file
-        forward_path = reverse_path = bigwig_path
-    
-    # Create output paths
-    if stranded:
-        output_forward = f"{output_prefix}_fwd_transcript.bw"
-        output_reverse = f"{output_prefix}_rev_transcript.bw"
-        outputs = {'forward': output_forward, 'reverse': output_reverse}
-    else:
-        output_path = f"{output_prefix}_transcript.bw"
-        outputs = output_path
-    
-    # Extract regions from exon DataFrame
-    log_info("Extracting exon regions...")
-    regions = extract_regions_from_exons(exon_df)
-    
-    # Group regions by chromosome for efficient processing
-    regions_by_chrom = {}
-    for region in regions:
-        chrom, start, end, tran_id, tran_start, strand = region
-        if chrom not in regions_by_chrom:
-            regions_by_chrom[chrom] = []
-        regions_by_chrom[chrom].append((start, end, tran_id, tran_start, strand))
-    
-    # Process forward and reverse strands if needed
-    if stranded:
-        # Process forward strand
-        log_info("Processing forward strand...")
-        with open_bigwig(forward_path) as fwd_bw:
-            forward_transcript_data = process_genomic_bigwig(fwd_bw, regions_by_chrom, '+')
+    # Open BigWig file
+    with bw.open(bigwig_path) as bw_file:
+        # Get transcript coverage
+        coverage_df = transcriptreads(bw_file, exon_df, tran_id)
         
-        # Process reverse strand
-        log_info("Processing reverse strand...")
-        with open_bigwig(reverse_path) as rev_bw:
-            reverse_transcript_data = process_genomic_bigwig(rev_bw, regions_by_chrom, '-')
+        if coverage_df.is_empty():
+            return None
         
-        # Create temporary bedGraph files
-        temp_dir = tempfile.gettempdir()
-        fwd_bedgraph = os.path.join(temp_dir, f"{Path(output_prefix).stem}_fwd_temp.bedgraph")
-        rev_bedgraph = os.path.join(temp_dir, f"{Path(output_prefix).stem}_rev_temp.bedgraph")
+        # Process different ORF types separately
+        results = []
         
-        # Write transcript data to bedGraph files
-        write_transcript_bedgraph(forward_transcript_data, fwd_bedgraph)
-        write_transcript_bedgraph(reverse_transcript_data, rev_bedgraph)
+        for orf_type in orf_df["type"].unique():
+            type_orfs = orf_df.filter(pl.col("type") == orf_type)
+            
+            # Score ORFs based on method
+            if old_scoring:
+                from ..core.scoring import oldscoring
+                scored_orfs = oldscoring(type_orfs, coverage_df, sru_range, orf_type)
+            else:
+                from ..core.scoring import globalscores, existingscore, assigningscore, newscoring
+                
+                # Create empty score dict
+                score_dict = {"rise_up": {}, "step_down": {}}
+                
+                # Find ORFs that need scoring
+                empty_score_df = existingscore(type_orfs, orf_type, score_dict)
+                
+                if not empty_score_df.is_empty():
+                    # Calculate new scores
+                    score_dict = newscoring(empty_score_df, coverage_df, sru_range, orf_type, score_dict)
+                    
+                    # Assign scores to ORFs
+                    type_orfs = assigningscore(type_orfs, score_dict, orf_type)
+                    
+                    # Calculate global scores
+                    scored_orfs = globalscores(type_orfs, coverage_df, orf_type)
+                else:
+                    scored_orfs = type_orfs
+            
+            results.append(scored_orfs)
         
-        # Convert bedGraph to BigWig
-        log_info("Converting forward strand bedGraph to BigWig...")
-        create_transcript_bigwig(fwd_bedgraph, forward_transcript_data, output_forward)
-        
-        log_info("Converting reverse strand bedGraph to BigWig...")
-        create_transcript_bigwig(rev_bedgraph, reverse_transcript_data, output_reverse)
-        
-        # Clean up temporary files
-        os.remove(fwd_bedgraph)
-        os.remove(rev_bedgraph)
-    else:
-        # Process combined strands
-        log_info("Processing combined strands...")
-        with open_bigwig(bigwig_path) as big_w:
-            transcript_data = process_genomic_bigwig(big_w, regions_by_chrom)
-        
-        # Create temporary bedGraph file
-        temp_dir = tempfile.gettempdir()
-        temp_bedgraph = os.path.join(temp_dir, f"{Path(output_prefix).stem}_temp.bedgraph")
-        
-        # Write transcript data to bedGraph file
-        write_transcript_bedgraph(transcript_data, temp_bedgraph)
-        
-        # Convert bedGraph to BigWig
-        log_info("Converting bedGraph to BigWig...")
-        create_transcript_bigwig(temp_bedgraph, transcript_data, output_path)
-        
-        # Clean up temporary file
-        os.remove(temp_bedgraph)
-    
-    log_info("Genomic BigWig conversion complete.")
-    return outputs
+        # Combine results
+        if results:
+            return pl.concat(results)
+        else:
+            return None
 
 
-def extract_regions_from_exons(exon_df):
+def add_strand_to_orfs(orf_df, exon_df):
     """
-    Extract genomic and transcript regions from exon DataFrame.
+    Add strand information to ORFs based on transcript annotation.
     
-    Parameters:
+    Args:
+        orf_df (DataFrame): DataFrame containing ORF information
         exon_df (DataFrame): DataFrame containing exon information
         
     Returns:
-        list: List of tuples (chrom, start, end, tran_id, tran_start, strand)
+        DataFrame: ORF DataFrame with added strand column
     """
-    regions = []
+    import polars as pl
     
+    # Create a mapping of transcript ID to strand
+    tran_strands = {}
     for row in exon_df.iter_rows(named=True):
-        chrom = row["chr"]
         tran_id = row["tran_id"]
         
-        # Handle both list and scalar values
-        if isinstance(row["start"], list):
-            starts = row["start"]
-            stops = row["stop"]
-            tran_starts = row["tran_start"]
-            tran_stops = row["tran_stop"]
-            
-            # Get strand - assume consistent for all exons
-            strand = "+" if isinstance(row.get("strand"), list) else row.get("strand", "+")
+        # Determine strand
+        if "strand" in row:
+            strand = row["strand"]
+            # Handle list case
             if isinstance(strand, list):
                 strand = strand[0]
-            
-            # Process each exon
-            for i in range(len(starts)):
-                start = int(starts[i])
-                end = int(stops[i])
-                tran_start = int(tran_starts[i])
-                
-                regions.append((chrom, start, end, tran_id, tran_start, strand))
         else:
-            # Single exon case
-            start = int(row["start"])
-            end = int(row["stop"])
-            tran_start = int(row["tran_start"])
-            strand = row.get("strand", "+")
+            # Default to forward strand if not specified
+            strand = "+"
             
-            regions.append((chrom, start, end, tran_id, tran_start, strand))
+        tran_strands[tran_id] = strand
     
-    return regions
-
-
-def open_bigwig(path):
-    """Context manager for safely opening BigWig files."""
-    import pyBigWig as bw
-    import contextlib
-    
-    @contextlib.contextmanager
-    def _open_bigwig():
-        bw_file = None
-        try:
-            bw_file = bw.open(path)
-            yield bw_file
-        finally:
-            if bw_file:
-                bw_file.close()
-    
-    return _open_bigwig()
-
-
-def process_genomic_bigwig(bw_file, regions_by_chrom, strand_filter=None):
-    """
-    Process a genomic BigWig file and convert to transcript coordinates.
-    
-    Parameters:
-        bw_file: Open BigWig file
-        regions_by_chrom: Dictionary of regions by chromosome
-        strand_filter: If provided, only process regions with this strand
-        
-    Returns:
-        dict: Dictionary mapping transcript IDs to coverage data
-    """
-    from ..utils.logging import log_info
-    import numpy as np
-    
-    transcript_data = {}
-    total_chroms = len(regions_by_chrom)
-    processed = 0
-    
-    # Get chromosomes from BigWig
-    bw_chroms = set(bw_file.chroms().keys())
-    
-    for chrom, regions in regions_by_chrom.items():
-        processed += 1
-        
-        if processed % 10 == 0:
-            log_info(f"Processed {processed}/{total_chroms} chromosomes")
-        
-        # Skip if chromosome not in BigWig
-        if chrom not in bw_chroms:
-            continue
-        
-        # Process each region on this chromosome
-        for start, end, tran_id, tran_start, strand in regions:
-            # Skip if filtering by strand and this doesn't match
-            if strand_filter and strand != strand_filter:
-                continue
-                
-            # Get genomic coverage
-            try:
-                values = bw_file.values(chrom, start, end)
-                
-                # Initialize transcript data if needed
-                if tran_id not in transcript_data:
-                    transcript_data[tran_id] = {}
-                
-                # Map genomic positions to transcript positions
-                for i, value in enumerate(values):
-                    if value is None:
-                        value = 0.0
-                    
-                    # Calculate transcript position
-                    if strand == "+":
-                        tran_pos = tran_start + i
-                    else:
-                        # For reverse strand, count from end of region
-                        tran_pos = tran_start + (end - start - 1 - i)
-                    
-                    # Add to transcript data (sum if position already exists)
-                    if tran_pos in transcript_data[tran_id]:
-                        transcript_data[tran_id][tran_pos] += value
-                    else:
-                        transcript_data[tran_id][tran_pos] = value
-            except Exception as e:
-                log_warning(f"Error reading {chrom}:{start}-{end}: {str(e)}")
-    
-    return transcript_data
-
-
-def write_transcript_bedgraph(transcript_data, output_path):
-    """
-    Write transcript coverage data to a bedGraph file.
-    
-    Parameters:
-        transcript_data: Dictionary mapping transcript IDs to coverage data
-        output_path: Path to output bedGraph file
-    """
-    with open(output_path, 'w') as f:
-        for tran_id, positions in transcript_data.items():
-            for pos, value in sorted(positions.items()):
-                # Write in bedGraph format (chrom, start, end, value)
-                # For transcript data, we use transcript ID as chromosome
-                f.write(f"{tran_id}\t{pos}\t{pos+1}\t{value}\n")
-
-
-def create_transcript_bigwig(bedgraph_path, transcript_data, output_path):
-    """
-    Create a BigWig file from a transcript bedGraph file.
-    
-    Parameters:
-        bedgraph_path: Path to input bedGraph file
-        transcript_data: Dictionary mapping transcript IDs to coverage data
-        output_path: Path to output BigWig file
-    """
-    import pyBigWig as bw
-    
-    # Calculate chromosome sizes from transcript data
-    chrom_sizes = {}
-    for tran_id, positions in transcript_data.items():
-        if positions:
-            # Maximum position + 1 gives the transcript length
-            chrom_sizes[tran_id] = max(positions.keys()) + 1
-    
-    # Create BigWig file
-    bw_out = bw.open(output_path, 'w')
-    
-    # Add header with "chromosome" (transcript) sizes
-    bw_out.addHeader([(tran_id, size) for tran_id, size in chrom_sizes.items()])
-    
-    # Load bedGraph data
-    chroms = []
-    starts = []
-    ends = []
-    values = []
-    
-    with open(bedgraph_path, 'r') as f:
-        for line in f:
-            parts = line.strip().split('\t')
-            if len(parts) == 4:
-                chrom, start, end, value = parts
-                chroms.append(chrom)
-                starts.append(int(start))
-                ends.append(int(end))
-                values.append(float(value))
-    
-    # Add entries to BigWig
-    if chroms:
-        bw_out.addEntries(chroms, starts, ends=ends, values=values)
-    
-    bw_out.close()
-
-def detect_and_process_bigwig(bigwig_path, exon_df, annotation_file, output_prefix, stranded=False):
-    """
-    Detect BigWig type (genomic or transcriptomic) and process accordingly.
-    
-    Parameters:
-        bigwig_path (str or dict): Path to BigWig file(s) or dict with 'forward' and 'reverse' paths
-        exon_df (DataFrame): DataFrame containing exon information
-        annotation_file (str): Path to annotation file (GTF/GFF)
-        output_prefix (str): Prefix for output files
-        stranded (bool): Whether to process strands separately
-        
-    Returns:
-        str or dict: Path(s) to transcript-based BigWig file(s) to use for scoring
-    """
-    import pyBigWig as bw
-    from ..utils.logging import log_info, log_warning, log_error
-    
-    # Determine if we have stranded input
-    if isinstance(bigwig_path, dict) and 'forward' in bigwig_path and 'reverse' in bigwig_path:
-        stranded_input = True
-        bw_to_check = bigwig_path['forward']  # Check the forward file
-    else:
-        stranded_input = False
-        bw_to_check = bigwig_path
-    
-    # Get chromosomes from BigWig
-    with bw.open(bw_to_check) as bw_file:
-        bw_chroms = set(bw_file.chroms().keys())
-    
-    # Get chromosomes from annotation
-    exon_chroms = set(exon_df["chr"].unique())
-    
-    # Get transcripts from annotation
-    transcript_ids = set(exon_df["tran_id"].unique())
-    
-    # Check if BigWig contains transcript IDs or chromosome names
-    transcript_match = len(bw_chroms.intersection(transcript_ids))
-    chrom_match = len(bw_chroms.intersection(exon_chroms))
-    
-    log_info(f"BigWig chromosome match: {chrom_match}, transcript match: {transcript_match}")
-    
-    # If more transcript matches than chromosome matches, it's likely transcriptomic
-    if transcript_match > chrom_match:
-        log_info("Detected transcriptomic BigWig file, using directly.")
-        if stranded_input:
-            return bigwig_path  # Return the original dict with forward/reverse paths
-        else:
-            return bw_to_check  # Return the original path
-    else:
-        log_info("Detected genomic BigWig file, converting to transcript coordinates.")
-        # Convert genomic BigWig to transcript coordinates
-        return genomic_to_transcript_bigwig(bigwig_path, exon_df, output_prefix, stranded)
-
-
-def get_bigwig_paths_for_strands(bigwig_paths, exon_df, annotation_file, output_prefix, stranded=False):
-    """
-    Prepare BigWig paths for stranded or unstranded analysis.
-    
-    This function handles various input scenarios:
-    1. Single BigWig path (stranded=False): Process as combined strands
-    2. Single BigWig path (stranded=True): Process the same file for both strands
-    3. Dict with 'forward' and 'reverse' paths: Process as separate strands
-    
-    Parameters:
-        bigwig_paths (str or dict): Path to BigWig file(s) or dict with 'forward' and 'reverse' paths
-        exon_df (DataFrame): DataFrame containing exon information
-        annotation_file (str): Path to annotation file (GTF/GFF)
-        output_prefix (str): Prefix for output files
-        stranded (bool): Whether to process strands separately
-        
-    Returns:
-        dict: Dictionary with 'forward' and 'reverse' paths for BigWig files
-    """
-    from ..utils.logging import log_info
-    
-    # Case 1: Dict with 'forward' and 'reverse' paths
-    if isinstance(bigwig_paths, dict) and 'forward' in bigwig_paths and 'reverse' in bigwig_paths:
-        log_info("Using provided forward and reverse BigWig files.")
-        
-        # Process each file to ensure it's in transcript coordinates
-        forward_path = detect_and_process_bigwig(
-            bigwig_paths['forward'], exon_df, annotation_file, f"{output_prefix}_fwd"
-        )
-        
-        reverse_path = detect_and_process_bigwig(
-            bigwig_paths['reverse'], exon_df, annotation_file, f"{output_prefix}_rev"
-        )
-        
-        return {'forward': forward_path, 'reverse': reverse_path}
-    
-    # Case 2 and 3: Single BigWig path (stranded=True or False)
-    log_info(f"Processing BigWig file {'with' if stranded else 'without'} strand separation.")
-    bigwig_result = detect_and_process_bigwig(
-        bigwig_paths, exon_df, annotation_file, output_prefix, stranded
+    # Add strand column to ORF DataFrame
+    orf_df = orf_df.with_columns(
+        pl.col("tran_id").map_elements(lambda tran_id: 
+            tran_strands.get(tran_id, "+")  # Default to + if transcript not found
+        ).alias("strand")
     )
     
-    # If the result is a dict, it's already separated by strand
-    if isinstance(bigwig_result, dict) and 'forward' in bigwig_result and 'reverse' in bigwig_result:
-        return bigwig_result
-    
-    # Otherwise, use the same file for both strands if needed
-    if stranded:
-        return {'forward': bigwig_result, 'reverse': bigwig_result}
-    else:
-        return {'forward': bigwig_result, 'reverse': bigwig_result}
+    return orf_df
+

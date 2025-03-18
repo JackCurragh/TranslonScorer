@@ -28,7 +28,7 @@ from collections import defaultdict
 class ProcessingConfig:
     """Configuration for transcript processing."""
     max_workers: int = 0  # 0 means auto-detect based on CPU count
-    batch_size: int = 50  # Number of transcripts to process in each batch
+    batch_size: int = 500  # Number of transcripts to process in each batch
     sru_range: int = 100  # Range for SRU score calculation
     max_region_size: int = 1_000_000  # Maximum region size to process at once
     chunk_size: int = 100_000  # Size of chunks for processing large regions

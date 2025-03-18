@@ -1163,7 +1163,7 @@ def create_transcript_bigwig(bedgraph_path, transcript_data, output_path):
     
     bw_out.close()
 
-    def detect_and_process_bigwig(bigwig_path, exon_df, annotation_file, output_prefix, stranded=False):
+def detect_and_process_bigwig(bigwig_path, exon_df, annotation_file, output_prefix, stranded=False):
     """
     Detect BigWig type (genomic or transcriptomic) and process accordingly.
     

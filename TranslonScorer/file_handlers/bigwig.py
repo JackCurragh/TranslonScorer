@@ -436,11 +436,6 @@ def transcriptreads(bigwig_file, exon_df, transcript_id=None):
         # Determine if this is a genomic or transcriptomic BigWig
         is_genomic = chrom_match >= trans_match
         if is_genomic:
-            log_info("Processing genomic BigWig file")
-        else:
-            log_info("Processing transcriptomic BigWig file")
-        
-        if is_genomic:
             return process_genomic_bigwig(bw_handle, exon_df)
         else:
             return process_transcriptomic_bigwig(bw_handle, exon_df)
@@ -1019,7 +1014,7 @@ def append_to_csv(df, file_path):
             log_info(f"Fallback also failed: {str(e2)}")
             return False
 
-            
+
 def score_single_transcript(bigwig_path, exon_df, orf_df, old_scoring, sru_range):
     """
     Score ORFs for a single transcript.

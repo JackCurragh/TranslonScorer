@@ -119,7 +119,6 @@ PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer \
 --sequence "$GENOME_FA" \
 --annotation "$GTF_FILE" \
 --output "$OUTPUT_PREFIX" \
---scoring-method modern \
 --sru-range 15 \
 --stranded
 # if [ $FW_BIGWIG_EXISTS -eq 1 ] & [ $RV_BIGWIG_EXISTS -eq 1 ]; then

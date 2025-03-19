@@ -113,7 +113,7 @@ def all(**kwargs):
 @click.option('--output', '-o', required=True,
               help='Base name for output files')
 def process_bam(bam: str, chromsizes: str, annotation: str, 
-                outfile: str, offsets: Optional[str] = None):
+                output: str, offsets: Optional[str] = None):
     """Process Ribo-seq BAM files to generate coverage tracks.
     
     This command processes a Ribo-seq BAM file to:
@@ -149,9 +149,9 @@ def process_bam(bam: str, chromsizes: str, annotation: str,
     bed_df = bed.asitecalc(bam_df, offsets)
     
     # Convert to BigWig
-    bedgraph_path = f"{outfile}.bedGraph"
+    bedgraph_path = f"{output}.bedGraph"
     bed_df.write_csv(bedgraph_path, separator="\t", include_header=False)
-    bed.bedtobigwig(bedgraph_path, chromsizes, outfile)
+    bed.bedtobigwig(bedgraph_path, chromsizes, output)
     
     print("BAM processing complete!")
 
@@ -170,13 +170,13 @@ def process_bam(bam: str, chromsizes: str, annotation: str,
               help='Minimum ORF length in nucleotides (default: 0)')
 @click.option('--max-len', type=int, default=1000000,
               help='Maximum ORF length in nucleotides (default: 1000000)')
-@click.option('--outfile', '-o', required=True,
+@click.option('--output', '-o', required=True,
               help='Base name for output files')
 @click.option('--sru-range', type=int, default=15,
               help='Nucleotide range for Start Rise Up score calculation (default: 15)')
 @click.option('--scoring-method', type=click.Choice(['classic', 'modern']), 
               default='modern', help='Scoring algorithm to use (default: modern)')
-def find_orfs(sequence: str, annotation: str, bigwig: str, outfile: str,
+def find_orfs(sequence: str, annotation: str, bigwig: str, output: str,
               start_codons: str, stop_codons: str, min_len: int, max_len: int,
               sru_range: int, scoring_method: str):
     """Identify and score potential ORFs from sequence data.
@@ -195,11 +195,11 @@ def find_orfs(sequence: str, annotation: str, bigwig: str, outfile: str,
     # Score ORFs
     print("Scoring ORFs...")
     scored_orfs = bigwig.scoring(bigwig, exon_df, orf_df, scoring_method == 'classic', sru_range)
-    scored_orfs.write_csv(f"{outfile}_orfs_scored.csv")
+    scored_orfs.write_csv(f"{output}_orfs_scored.csv")
     
     # Generate plots
     print("Generating plots...")
-    plots.plottop10(f"{outfile}_orfs_scored.csv", bigwig, exon_df, 30, outfile)
+    plots.plottop10(f"{output}_orfs_scored.csv", bigwig, exon_df, 30, output)
     
     print("ORF finding and scoring complete!")
 
@@ -210,13 +210,13 @@ def find_orfs(sequence: str, annotation: str, bigwig: str, outfile: str,
               help='BigWig file containing Ribo-seq coverage')
 @click.option('--exons', '-e', required=True,
               help='CSV file containing exon positions')
-@click.option('--outfile', '-o', required=True,
+@click.option('--output', '-o', required=True,
               help='Base name for output files')
 @click.option('--scoring-method', type=click.Choice(['classic', 'modern']), 
               default='modern', help='Scoring algorithm to use (default: modern)')
 @click.option('--sru-range', type=int, default=15,
               help='Nucleotide range for Start Rise Up score calculation (default: 15)')
-def score_orfs(orfs: str, bigwig: str, exons: str, outfile: str,
+def score_orfs(orfs: str, bigwig: str, exons: str, output: str,
                scoring_method: str, sru_range: int):
     """Score existing ORFs using Ribo-seq coverage data.
     
@@ -227,11 +227,11 @@ def score_orfs(orfs: str, bigwig: str, exons: str, outfile: str,
     """
     print("Scoring ORFs...")
     scored_orfs = bigwig.scoring(bigwig, exons, orfs, scoring_method == 'classic', sru_range)
-    scored_orfs.write_csv(f"{outfile}_orfs_scored.csv")
+    scored_orfs.write_csv(f"{output}_orfs_scored.csv")
     
     # Generate plots
     print("Generating plots...")
-    plots.plottop10(f"{outfile}_orfs_scored.csv", bigwig, exons, 30, outfile)
+    plots.plottop10(f"{output}_orfs_scored.csv", bigwig, exons, 30, output)
     
     print("ORF scoring complete!")
 
@@ -244,10 +244,10 @@ def score_orfs(orfs: str, bigwig: str, exons: str, outfile: str,
               help='CSV file containing exon positions')
 @click.option('--plot-range', type=int, default=30,
               help='Plot range around start position (default: 30)')
-@click.option('--outfile', '-o', required=True,
+@click.option('--output ', '-o', required=True,
               help='Base name for output files')
 def plot(scored_orfs: str, bigwig: str, exons: str, 
-         plot_range: int, outfile: str):
+         plot_range: int, output: str):
     """Generate visualization reports from scored ORFs.
     
     This command creates visualization reports including:
@@ -256,7 +256,7 @@ def plot(scored_orfs: str, bigwig: str, exons: str,
     3. HTML report with interactive visualizations
     """
     print("Generating visualization report...")
-    plots.plottop10(scored_orfs, bigwig, exons, plot_range, outfile)
+    plots.plottop10(scored_orfs, bigwig, exons, plot_range, output)
     print("Report generation complete!")
 
 @click.command()

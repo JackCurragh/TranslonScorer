@@ -110,7 +110,7 @@ def all(**kwargs):
               help='GTF annotation file (required)')
 @click.option('--offsets', '-off',
               help='File containing read length-specific offsets for A-site calculation')
-@click.option('--outfile', '-o', required=True,
+@click.option('--output', '-o', required=True,
               help='Base name for output files')
 def process_bam(bam: str, chromsizes: str, annotation: str, 
                 outfile: str, offsets: Optional[str] = None):

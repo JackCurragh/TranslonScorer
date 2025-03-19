@@ -83,7 +83,10 @@ def cli(ctx, **kwargs):
 
 @cli.command()
 @common_options
-def all(**kwargs):
+def all(bam=None, chromsizes=None, sequence=None, annotation=None, bigwig=None, 
+        forward_bigwig=None, reverse_bigwig=None, stranded=False, offsets=None,
+        start_codons="ATG", stop_codons="TAA,TAG,TGA", min_length=0, max_length=1000000,
+        sru_range=15, plot_range=30, output=None, log_file=None, log_level="INFO"):
     """Run the TranslonScorer pipeline, automatically determining stages based on input.
     
     This command intelligently determines which pipeline stages to run based on provided inputs.
@@ -92,7 +95,13 @@ def all(**kwargs):
     setup_logging(level=log_level)
 
     # Validate configuration
-    config = Config(**kwargs)
+    config = Config(
+        bam=bam, chromsizes=chromsizes, sequence=sequence, annotation=annotation,
+        bigwig=bigwig, forward_bigwig=forward_bigwig, reverse_bigwig=reverse_bigwig,
+        stranded=stranded, offsets=offsets, start_codons=start_codons, stop_codons=stop_codons,
+        min_length=min_length, max_length=max_length, sru_range=sru_range, plot_range=plot_range,
+        output=output, log_file=log_file, log_level=log_level
+    )
     validate_config(config)
 
     # Run the complete pipeline

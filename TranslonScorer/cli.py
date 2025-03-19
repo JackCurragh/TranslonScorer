@@ -244,7 +244,7 @@ def score_orfs(orfs: str, bigwig: str, exons: str, output: str,
               help='CSV file containing exon positions')
 @click.option('--plot-range', type=int, default=30,
               help='Plot range around start position (default: 30)')
-@click.option('--output',-o', required=True,
+@click.option('--output', '-o', required=True,
               help='Base name for output files')
 def plot(scored_orfs: str, bigwig: str, exons: str, 
          plot_range: int, output: str):

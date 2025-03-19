@@ -112,13 +112,13 @@ echo "Checking available input files..."
 # check_file "$RV_BIGWIG" "Reverse BigWig" && RV_BIGWIG_EXISTS=1
 
 PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer \
---forward_bigwig $FW_BIGWIG \
---reverse_bigwig $RV_BIGWIG \
---sequence "$GENOME_FA" \
---annotation "$GTF_FILE" \
---output "$OUTPUT_PREFIX" \
---sru_range 15 \
---stranded
+    --forward_bigwig $FW_BIGWIG \
+    --reverse_bigwig $RV_BIGWIG \
+    --sequence "$GENOME_FA" \
+    --annotation "$GTF_FILE" \
+    --output "$OUTPUT_PREFIX" \
+    --sru_range 15 \
+    --stranded
 # if [ $FW_BIGWIG_EXISTS -eq 1 ] & [ $RV_BIGWIG_EXISTS -eq 1 ]; then
 #     echo "Forward and reverse BigWig file found, using direct ORF finding path..."
 #     echo "Running TranslonScorer with memory monitoring..."

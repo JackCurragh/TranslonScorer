@@ -75,12 +75,10 @@ check_status "Development version cleanup"
 
 # Now test as a user would experience it
 echo "Testing user installation from GitHub..."
-pip install --no-cache-dir --force-reinstall  git+https://github.com/JackCurragh/TranslonScorer
+pip install git+https://github.com/JackCurragh/TranslonScorer
 check_status "User installation"
 
 echo "Testing user installation execution..."
-python -c "import TranslonScorer; print('Package path:', TranslonScorer.__path__[0]); import os; print('Files:', os.listdir(TranslonScorer.__path__[0]))"
-
 python -c "from TranslonScorer.core import scoring, coordinates; from TranslonScorer.file_handlers import bam, bed, bigwig; print('Import test successful')"
 check_status "User version test"
 

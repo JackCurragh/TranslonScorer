@@ -78,7 +78,7 @@ def cli(ctx, **kwargs):
     # If no subcommand is provided, run the 'all' logic
     if ctx.invoked_subcommand is None:
         # Call the all function with the provided parameters
-        all(**kwargs)
+        ctx.invoke(all, **kwargs)
 
 
 @cli.command()

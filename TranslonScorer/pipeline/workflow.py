@@ -2,7 +2,7 @@
 
 
 
-def process_bam_file(bam_path, annotation_file):
+def process_bam_workflow(bam_path, annotation_file):
     """Process BAM file and get exons/CDS."""
     log_info('Processing BAM file...')
     bam_df = bam.readbam(bam_path)

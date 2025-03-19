@@ -111,49 +111,57 @@ echo "Checking available input files..."
 # check_file "$FW_BIGWIG" "Forward BigWig" && FW_BIGWIG_EXISTS=1
 # check_file "$RV_BIGWIG" "Reverse BigWig" && RV_BIGWIG_EXISTS=1
 
+PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer all \
+--forward_bigwig $FW_BIGWIG \
+--reverse_bigwig $RV_BIGWIG \
+--sequence "$GENOME_FA" \
+--annotation "$GTF_FILE" \
+--outfile "$OUTPUT_PREFIX" \
+--scoring-method modern \
+--sru-range 15 \
+--stranded
+# if [ $FW_BIGWIG_EXISTS -eq 1 ] & [ $RV_BIGWIG_EXISTS -eq 1 ]; then
+#     echo "Forward and reverse BigWig file found, using direct ORF finding path..."
+#     echo "Running TranslonScorer with memory monitoring..."
+#     PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer all \
+#     --forward_bigwig $FW_BIGWIG \
+#     --reverse_bigwig $RV_BIGWIG \
+#     --sequence "$GENOME_FA" \
+#     --annotation "$GTF_FILE" \
+#     --outfile "$OUTPUT_PREFIX" \
+#     --scoring-method modern \
+#     --sru-range 15 \
+#     --stranded
 
-if [ $FW_BIGWIG_EXISTS -eq 1 ] & [ $RV_BIGWIG_EXISTS -eq 1 ]; then
-    echo "Forward and reverse BigWig file found, using direct ORF finding path..."
-    echo "Running TranslonScorer with memory monitoring..."
-    PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer all \
-    --forward_bigwig $FW_BIGWIG \
-    --reverse_bigwig $RV_BIGWIG \
-    --sequence "$GENOME_FA" \
-    --annotation "$GTF_FILE" \
-    --outfile "$OUTPUT_PREFIX" \
-    --scoring-method modern \
-    --sru-range 15 \
-    --stranded
-
-elif [ $BIGWIG_EXISTS -eq 1 ]; then
-    echo "BigWig file found, using direct ORF finding path..."
-    echo "Running TranslonScorer with memory monitoring..."
-    PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer all \
-        --sequence "$GENOME_FA" \
-        --annotation "$GTF_FILE" \
-        --bigwig_path "$BIGWIG_FILE" \
-        --outfile "$OUTPUT_PREFIX" \
-        --scoring-method modern \
-        --sru-range 15
-elif [ $BAM_EXISTS -eq 1 ]; then
-    if ! check_file "$CHROM_SIZES" "Chromosome sizes"; then
-        echo "Error: Chromosome sizes file required for BAM processing"
-        exit 1
-    fi
-    echo "BAM file found, using full pipeline path..."
-    echo "Running TranslonScorer with memory monitoring..."
-    PROFILE=1 translonscorer all \
-        --bam_path "$BAM_FILE" \
-        --chromsizes "$CHROM_SIZES" \
-        --sequence "$GENOME_FA" \
-        --annotation "$GTF_FILE" \
-        --outfile "$OUTPUT_PREFIX" \
-        --scoring-method modern \
-        --sru-range 15
-else
-    echo "Error: Neither BAM nor BigWig file found"
-    exit 1
-fi
+# elif [ $BIGWIG_EXISTS -eq 1 ]; then
+#     echo "BigWig file found, using direct ORF finding path..."
+#     echo "Running TranslonScorer with memory monitoring..."
+#     PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer all \
+#         --sequence "$GENOME_FA" \
+#         --annotation "$GTF_FILE" \
+#         --bigwig_path "$BIGWIG_FILE" \
+#         --outfile "$OUTPUT_PREFIX" \
+#         --scoring-method modern \
+#         --sru-range 15
+# elif [ $BAM_EXISTS -eq 1 ]; then
+#     if ! check_file "$CHROM_SIZES" "Chromosome sizes"; then
+#         echo "Error: Chromosome sizes file required for BAM processing"
+#         exit 1
+#     fi
+#     echo "BAM file found, using full pipeline path..."
+#     echo "Running TranslonScorer with memory monitoring..."
+#     PROFILE=1 translonscorer all \
+#         --bam_path "$BAM_FILE" \
+#         --chromsizes "$CHROM_SIZES" \
+#         --sequence "$GENOME_FA" \
+#         --annotation "$GTF_FILE" \
+#         --outfile "$OUTPUT_PREFIX" \
+#         --scoring-method modern \
+#         --sru-range 15
+# else
+#     echo "Error: Neither BAM nor BigWig file found"
+#     exit 1
+# fi
 
 echo "Script completed successfully!"
 echo "Output files can be found with prefix: $OUTPUT_PREFIX"

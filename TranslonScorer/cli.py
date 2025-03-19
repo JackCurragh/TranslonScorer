@@ -80,8 +80,6 @@ def cli(ctx, **kwargs):
         all_workflow(**kwargs)
 
 
-@profile(precision=4)
-
 @cli.command()
 @common_options
 def all(**kwargs):

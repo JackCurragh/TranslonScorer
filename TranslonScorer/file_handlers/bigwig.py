@@ -631,7 +631,9 @@ def process_transcriptomic_bigwig(bw_handle, exon_df):
             "tran_start": [],
             "counts": []
         })
-def scoring(bigwig, exon, orfs, old_scoring, sru_range, stranded=False, batch_size=50, max_workers=None):
+
+        
+def scoring(bigwig, exon, orfs, old_scoring, sru_range, stranded=False, batch_size=500, max_workers=None):
     """
     Score ORFs using bigwig coverage data with memory-efficient streaming.
     Now supports genomic BigWig files and strand-specific analysis.
@@ -815,7 +817,7 @@ def process_transcript_wrapper(args):
         return None
 
 # Then modify process_strand_orfs to use this function
-def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, batch_size=50, max_workers=None):
+def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, batch_size=500, max_workers=None):
     """
     Process and score ORFs for a specific strand.
     

@@ -113,7 +113,7 @@ echo "Checking available input files..."
 # check_file "$FW_BIGWIG" "Forward BigWig" && FW_BIGWIG_EXISTS=1
 # check_file "$RV_BIGWIG" "Reverse BigWig" && RV_BIGWIG_EXISTS=1
 
-PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer all \
+PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer \
 --forward_bigwig $FW_BIGWIG \
 --reverse_bigwig $RV_BIGWIG \
 --sequence "$GENOME_FA" \

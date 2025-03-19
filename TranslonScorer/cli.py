@@ -1,25 +1,64 @@
 """Command-line interface for TranslonScorer."""
 
-import os
 import click
-import polars as pl
-import warnings
-import logging
-from typing import List, Optional
-from pathlib import Path
-from memory_profiler import profile
-
-from .core import scoring, coordinates
-from .core import orffinder
-from .file_handlers import bam, bed, bigwig
-from .core.scoring import orfrelativeposition
+from .pipeline.workflow import process_bam_workflow, find_orfs_workflow, score_orfs_workflow, plot_workflow, all_workflow
+from .pipeline.config import Config
+from .pipeline.validator import validate_config
 from .utils.logging import setup_logging, log_info, log_error
-from .visualization import plots
 
-warnings.filterwarnings("ignore")
 
-@click.group()
-def cli():
+def common_options(func):
+    """Apply common options to command functions."""
+    # Input files
+    func = click.option('--bam', '-b',
+              help='Input BAM file from Ribo-seq data. Required if not providing bigwig files')(func)
+    func = click.option('--chromsizes', '-c',
+              help='Chromosome sizes file (required if processing BAM)')(func)
+    func = click.option('--sequence', '-s', required=True,
+              help='Input FASTA file (genomic or transcriptomic)')(func)
+    func = click.option('--annotation', '-a', required=True,
+              help='GTF annotation file for identifying exons and transcripts')(func)
+    
+    # BigWig options
+    func = click.option('--bigwig', '-w',
+              help='BigWig file containing Ribo-seq coverage. If provided, skips BAM processing')(func)
+    func = click.option('--forward_bigwig', '-fw',
+              help='Forward strand BigWig file for strand-specific analysis')(func)
+    func = click.option('--reverse_bigwig', '-rv',
+              help='Reverse strand BigWig file for strand-specific analysis')(func)
+    
+    # Analysis options
+    func = click.option('--stranded/--unstranded', default=False,
+              help='Process strands separately (default: False)')(func)
+    func = click.option('--offsets', 
+              help='File containing read length-specific offsets for A-site calculation')(func)
+    func = click.option('--start_codons', '--starts', default="ATG",
+              help='Comma-separated list of start codons (default: ATG)')(func)
+    func = click.option('--stop_codons', '--stops', default="TAA,TAG,TGA",
+              help='Comma-separated list of stop codons (default: TAA,TAG,TGA)')(func)
+    func = click.option('--min_length', '--min', type=int, default=0,
+              help='Minimum ORF length in nucleotides (default: 0)')(func)
+    func = click.option('--max_length', '--max', type=int, default=1000000,
+              help='Maximum ORF length in nucleotides (default: 1000000)')(func)
+    func = click.option('--sru_range', '--sru', type=int, default=15,
+              help='Nucleotide range for Start Rise Up score calculation (default: 15)')(func)
+    func = click.option('--plot_range', '--plot', type=int, default=30,
+              help='Plot range around start position (default: 30)')(func)
+    
+    # Output options
+    func = click.option('--output', '-o', required=True,
+              help='Base name for output files')(func)
+    func = click.option('--log_file', '--log',
+              help='Path to log file. If not provided, logs will only be written to console.')(func)
+    func = click.option('--log_level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']),
+              default='INFO', help='Set the logging level (default: INFO)')(func)
+    
+    return func
+
+@click.group(invoke_without_command=True)
+@click.pass_context
+@common_options
+def cli(ctx, **kwargs):
     """TranslonScorer: A tool for identifying and scoring translational events from Ribo-seq data.
     
     This tool provides several workflows:
@@ -30,190 +69,36 @@ def cli():
     4. score-orfs: Score existing ORFs using coverage data
     5. plot: Generate visualization reports from scored ORFs
     
+    If no command is specified, the complete pipeline will be run.
     For detailed instructions, use --help with any command:
-    translonscorer all --help
+    translonscorer --help
+    translonscorer process-bam --help
     """
-    pass
+    # If no subcommand is provided, run the 'all' logic
+    if ctx.invoked_subcommand is None:
+        # Call the all function with the provided parameters
+        all_workflow(**kwargs)
+
 
 @profile(precision=4)
-def process_bam_file(bam_path, annotation_file):
-    """Process BAM file and get exons/CDS."""
-    log_info('Processing BAM file...')
-    bam_df = bam.readbam(bam_path)
-    
-    # Get exons and CDS
-    cds_df, exon_df = bam.getexons_and_cds(annotation_file)
-    
-    # Process BAM data
-    bam_type, _ = bam.detect_bam_type(bam_df, exon_df)
-    if bam_type == 'genomic':
-        # First convert genomic coordinates to transcript coordinates
-        bam_df = bam.bamtranscript(bam_df, exon_df)
-        # Then calculate positions relative to CDS
-        bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
-    else:
-        # For transcriptomic BAM, just calculate CDS positions
-        bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
-    
-    return bam_df, exon_df
 
 @cli.command()
-@click.option('--bam_path', '-b',
-              help='Input BAM file from Ribo-seq data. Required if not providing bigwig')
-@click.option('--chromsizes', '-c',
-              help='Chromosome sizes file (required if processing BAM)')
-@click.option('--sequence', '-s', required=True,
-              help='Input FASTA file (genomic or transcriptomic)')
-@click.option('--annotation', '-a', required=True,
-              help='GTF annotation file (required)')
-@click.option('--bigwig_path', '-bw',
-              help='BigWig file containing Ribo-seq coverage. If provided, skips BAM processing')
-@click.option('--forward_bigwig', '-fwd',
-              help='Forward strand BigWig file. Used with --reverse_bigwig for strand-specific analysis')
-@click.option('--reverse_bigwig', '-rev',
-              help='Reverse strand BigWig file. Used with --forward_bigwig for strand-specific analysis')
-@click.option('--stranded/--unstranded', default=False,
-              help='Process strands separately (default: False)')
-@click.option('--offsets', '-off',
-              help='File containing read length-specific offsets for A-site calculation')
-@click.option('--start-codons', default="ATG",
-              help='Comma-separated list of start codons (default: ATG)')
-@click.option('--stop-codons', default="TAA,TAG,TGA",
-              help='Comma-separated list of stop codons (default: TAA,TAG,TGA)')
-@click.option('--min-len', type=int, default=0,
-              help='Minimum ORF length in nucleotides (default: 0)')
-@click.option('--max-len', type=int, default=1000000,
-              help='Maximum ORF length in nucleotides (default: 1000000)')
-@click.option('--sru-range', type=int, default=15,
-              help='Nucleotide range for Start Rise Up score calculation (default: 15)')
-@click.option('--scoring-method', type=click.Choice(['classic', 'modern']), 
-              default='modern', help='Scoring algorithm to use (default: modern)')
-@click.option('--plot-range', type=int, default=30,
-              help='Plot range around start position (default: 30)')
-@click.option('--outfile', '-o', required=True,
-              help='Base name for output files')
-@click.option('--log-file', type=str,
-              help='Path to log file. If not provided, logs will only be written to console.')
-@click.option('--log-level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']),
-              default='INFO', help='Set the logging level (default: INFO)')
-def all(bam_path, chromsizes, sequence, annotation, bigwig_path, forward_bigwig, reverse_bigwig,
-        stranded, outfile, offsets=None, start_codons="ATG", stop_codons="TAA,TAG,TGA",
-        min_len=0, max_len=1000000, sru_range=15, scoring_method='modern',
-        plot_range=30, log_file=None, log_level='INFO'):
+@common_options
+def all(**kwargs):
     """Run the TranslonScorer pipeline, automatically determining stages based on input.
     
     This command intelligently determines which pipeline stages to run based on provided inputs.
-    Now supports strand-specific analysis with --stranded flag or by providing separate
-    --forward_bigwig and --reverse_bigwig files. Also supports both genomic and transcriptomic
-    BigWig files.
     """
     # Configure logging
     setup_logging(level=getattr(logging, log_level))
-    
-    # Validate inputs
-    if not bam_path and not bigwig_path and not (forward_bigwig and reverse_bigwig):
-        raise click.BadParameter(
-            "Either BAM file (-b) or BigWig file (-bw) or forward/reverse BigWig files must be provided"
-        )
-    
-    if bam_path and not chromsizes:
-        raise click.BadParameter("Chromosome sizes file (-c) is required when processing BAM files")
-    
-    # Handle strand-specific bigwig inputs
-    if forward_bigwig and reverse_bigwig:
-        bigwig_paths = {'forward': forward_bigwig, 'reverse': reverse_bigwig}
-        stranded = True
-    elif bigwig_path:
-        bigwig_paths = bigwig_path
-    else:
-        bigwig_paths = None
-    
-    # Initialize exon_df
-    exon_df = None
 
-    # Determine pipeline stages
-    if bam_path:
-        if not bigwig_paths:
-            log_info("BAM file provided without BigWig. Will process BAM to generate coverage.")
-            location = os.path.abspath(bam_path)
-            if not os.path.isfile(location):
-                raise click.BadParameter(f"BAM file not found: {bam_path}")
-            
-            # Process BAM and get annotations
-            bam_df, exon_df = process_bam_file(location, annotation)
-            
-            # Calculate A-site positions
-            offsets = coordinates.change_point_analysis(bam_df)
-            
-            # Process by strand if requested
-            if stranded:
-                # Split BAM by strand
-                fwd_bam = bam_df.filter(pl.col("strand") == "+")
-                rev_bam = bam_df.filter(pl.col("strand") == "-")
-                
-                # Process forward strand
-                fwd_bed = bed.asitecalc(fwd_bam, offsets)
-                fwd_bedgraph = f"{outfile}_fwd.bedGraph"
-                fwd_bed.write_csv(fwd_bedgraph, separator="\t", include_header=False)
-                fwd_bigwig = f"{outfile}_fwd.bw"
-                bed.bedtobigwig(fwd_bedgraph, chromsizes, f"{outfile}_fwd")
-                
-                # Process reverse strand
-                rev_bed = bed.asitecalc(rev_bam, offsets)
-                rev_bedgraph = f"{outfile}_rev.bedGraph"
-                rev_bed.write_csv(rev_bedgraph, separator="\t", include_header=False)
-                rev_bigwig = f"{outfile}_rev.bw"
-                bed.bedtobigwig(rev_bedgraph, chromsizes, f"{outfile}_rev")
-                
-                # Set up paths for scoring
-                bigwig_paths = {'forward': f"{outfile}_fwd.bw", 'reverse': f"{outfile}_rev.bw"}
-            else:
-                # Process combined strands (original behavior)
-                bed_df = bed.asitecalc(bam_df, offsets)
-                bedgraph_path = f"{outfile}.bedGraph"
-                bed_df.write_csv(bedgraph_path, separator="\t", include_header=False)
-                bigwig_path = f"{outfile}.bw"
-                bed.bedtobigwig(bedgraph_path, chromsizes, outfile)
-                bigwig_paths = bigwig_path
-        else:
-            log_info("Both BAM and BigWig provided. Using BigWig directly.")
-    
-    # Ensure exon_df is set when using BigWig directly
-    if exon_df is None:
-        log_info("Loading exon data from annotation file...")
-        cds_df, exon_df = bam.getexons_and_cds(annotation)
-    
-    # Ensure transcriptomic input for ORF finding
-    log_info("Ensuring transcriptomic input for ORF finding...")
-    transcript_fasta = sequence
-    if not sequence.endswith('_transcripts.fa'):
-        log_info("Generating transcript sequences from genomic FASTA and GTF annotation...")
-        transcript_fasta = coordinates.gettranscripts(sequence, annotation, outfile)
-    
-    # Find ORFs
-    log_info("Finding ORFs...")
-    orf_df = orffinder.preporfs(transcript_fasta, start_codons.split(","), stop_codons.split(","), min_len, max_len)
-    
-    log_info("Determining relative position of ORFs to CDS...")
-    # Determine the relative position of ORFs to CDS
-    orf_df, exon_coords = orfrelativeposition(annotation, orf_df, cds_df)
+    # Validate configuration
+    config = Config(**kwargs)
+    validate_config(config)
 
-    # Score ORFs using bigWig data
-    log_info("Scoring ORFs...")
-    scored_orfs = bigwig.scoring(bigwig_paths, exon_df, orf_df, scoring_method == 'classic', sru_range, stranded)
-    
-    scored_orfs.write_csv(f"{outfile}_orfs_scored.csv")
-    
-    # Generate plots
-    log_info("Generating plots...")
-    if stranded and isinstance(bigwig_paths, dict):
-        # Use forward strand for plotting if we have strand-specific data
-        plot_bigwig = bigwig_paths['forward']
-    else:
-        plot_bigwig = bigwig_paths
-        
-    plots.plottop10(scored_orfs, plot_bigwig, exon_df, plot_range, outfile)
-    
+    # Run the complete pipeline
+    all_workflow(config)    
+
     log_info("Pipeline completed successfully!")
 
     

@@ -118,7 +118,7 @@ PROFILE=1 memray run /Users/jackt/mamba/envs/TranslonScorer/bin/translonscorer a
 --reverse_bigwig $RV_BIGWIG \
 --sequence "$GENOME_FA" \
 --annotation "$GTF_FILE" \
---outfile "$OUTPUT_PREFIX" \
+--output "$OUTPUT_PREFIX" \
 --scoring-method modern \
 --sru-range 15 \
 --stranded

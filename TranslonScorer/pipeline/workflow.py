@@ -1,5 +1,7 @@
 
 from ..utils import log_info
+from .config import Config
+import os
 
 
 def process_bam_workflow(bam_path, annotation_file):
@@ -54,41 +56,12 @@ def plot_workflow(scored_orfs, bigwig_path, exon_df, plot_range, outfile):
 
 
 def all_workflow(
-    bam_path: str,
-    bigwig_path: str,
-    forward_bigwig: str,
-    reverse_bigwig: str,
-    chromsizes: str,
-    annotation: str,
-    sequence: str,
-    start_codons: str,
-    stop_codons: str,
-    min_len: int,
-    max_len: int,
-    scoring_method: str,
-    sru_range: int,
-    plot_range: int,
-    output: str,
-    stranded: bool = False
+    config: Config,
     ) -> None:
     """Run the entire pipeline workflow.
 
     Args:
-        bam_path (str): Path to the BAM file.
-        bigwig_path (str): Path to the BigWig file.
-        forward_bigwig (str): Path to the forward strand BigWig file.
-        reverse_bigwig (str): Path to the reverse strand BigWig file.
-        chromsizes (str): Path to the chromosome sizes file.
-        annotation (str): Path to the annotation file (GTF/GFF).
-        sequence (str): Path to the sequence file (FASTA).
-        start_codons (str): Comma-separated list of start codons.
-        stop_codons (str): Comma-separated list of stop codons.
-        min_len (int): Minimum ORF length.
-        max_len (int): Maximum ORF length.
-        scoring_method (str): Scoring method to use ('classic' or other).
-        sru_range (int): SRU range for scoring.
-        plot_range (int): Range for plotting.
-        output (str): Output file prefix.
+        config: The configuration object for the pipeline
 
     Returns:
         None
@@ -97,8 +70,8 @@ def all_workflow(
 
 
     # Handle strand-specific BigWig inputs
-    if forward_bigwig and reverse_bigwig:
-        bigwig_paths = {'forward': forward_bigwig, 'reverse': reverse_bigwig}
+    if Config.forward_bigwig and Config.reverse_bigwig:
+        bigwig_paths = {'forward': Config.forward_bigwig, 'reverse': Config.reverse_bigwig}
         stranded = True
     elif bigwig_path:
         bigwig_paths = bigwig_path
@@ -111,10 +84,10 @@ def all_workflow(
     exon_df = None
 
     # Determine pipeline stages
-    if bam_path:
+    if Config.bam_path:
         if not bigwig_paths:
             log_info("BAM file provided without BigWig. Will process BAM to generate coverage.")
-            location = os.path.abspath(bam_path)
+            location = os.path.abspath(Config.bam_path)
             if not os.path.isfile(location):
                 raise click.BadParameter(f"BAM file not found: {bam_path}")
 

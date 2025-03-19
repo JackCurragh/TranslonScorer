@@ -2,9 +2,9 @@
 
 import click
 from typing import Optional
-from .pipeline.workflow import process_bam_workflow, find_orfs_workflow, score_orfs_workflow, plot_workflow, all_workflow
-from .pipeline.config import Config
-from .pipeline.validator import validate_config
+from .workflow import process_bam_workflow, find_orfs_workflow, score_orfs_workflow, plot_workflow, all_workflow
+from .config import Config
+from .validator import validate_config
 from .utils.logging import setup_logging, log_info, log_error
 
 

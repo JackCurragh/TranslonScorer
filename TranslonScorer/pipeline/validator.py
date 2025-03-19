@@ -1,5 +1,7 @@
 
 from .config import Config
+from ..utils.logging import log_error, log_info
+import click 
 
 def validate_config(config: Config) -> None:
     """

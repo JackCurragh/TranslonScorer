@@ -102,14 +102,14 @@ mkdir -p "$OUTPUT_DIR"
 # Check which files exist and determine pipeline path
 echo "Checking available input files..."
 
-BAM_EXISTS=0
-BIGWIG_EXISTS=0
-check_file "$BAM_FILE" "BAM file" && BAM_EXISTS=1
-check_file "$BIGWIG_FILE" "BigWig file" && BIGWIG_EXISTS=1
-check_file "$GENOME_FA" "Genome FASTA" || exit 1
-check_file "$GTF_FILE" "GTF annotation" || exit 1
-check_file "$FW_BIGWIG" "Forward BigWig" && FW_BIGWIG_EXISTS=1
-check_file "$RV_BIGWIG" "Reverse BigWig" && RV_BIGWIG_EXISTS=1
+# BAM_EXISTS=0
+# BIGWIG_EXISTS=0
+# check_file "$BAM_FILE" "BAM file" && BAM_EXISTS=1
+# check_file "$BIGWIG_FILE" "BigWig file" && BIGWIG_EXISTS=1
+# check_file "$GENOME_FA" "Genome FASTA" || exit 1
+# check_file "$GTF_FILE" "GTF annotation" || exit 1
+# check_file "$FW_BIGWIG" "Forward BigWig" && FW_BIGWIG_EXISTS=1
+# check_file "$RV_BIGWIG" "Reverse BigWig" && RV_BIGWIG_EXISTS=1
 
 
 if [ $FW_BIGWIG_EXISTS -eq 1 ] & [ $RV_BIGWIG_EXISTS -eq 1 ]; then

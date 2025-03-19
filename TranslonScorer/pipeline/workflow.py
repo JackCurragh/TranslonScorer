@@ -54,7 +54,7 @@ def plot_workflow(scored_orfs, bigwig_path, exon_df, plot_range, outfile):
 
 
 
-def all_workflow(bam_path, bigwig_path, forward_bigwig, reverse_bigwig, chromsizes, annotation, sequence, start_codons, stop_codons, min_len, max_len, scoring_method, sru_range, plot_range, outfile):
+def all_workflow(bam_path, bigwig_path, forward_bigwig, reverse_bigwig, chromsizes, annotation, sequence, start_codons, stop_codons, min_len, max_len, scoring_method, sru_range, plot_range, output):
 
     log_info("Starting pipeline...")
 

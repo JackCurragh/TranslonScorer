@@ -71,137 +71,129 @@ def all_workflow(
     output: str,
     stranded: bool = False
     ) -> None:
-        """Run the entire pipeline workflow.
+    """Run the entire pipeline workflow.
 
-        Args:
-            bam_path (str): Path to the BAM file.
-            bigwig_path (str): Path to the BigWig file.
-            forward_bigwig (str): Path to the forward strand BigWig file.
-            reverse_bigwig (str): Path to the reverse strand BigWig file.
-            chromsizes (str): Path to the chromosome sizes file.
-            annotation (str): Path to the annotation file (GTF/GFF).
-            sequence (str): Path to the sequence file (FASTA).
-            start_codons (str): Comma-separated list of start codons.
-            stop_codons (str): Comma-separated list of stop codons.
-            min_len (int): Minimum ORF length.
-            max_len (int): Maximum ORF length.
-            scoring_method (str): Scoring method to use ('classic' or other).
-            sru_range (int): SRU range for scoring.
-            plot_range (int): Range for plotting.
-            output (str): Output file prefix.
+    Args:
+        bam_path (str): Path to the BAM file.
+        bigwig_path (str): Path to the BigWig file.
+        forward_bigwig (str): Path to the forward strand BigWig file.
+        reverse_bigwig (str): Path to the reverse strand BigWig file.
+        chromsizes (str): Path to the chromosome sizes file.
+        annotation (str): Path to the annotation file (GTF/GFF).
+        sequence (str): Path to the sequence file (FASTA).
+        start_codons (str): Comma-separated list of start codons.
+        stop_codons (str): Comma-separated list of stop codons.
+        min_len (int): Minimum ORF length.
+        max_len (int): Maximum ORF length.
+        scoring_method (str): Scoring method to use ('classic' or other).
+        sru_range (int): SRU range for scoring.
+        plot_range (int): Range for plotting.
+        output (str): Output file prefix.
 
-        Returns:
-            None
-        """
-        log_info("Starting pipeline...")
+    Returns:
+        None
+    """
+    log_info("Starting pipeline...")
 
-        # Validate inputs
-        if not bam_path and not bigwig_path and not (forward_bigwig and reverse_bigwig):
-            raise click.BadParameter(
-                "Either BAM file (-b) or BigWig file (-bw) or forward/reverse BigWig files must be provided"
-            )
 
-        if bam_path and not chromsizes:
-            raise click.BadParameter("Chromosome sizes file (-c) is required when processing BAM files")
+    # Handle strand-specific BigWig inputs
+    if forward_bigwig and reverse_bigwig:
+        bigwig_paths = {'forward': forward_bigwig, 'reverse': reverse_bigwig}
+        stranded = True
+    elif bigwig_path:
+        bigwig_paths = bigwig_path
+        stranded = False
+    else:
+        bigwig_paths = None
+        stranded = False
 
-        # Handle strand-specific BigWig inputs
-        if forward_bigwig and reverse_bigwig:
-            bigwig_paths = {'forward': forward_bigwig, 'reverse': reverse_bigwig}
-            stranded = True
-        elif bigwig_path:
-            bigwig_paths = bigwig_path
-            stranded = False
-        else:
-            bigwig_paths = None
-            stranded = False
+    # Initialize exon_df
+    exon_df = None
 
-        # Initialize exon_df
-        exon_df = None
+    # Determine pipeline stages
+    if bam_path:
+        if not bigwig_paths:
+            log_info("BAM file provided without BigWig. Will process BAM to generate coverage.")
+            location = os.path.abspath(bam_path)
+            if not os.path.isfile(location):
+                raise click.BadParameter(f"BAM file not found: {bam_path}")
 
-        # Determine pipeline stages
-        if bam_path:
-            if not bigwig_paths:
-                log_info("BAM file provided without BigWig. Will process BAM to generate coverage.")
-                location = os.path.abspath(bam_path)
-                if not os.path.isfile(location):
-                    raise click.BadParameter(f"BAM file not found: {bam_path}")
+            # Process BAM and get annotations
+            bam_df, exon_df = process_bam_workflow(location, annotation)
 
-                # Process BAM and get annotations
-                bam_df, exon_df = process_bam_workflow(location, annotation)
+            # Calculate A-site positions
+            offsets = coordinates.change_point_analysis(bam_df)
 
-                # Calculate A-site positions
-                offsets = coordinates.change_point_analysis(bam_df)
+            # Process by strand if requested
+            if stranded:
+                # Split BAM by strand
+                fwd_bam = bam_df.filter(pl.col("strand") == "+")
+                rev_bam = bam_df.filter(pl.col("strand") == "-")
 
-                # Process by strand if requested
-                if stranded:
-                    # Split BAM by strand
-                    fwd_bam = bam_df.filter(pl.col("strand") == "+")
-                    rev_bam = bam_df.filter(pl.col("strand") == "-")
+                # Process forward strand
+                fwd_bed = bed.asitecalc(fwd_bam, offsets)
+                fwd_bedgraph = f"{output}_fwd.bedGraph"
+                fwd_bed.write_csv(fwd_bedgraph, separator="\t", include_header=False)
+                fwd_bigwig = f"{output}_fwd.bw"
+                bed.bedtobigwig(fwd_bedgraph, chromsizes, f"{output}_fwd")
 
-                    # Process forward strand
-                    fwd_bed = bed.asitecalc(fwd_bam, offsets)
-                    fwd_bedgraph = f"{output}_fwd.bedGraph"
-                    fwd_bed.write_csv(fwd_bedgraph, separator="\t", include_header=False)
-                    fwd_bigwig = f"{output}_fwd.bw"
-                    bed.bedtobigwig(fwd_bedgraph, chromsizes, f"{output}_fwd")
+                # Process reverse strand
+                rev_bed = bed.asitecalc(rev_bam, offsets)
+                rev_bedgraph = f"{output}_rev.bedGraph"
+                rev_bed.write_csv(rev_bedgraph, separator="\t", include_header=False)
+                rev_bigwig = f"{output}_rev.bw"
+                bed.bedtobigwig(rev_bedgraph, chromsizes, f"{output}_rev")
 
-                    # Process reverse strand
-                    rev_bed = bed.asitecalc(rev_bam, offsets)
-                    rev_bedgraph = f"{output}_rev.bedGraph"
-                    rev_bed.write_csv(rev_bedgraph, separator="\t", include_header=False)
-                    rev_bigwig = f"{output}_rev.bw"
-                    bed.bedtobigwig(rev_bedgraph, chromsizes, f"{output}_rev")
-
-                    # Set up paths for scoring
-                    bigwig_paths = {'forward': f"{output}_fwd.bw", 'reverse': f"{output}_rev.bw"}
-                else:
-                    # Process combined strands (original behavior)
-                    bed_df = bed.asitecalc(bam_df, offsets)
-                    bedgraph_path = f"{output}.bedGraph"
-                    bed_df.write_csv(bedgraph_path, separator="\t", include_header=False)
-                    bigwig_path = f"{output}.bw"
-                    bed.bedtobigwig(bedgraph_path, chromsizes, output)
-                    bigwig_paths = bigwig_path
+                # Set up paths for scoring
+                bigwig_paths = {'forward': f"{output}_fwd.bw", 'reverse': f"{output}_rev.bw"}
             else:
-                log_info("Both BAM and BigWig provided. Using BigWig directly.")
-
-        # Ensure exon_df is set when using BigWig directly
-        if exon_df is None:
-            log_info("Loading exon data from annotation file...")
-            _, exon_df = bam.getexons_and_cds(annotation)
-
-        # Ensure transcriptomic input for ORF finding
-        log_info("Ensuring transcriptomic input for ORF finding...")
-        transcript_fasta = sequence
-        if not sequence.endswith('_transcripts.fa'):
-            log_info("Generating transcript sequences from genomic FASTA and GTF annotation...")
-            transcript_fasta = coordinates.gettranscripts(sequence, annotation, output)
-
-        # Find ORFs
-        log_info("Finding ORFs...")
-        orf_df = orffinder.preporfs(transcript_fasta, start_codons.split(","), stop_codons.split(","), min_len, max_len)
-
-        log_info("Determining relative position of ORFs to CDS...")
-        # Determine the relative position of ORFs to CDS
-        orf_df, exon_coords = orfrelativeposition(annotation, orf_df, exon_df)
-
-        # Score ORFs using BigWig data
-        log_info("Scoring ORFs...")
-        scored_orfs = bigwig.scoring(bigwig_paths, exon_df, orf_df, scoring_method == 'classic', sru_range, stranded)
-
-        scored_orfs.write_csv(f"{output}_orfs_scored.csv")
-
-        # Generate plots
-        log_info("Generating plots...")
-        if stranded and isinstance(bigwig_paths, dict):
-            # Use forward strand for plotting if we have strand-specific data
-            plot_bigwig = bigwig_paths['forward']
+                # Process combined strands (original behavior)
+                bed_df = bed.asitecalc(bam_df, offsets)
+                bedgraph_path = f"{output}.bedGraph"
+                bed_df.write_csv(bedgraph_path, separator="\t", include_header=False)
+                bigwig_path = f"{output}.bw"
+                bed.bedtobigwig(bedgraph_path, chromsizes, output)
+                bigwig_paths = bigwig_path
         else:
-            plot_bigwig = bigwig_paths
+            log_info("Both BAM and BigWig provided. Using BigWig directly.")
 
-        plots.plottop10(scored_orfs, plot_bigwig, exon_df, plot_range, output)
+    # Ensure exon_df is set when using BigWig directly
+    if exon_df is None:
+        log_info("Loading exon data from annotation file...")
+        _, exon_df = bam.getexons_and_cds(annotation)
 
-        log_info("Pipeline completed successfully!")
+    # Ensure transcriptomic input for ORF finding
+    log_info("Ensuring transcriptomic input for ORF finding...")
+    transcript_fasta = sequence
+    if not sequence.endswith('_transcripts.fa'):
+        log_info("Generating transcript sequences from genomic FASTA and GTF annotation...")
+        transcript_fasta = coordinates.gettranscripts(sequence, annotation, output)
+
+    # Find ORFs
+    log_info("Finding ORFs...")
+    orf_df = orffinder.preporfs(transcript_fasta, start_codons.split(","), stop_codons.split(","), min_len, max_len)
+
+    log_info("Determining relative position of ORFs to CDS...")
+    # Determine the relative position of ORFs to CDS
+    orf_df, exon_coords = orfrelativeposition(annotation, orf_df, exon_df)
+
+    # Score ORFs using BigWig data
+    log_info("Scoring ORFs...")
+    scored_orfs = bigwig.scoring(bigwig_paths, exon_df, orf_df, scoring_method == 'classic', sru_range, stranded)
+
+    scored_orfs.write_csv(f"{output}_orfs_scored.csv")
+
+    # Generate plots
+    log_info("Generating plots...")
+    if stranded and isinstance(bigwig_paths, dict):
+        # Use forward strand for plotting if we have strand-specific data
+        plot_bigwig = bigwig_paths['forward']
+    else:
+        plot_bigwig = bigwig_paths
+
+    plots.plottop10(scored_orfs, plot_bigwig, exon_df, plot_range, output)
+
+    log_info("Pipeline completed successfully!")
     log_info("Starting pipeline...")
 
 

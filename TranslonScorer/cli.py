@@ -89,7 +89,7 @@ def all(**kwargs):
     This command intelligently determines which pipeline stages to run based on provided inputs.
     """
     # Configure logging
-    setup_logging(level=getattr(logging, log_level))
+    setup_logging(level=log_level)
 
     # Validate configuration
     config = Config(**kwargs)

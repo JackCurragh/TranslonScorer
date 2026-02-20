@@ -11,6 +11,7 @@ except Exception:
     HAVE_PULP = False
 
 from ..utils.logging import log_info
+import click
 
 
 def overlap_penalty(orf_i: dict, orf_j: dict) -> float:
@@ -26,7 +27,9 @@ def overlap_penalty(orf_i: dict, orf_j: dict) -> float:
 def greedy_refine(orfs_df: pl.DataFrame, time_limit: int = 10) -> pl.DataFrame:
     # Sort by score; iteratively add if penalty acceptable
     chosen: List[dict] = []
-    for r in orfs_df.sort('score', descending=True).iter_rows(named=True):
+    rows_iter = orfs_df.sort('score', descending=True).iter_rows(named=True)
+    iterator = click.progressbar(rows_iter, length=orfs_df.height, label="Greedy assemble")
+    for r in iterator:
         penalty = sum(overlap_penalty(r, c) for c in chosen)
         if r['score'] - penalty > 0:
             chosen.append(r)
@@ -66,4 +69,3 @@ def assemble_translome(orfs_parquet: str, out_parquet: str, solver: str = 'PULP'
     out.write_parquet(out_parquet)
     log_info(f"Assembled translome written: {out_parquet}")
     return out_parquet
-

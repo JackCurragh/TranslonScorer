@@ -212,14 +212,36 @@ def plot(scored_orfs: str, bigwig: str, exons: str, plot_range: int, output: str
     plots.plottop10(scored_orfs, bigwig, exons, plot_range, output)
     log_info("Report generation complete!")
 
+@cli.command("orfs-import")
+@click.option('--bed12', required=True, help='Input ORFs in BED12 format.')
+@click.option('--annotation', '-a', required=True, help='GTF annotation file for exon/transcript models.')
+@click.option('--out', 'out_parquet', required=True, help='Output canonical ORFs (Parquet).')
+@click.option('--assign-policy', type=click.Choice(['best', 'all']), default='best', help="Assignment policy when multiple transcripts match (default: best).")
+@click.option('--require-junction-match/--allow-junction-mismatch', default=True, help='Require all BED12 junctions to match transcript junctions (default: require).')
+@click.option('--progress/--no-progress', default=True, help='Show progress bars (default: on).')
+def orfs_import_cmd(bed12: str, annotation: str, out_parquet: str, assign_policy: str, require_junction_match: bool, progress: bool):
+    """Import ORFs from BED12, map to transcripts, and write canonical ORFs (Parquet)."""
+    setup_logging()
+    from .pipeline.orfs_import import import_bed12
+    import_bed12(
+        bed12_path=bed12,
+        gtf_path=annotation,
+        out_parquet=out_parquet,
+        assign_policy=assign_policy,
+        require_junction_match=require_junction_match,
+        progress=progress,
+    )
+    log_info("ORFs imported from BED12")
+
 @cli.command("features")
 @click.option('-a', '--annotation', required=True, help='GTF annotation file.')
 @click.option('-o', '--output', '--output-prefix', 'output_prefix', required=True, help='Output prefix for feature tables (Parquet).')
-def features(annotation: str, output_prefix: str):
+@click.option('--progress/--no-progress', default=True, help='Show progress bars (default: on).')
+def features(annotation: str, output_prefix: str, progress: bool):
     """Emit locus features and transcript→feature mappings (no signals)."""
     setup_logging()
     from .pipeline.locus_features import build_locus_features
-    feats, fmap = build_locus_features(annotation)
+    feats, fmap = build_locus_features(annotation, progress=progress)
     feats.write_parquet(f"{output_prefix}.features.parquet")
     fmap.write_parquet(f"{output_prefix}.feature_map.parquet")
     log_info("Feature tables written")
@@ -231,7 +253,8 @@ def features(annotation: str, output_prefix: str):
 @click.option('--feature-map', 'feature_map', required=True, help='Transcript→feature map Parquet.')
 @click.option('--splits-csv', help='Optional CSV of split junction counts with columns chr,donor_pos,acceptor_pos,strand,count')
 @click.option('--out', 'out_parquet', required=True, help='Output feature metrics Parquet path.')
-def feature_metrics_cmd(profiles: str, features: str, feature_map: str, splits_csv: Optional[str], out_parquet: str):
+@click.option('--progress/--no-progress', default=True, help='Show progress bars (default: on).')
+def feature_metrics_cmd(profiles: str, features: str, feature_map: str, splits_csv: Optional[str], out_parquet: str, progress: bool):
     """Compute per-feature metrics including junction LLR scores and SRU for TIS/TTS."""
     setup_logging()
     from .pipeline.feature_metrics import feature_metrics
@@ -273,6 +296,32 @@ def orf_composite_cmd(orfs: str, feature_metrics: str, feature_map: str, out_par
     from .pipeline.orf_composite import orf_composite
     orf_composite(orfs, feature_metrics, feature_map, out_parquet)
     log_info("Composite ORF scores written")
+
+@cli.command("map-orfs")
+@click.option('--orfs', 'orfs_parquet', required=True, help='Canonical ORFs with tran_id,start_pos_tran,stop_pos_tran (Parquet).')
+@click.option('--feature-map', 'feature_map_parquet', required=True, help='Transcript→feature mapping Parquet.')
+@click.option('--features', 'features_parquet', required=True, help='Feature table Parquet.')
+@click.option('--out', 'out_parquet', required=True, help='Output per-ORF feature chains Parquet.')
+@click.option('--progress/--no-progress', default=True, help='Show progress bars (default: on).')
+@click.option('--tis-range', default=15, type=int, help='Half-window around TIS/TTS in transcript coords (default: 15).')
+@click.option('--flank-nt', default=60, type=int, help='Upstream/downstream chunk window size in nt (default: 60).')
+def map_orfs_cmd(orfs_parquet: str, feature_map_parquet: str, features_parquet: str, out_parquet: str, progress: bool, tis_range: int, flank_nt: int):
+    """Slice transcript feature chains into per-ORF chains and ranges."""
+    setup_logging()
+    from .pipeline.map_orfs import map_orfs
+    map_orfs(orfs_parquet, feature_map_parquet, features_parquet, out_parquet, progress=progress, tis_range=tis_range, flank_nt=flank_nt)
+    log_info("Mapped ORFs to feature chains")
+
+@cli.command("inspect")
+@click.option('--parquet', 'parquet_path', required=True, help='Parquet file to inspect.')
+@click.option('--limit', default=5, type=int, help='Number of ORFs to preview (default: 5).')
+@click.option('--expand/--no-expand', default=True, help='Expand composite parts in the preview (default: on).')
+@click.option('--out-csv', type=click.Path(), help='Optional path to write an expanded CSV preview.')
+def inspect_cmd(parquet_path: str, limit: int, expand: bool, out_csv: Optional[str]):
+    """Inspect a Parquet file (schema, summary, and an optional expanded composite preview)."""
+    setup_logging()
+    from .pipeline.inspect import inspect_parquet
+    inspect_parquet(parquet_path, limit=limit, expand=expand, out_csv=out_csv)
 
 if __name__ == '__main__':
     cli()

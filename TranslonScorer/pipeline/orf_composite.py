@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import polars as pl
 
@@ -38,9 +38,9 @@ def _features_for_orf(
     positions match the ORF start/stop respectively.
     """
     chain: List[str] = fmap_row['feature_chain']
-    tr_starts: List[int | None] = fmap_row['tran_ranges_start']
-    tr_ends: List[int | None] = fmap_row['tran_ranges_end']
-    tr_pos: List[int | None] = fmap_row.get('tran_pos') or [None] * len(chain)
+    tr_starts: List[Optional[int]] = fmap_row['tran_ranges_start']
+    tr_ends: List[Optional[int]] = fmap_row['tran_ranges_end']
+    tr_pos: List[Optional[int]] = fmap_row.get('tran_pos') or [None] * len(chain)
 
     used: List[str] = []
     prev_in = False
@@ -87,7 +87,7 @@ def orf_composite(
     feature_metrics_path: str,
     feature_map_path: str,
     out_parquet: str,
-    weights: Dict[str, float] | None = None,
+    weights: Optional[Dict[str, float]] = None,
 ) -> str:
     """Aggregate per-feature metrics into composite ORF scores and write Parquet.
 
@@ -157,4 +157,3 @@ def orf_composite(
     out = pl.from_dicts(out_rows)
     out.write_parquet(out_parquet)
     return out_parquet
-

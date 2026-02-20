@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import polars as pl
 import numpy as np
@@ -10,7 +10,7 @@ from .frame_crosstalk import estimate_crosstalk_matrix, invert_and_correct
 from .junction_model import estimate_junction_expectation, junction_llr
 
 
-def _profiles_to_tran_df(prof: pl.DataFrame, tran_id: str | None = None) -> pl.DataFrame:
+def _profiles_to_tran_df(prof: pl.DataFrame, tran_id: Optional[str] = None) -> pl.DataFrame:
     df = prof
     if tran_id is not None:
         df = df.filter(pl.col('tran_id') == tran_id)
@@ -147,7 +147,7 @@ def feature_metrics(
     profiles_parquet: str,
     feature_parquet: str,
     feature_map_parquet: str,
-    genome_bam_splits: pl.DataFrame | None = None,
+    genome_bam_splits: Optional[pl.DataFrame] = None,
     out_parquet: str = 'feature_metrics.parquet',
     sru_range: int = 15,
 ) -> str:
@@ -197,4 +197,3 @@ def feature_metrics(
     out.write_parquet(out_parquet)
     log_info(f"Feature metrics written: {out_parquet}")
     return out_parquet
-

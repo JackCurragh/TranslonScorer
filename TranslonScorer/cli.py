@@ -1,6 +1,7 @@
 """Command-line interface for TranslonScorer."""
 
 import click
+from typing import Optional
 import polars as pl
 from .pipeline.config import Config
 from .pipeline.validator import validate_config
@@ -231,7 +232,7 @@ def features(annotation: str, output_prefix: str):
 @click.option('--feature-map', 'feature_map', required=True, help='Transcript→feature map Parquet.')
 @click.option('--splits-csv', help='Optional CSV of split junction counts with columns chr,donor_pos,acceptor_pos,strand,count')
 @click.option('--out', 'out_parquet', required=True, help='Output feature metrics Parquet path.')
-def feature_metrics_cmd(profiles: str, features: str, feature_map: str, splits_csv: str | None, out_parquet: str):
+def feature_metrics_cmd(profiles: str, features: str, feature_map: str, splits_csv: Optional[str], out_parquet: str):
     """Compute per-feature metrics including junction LLR scores and SRU for TIS/TTS."""
     setup_logging()
     from .pipeline.feature_metrics import feature_metrics

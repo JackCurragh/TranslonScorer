@@ -9,6 +9,7 @@ import pysam
 import polars as pl
 import oxbow as ox
 from ..utils.logging import log_info, log_error, log_warning
+from typing import Optional
 import os
 import sys
 
@@ -27,9 +28,9 @@ def readbam(
     bampath,
     *,
     collapsed: bool = False,
-    count_from: str | None = None,
-    count_pattern: str | None = None,
-    count_tag: str | None = None,
+    count_from: Optional[str] = None,
+    count_pattern: Optional[str] = None,
+    count_tag: Optional[str] = None,
     unique: bool = False,
     include_qname: bool = False,
 ):

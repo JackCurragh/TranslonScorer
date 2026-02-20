@@ -2,13 +2,6 @@
 
 import click
 import polars as pl
-from .pipeline.workflow import (
-    process_bam_workflow,
-    find_orfs_workflow,
-    score_orfs_workflow,
-    plot_workflow,
-    all_workflow,
-)
 from .pipeline.config import Config
 from .pipeline.validator import validate_config
 from .utils.logging import setup_logging, log_info
@@ -79,6 +72,7 @@ def all(**kwargs):
     setup_logging()
     config = Config.from_click_args(**kwargs)
     validate_config(config)
+    from .pipeline.workflow import all_workflow
     all_workflow(config)
     log_info("Pipeline completed successfully!")
 
@@ -97,6 +91,7 @@ def process_bam(bam: str, chromsizes: str, annotation: str, output: str, strande
     config._validate_file_exists(config.bam, 'BAM')
     config._validate_file_exists(config.chromsizes, 'Chromosome sizes')
     config._validate_file_exists(config.annotation, 'Annotation')
+    from .pipeline.workflow import process_bam_workflow
     process_bam_workflow(config)
     log_info("BAM processing complete!")
 
@@ -109,6 +104,7 @@ def find_orfs(**kwargs):
     # minimal validation of inputs for this step
     config._validate_file_exists(config.sequence, 'Sequence')
     config._validate_file_exists(config.annotation, 'Annotation')
+    from .pipeline.workflow import find_orfs_workflow
     orf_df, _ = find_orfs_workflow(config)
     orf_df.write_csv(f"{config.output}_orfs.csv")
     log_info("ORF finding complete!")
@@ -129,7 +125,8 @@ def profiles(**kwargs):
         raise click.BadParameter('Provide one of: --bam (classic/collapsed), --zarr-root with --read-index-parquet and --sample, or --bigwig/--forward-bigwig+--reverse-bigwig')
 
     # Load annotation
-    cds_df, exon_df = __import__('TranslonScorer.file_handlers.bam', fromlist=['']).getexons_and_cds(config.annotation)
+    from .file_handlers.bam import getexons_and_cds
+    cds_df, exon_df = getexons_and_cds(config.annotation)
 
     from .pipeline.profiles import profiles_from_bam, profiles_from_zarr, profiles_from_bigwig, write_profiles_parquet
     from .pipeline.locus_profiles import build_locus_profiles_zarr
@@ -194,9 +191,11 @@ def score_orfs(orfs: str, exons: str, bigwig: str, output: str, scoring_method: 
     # load inputs
     orf_df = pl.read_csv(orfs)
     exon_df = pl.read_csv(exons)
+    from .pipeline.workflow import score_orfs_workflow
     scored = score_orfs_workflow(config, bigwig, exon_df, orf_df)
     scored_path = f"{output}_orfs_scored.csv"
     scored.write_csv(scored_path)
+    from .visualization import plots
     plots.plottop10(scored_path, bigwig, exons, 30, output)
     log_info("ORF scoring complete!")
 
@@ -209,6 +208,7 @@ def score_orfs(orfs: str, exons: str, bigwig: str, output: str, scoring_method: 
 def plot(scored_orfs: str, bigwig: str, exons: str, plot_range: int, output: str):
     """Generate visualization reports from scored ORFs."""
     setup_logging()
+    from .visualization import plots
     plots.plottop10(scored_orfs, bigwig, exons, plot_range, output)
     log_info("Report generation complete!")
 
@@ -276,7 +276,3 @@ def orf_composite_cmd(orfs: str, feature_metrics: str, feature_map: str, out_par
 
 if __name__ == '__main__':
     cli()
-    # Zarr unique read matrix
-    func = click.option('--zarr-root', help='Root path to Zarr unique-read matrix (samples x read_id).')(func)
-    func = click.option('--read-index-parquet', help='Parquet index mapping read_id to genomic coords.')(func)
-    func = click.option('--sample', 'samples', multiple=True, help='Sample(s) to process from Zarr. Repeatable.')(func)

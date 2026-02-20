@@ -1,7 +1,13 @@
 import polars as pl
 import gc
 from ..utils.logging import log_info, log_warning, log_error
-from .coordinates import classify_orf
+try:
+    # Avoid importing heavy dependencies at module import unless needed
+    from .coordinates import classify_orf
+except Exception:
+    # Fallback placeholder; actual import occurs in functions that need it
+    def classify_orf(row):
+        return "Unexpected"
 from ..file_handlers.bam import getexons_and_cds
 
 

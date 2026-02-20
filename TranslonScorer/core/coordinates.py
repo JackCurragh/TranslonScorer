@@ -9,7 +9,6 @@ import polars as pl
 from ..utils.logging import log_info, log_warning
 from ..file_handlers.bam import getexons_and_cds
 from pyfaidx import Fasta
-import pyranges as pr
 
 def change_point_analysis(offset_df):
     """
@@ -212,6 +211,9 @@ def gettranscripts(seq, annotation, outfilename):
     Example:
         output_file = gettranscripts("genome.fa", "annotation.gff", outfile="transcripts.fa")
     """
+    # Import pyranges lazily to avoid hard dependency at module import time
+    import pyranges as pr
+
     # First, get available chromosomes from the genome.fa file
     log_info("Reading genome file to get available chromosomes")
     genome = Fasta(seq)

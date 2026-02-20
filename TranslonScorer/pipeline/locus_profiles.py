@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Iterable, Iterator, List, Tuple
+from typing import Dict, Iterable, Iterator, List, Tuple, Optional
 
 import numpy as np
 import polars as pl
@@ -10,7 +10,7 @@ import zarr
 from ..utils import log_info, log_warning
 
 
-def _load_offsets_dict(path: str | None, default_offset: int = 15) -> Dict[int, int]:
+def _load_offsets_dict(path: Optional[str], default_offset: int = 15) -> Dict[int, int]:
     if not path:
         return {}
     try:
@@ -47,8 +47,8 @@ def build_locus_profiles_zarr(
     samples: List[str],
     loci_bed: str,
     *,
-    sample_to_index: Dict[str, int] | None = None,
-    offsets_file: str | None = None,
+    sample_to_index: Optional[Dict[str, int]] = None,
+    offsets_file: Optional[str] = None,
     default_offset: int = 15,
     out_zarr: str = "locus_profiles.zarr",
 ) -> str:
@@ -154,4 +154,3 @@ def build_locus_profiles_zarr(
             prof[s_i, :] = vec
 
     return out_zarr
-

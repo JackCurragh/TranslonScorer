@@ -243,28 +243,35 @@ def getexons_and_cds(annotation_file, tran=[]):
         ])
     )
 
-    # Calculate transcript-space exon offsets (strand-aware cumulative coordinates)
-    # For each transcript, produce per-exon transcript starts and stops where
-    # tran_start[i] = sum_{k < i} (stop[k]-start[k])
-    # tran_stop[i]  = tran_start[i] + (stop[i]-start[i])
-    def _tran_coords(starts: list[int], stops: list[int]) -> tuple[list[int], list[int]]:
-        lens = [int(b) - int(a) for a, b in zip(starts, stops)]
-        tran_starts = []
+    # Calculate transcript-space exon offsets using typed UDFs (Polars 1.36 requires return_dtype)
+    # lens = stop - start (per-exon list)
+    exon_df = exon_df.with_columns([
+        pl.struct(["start", "stop"]).map_elements(
+            lambda s: [int(b) - int(a) for a, b in zip(s["start"], s["stop"])],
+            return_dtype=pl.List(pl.Int64),
+        ).alias("_lens")
+    ])
+
+    # tran_start = cumulative offsets of lens, starting at 0
+    def _cumstarts(lens: list[int]) -> list[int]:
         acc = 0
+        out = []
         for L in lens:
-            tran_starts.append(acc)
-            acc += L
-        tran_stops = [ts + L for ts, L in zip(tran_starts, lens)]
-        return tran_starts, tran_stops
+            out.append(acc)
+            acc += int(L)
+        return out
 
     exon_df = exon_df.with_columns([
-        pl.struct(["start", "stop"]).map_elements(lambda s: _tran_coords(s["start"], s["stop"]))
-        .alias("_tc")
+        pl.col("_lens").map_elements(_cumstarts, return_dtype=pl.List(pl.Int64)).alias("tran_start")
     ])
+
+    # tran_stop = tran_start[i] + lens[i]
     exon_df = exon_df.with_columns([
-        pl.col("_tc").map_elements(lambda t: t[0]).alias("tran_start"),
-        pl.col("_tc").map_elements(lambda t: t[1]).alias("tran_stop"),
-    ]).drop("_tc")
+        pl.struct(["tran_start", "_lens"]).map_elements(
+            lambda s: [int(ts) + int(L) for ts, L in zip(s["tran_start"], s["_lens"])],
+            return_dtype=pl.List(pl.Int64),
+        ).alias("tran_stop")
+    ]).drop("_lens")
     
     log_info(f"Found {len(cds_df)} CDS and {len(exon_df)} exon features")
     return cds_df, exon_df

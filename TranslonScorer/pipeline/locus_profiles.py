@@ -5,9 +5,26 @@ from typing import Dict, Iterable, Iterator, List, Tuple, Optional
 
 import numpy as np
 import polars as pl
-import zarr
+import importlib
 
 from ..utils import log_info, log_warning
+
+_zarr_mod = None
+_zarr_err = None
+
+def _require_zarr():
+    global _zarr_mod, _zarr_err
+    if _zarr_mod is None and _zarr_err is None:
+        try:
+            _zarr_mod = importlib.import_module('zarr')
+        except Exception as e:
+            _zarr_err = e
+    if _zarr_mod is None:
+        raise ImportError(
+            "Zarr is required for locus profile export. Install with pip: "
+            "pip install 'zarr>=2.16' 'numcodecs>=0.12'"
+        ) from _zarr_err
+    return _zarr_mod
 
 
 def _load_offsets_dict(path: Optional[str], default_offset: int = 15) -> Dict[int, int]:
@@ -64,6 +81,7 @@ def build_locus_profiles_zarr(
       /loci/{locus_id}/profiles  (2D float32 [n_samples, len(pos)])
     """
     # Open inputs
+    zarr = _require_zarr()
     store = zarr.open(zarr_root, mode='r')
     if 'counts' not in store:
         raise ValueError("Zarr root does not contain 'counts' array")

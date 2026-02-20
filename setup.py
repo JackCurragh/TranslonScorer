@@ -37,6 +37,13 @@ setup(
         ],
     },
     install_requires=requirements,
+    extras_require={
+        "bigwig": [
+            # Provide a pip-only compatible resolution hint for users
+            "numpy>=1.26,<2",
+            "pyBigWig>=0.3.22",
+        ]
+    },
     license="MIT license",
     include_package_data=True,
     keywords="TranslonScorer ribosome-profiling translation-analysis",

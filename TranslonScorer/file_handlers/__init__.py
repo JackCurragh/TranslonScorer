@@ -1,36 +1,16 @@
 """
 File handling functionality for TranslonScorer.
 
-This package contains modules for handling different file formats:
-- BAM file processing
-- BED file processing
-- BigWig file processing
+Avoid importing heavy optional dependencies at package import time to
+prevent unnecessary ImportError/ABI issues (e.g., pyBigWig vs NumPy).
+
+Import submodules explicitly where used, e.g.:
+
+    from TranslonScorer.file_handlers import bam as bam_handlers
+    from TranslonScorer.file_handlers import bigwig as bigwig_handlers
+    from TranslonScorer.file_handlers import bed as bed_handlers
+
+This module intentionally does not import submodules eagerly.
 """
 
-from .bam import (
-    get_bam_tran,
-    bamtranscript,
-    process_transcriptomic_bam,
-    calculate_differences,
-    detect_bam_type,
-)
-from .bed import (
-    asitecalc,
-    bedtobigwig,
-)
-from .bigwig import (
-    transcriptreads,
-    scoring,
-)
-
-__all__ = [
-    'get_bam_tran',
-    'bamtranscript',
-    'process_transcriptomic_bam',
-    'calculate_differences',
-    'detect_bam_type',
-    'asitecalc',
-    'bedtobigwig',
-    'transcriptreads',
-    'scoring',
-] 
+__all__ = []

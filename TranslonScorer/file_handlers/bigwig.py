@@ -7,7 +7,16 @@ including conversion to other formats and coordinate transformations.
 
 from typing import Dict, List, Optional, Union, Tuple, Any, Set
 import polars as pl
-import pyBigWig as bw
+# Robust import with a helpful message if NumPy/pyBigWig ABI mismatches
+try:
+    import pyBigWig as bw
+except Exception as e:  # ImportError, AttributeError due to NumPy 2.x ABI
+    raise ImportError(
+        "pyBigWig failed to import. This often indicates a NumPy ABI mismatch. "
+        "For a pip-only setup, install compatible wheels:\n"
+        "  pip install --upgrade 'numpy<2' 'pyBigWig>=0.3.22'\n"
+        "Then reinstall this package if needed (pip install -e .)."
+    ) from e
 from ..utils.logging import log_info, log_warning, log_error
 from ..core.scoring import oldscoring, newscoring, globalscores, existingscore, assigningscore
 
@@ -1137,4 +1146,3 @@ def add_strand_to_orfs(orf_df, exon_df):
     )
     
     return orf_df
-

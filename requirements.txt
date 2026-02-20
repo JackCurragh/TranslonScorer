@@ -1,11 +1,13 @@
 # Core Data Processing
 # Use newer versions compatible with oxbow wheels (avoids building Rust)
 polars==1.36.1
-numpy==2.0.2
+# Pin to NumPy <2 to avoid ABI mismatches with C-extensions (e.g., pyBigWig)
+numpy>=1.26,<2
 pandas==2.3.3
 pyarrow==21.0.0
 pysam==0.22.1
-pyBigWig==0.3.22
+# Relax pyBigWig to allow solver to pick a build matching NumPy
+pyBigWig>=0.3.22
 pyfaidx==0.8.1.1
 pyahocorasick==2.1.0
 oxbow==0.5.1

@@ -44,7 +44,6 @@ def common_options(func):
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-@common_options
 def cli(ctx, **kwargs):
     """TranslonScorer: A tool for identifying and scoring translational events from Ribo-seq data.
     
@@ -214,8 +213,8 @@ def plot(scored_orfs: str, bigwig: str, exons: str, plot_range: int, output: str
     log_info("Report generation complete!")
 
 @cli.command("features")
-@click.option('--annotation', '-a', required=True, help='GTF annotation file.')
-@click.option('--output-prefix', '-o', required=True, help='Output prefix for feature tables (Parquet).')
+@click.option('-a', '--annotation', required=True, help='GTF annotation file.')
+@click.option('-o', '--output', '--output-prefix', 'output_prefix', required=True, help='Output prefix for feature tables (Parquet).')
 def features(annotation: str, output_prefix: str):
     """Emit locus features and transcript→feature mappings (no signals)."""
     setup_logging()

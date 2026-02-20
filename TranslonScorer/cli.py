@@ -1,5 +1,6 @@
 """Command-line interface for TranslonScorer."""
 
+import os
 import click
 from typing import Optional
 import polars as pl
@@ -112,13 +113,34 @@ def find_orfs(**kwargs):
 
 @cli.command("profiles")
 @common_options
-@click.option('--profiles-out', required=True, help='Output path (Parquet for transcript profiles or Zarr path for locus mode).')
+@click.option(
+    '--profiles-out',
+    required=False,
+    help='Optional output path. Defaults under -o: transcript_profiles.parquet (transcript) or locus_profiles.zarr (locus).'
+)
 @click.option('--loci-bed', help='BED of loci to build genomic A-site profile matrices (Zarr).')
 @click.option('--offsets-file', help='CSV with columns length,offset to override defaults.')
 def profiles(**kwargs):
     """Generate transcript-space A-site profiles from BAM (classic/collapsed), Zarr, or BigWig."""
     setup_logging()
     config = Config.from_click_args(**kwargs)
+    # Decide default output path when --profiles-out is omitted
+    if not kwargs.get('profiles_out'):
+        out_base = kwargs.get('output') or '.'
+        # If -o looks like a directory (exists, '.', or endswith '/'), drop file inside it.
+        if out_base in (None, '', '.') or out_base.endswith('/') or os.path.isdir(out_base):
+            out_dir = out_base if out_base and out_base != '' else '.'
+            kwargs['profiles_out'] = os.path.join(
+                out_dir,
+                'locus_profiles.zarr' if kwargs.get('loci_bed') else 'transcript_profiles.parquet'
+            )
+        else:
+            # Treat -o as a prefix; append a suffix + extension
+            base = out_base.rstrip('/')
+            kwargs['profiles_out'] = (
+                f"{base}_locus_profiles.zarr" if kwargs.get('loci_bed')
+                else f"{base}_transcript_profiles.parquet"
+            )
     # Minimal file checks
     config._validate_file_exists(config.annotation, 'Annotation')
     if not (config.bam or config.zarr_root or config.bigwig or (config.forward_bigwig and config.reverse_bigwig)):

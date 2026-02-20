@@ -52,27 +52,42 @@ class Config:
     
     @classmethod
     def from_click_args(cls, **kwargs) -> 'Config':
-        """Create a Config instance from Click command arguments."""
+        """Create a Config instance from Click command arguments.
+
+        Notes
+        -----
+        The CLI may pass auxiliary arguments that are not part of the
+        Config dataclass (e.g. `profiles_out`, `loci_bed`). Historically
+        these leaked into the constructor causing `TypeError: unexpected
+        keyword argument`. To make this robust, only dataclass fields are
+        forwarded to the constructor and everything else is ignored here.
+        """
         # Process any string lists that come as comma-separated values
         if 'start_codons' in kwargs and isinstance(kwargs['start_codons'], str):
             kwargs['start_codons'] = kwargs['start_codons'].split(',')
-        
+
         if 'stop_codons' in kwargs and isinstance(kwargs['stop_codons'], str):
             kwargs['stop_codons'] = kwargs['stop_codons'].split(',')
-        
+
         # Handle naming differences between CLI and config
         if 'bam_path' in kwargs:
             kwargs['bam'] = kwargs.pop('bam_path')
-        
+
         if 'bigwig_path' in kwargs:
             kwargs['bigwig'] = kwargs.pop('bigwig_path')
-            
+
         if 'outfile' in kwargs:
             kwargs['output'] = kwargs.pop('outfile')
-            
+
+        # Only keep keys that are actual dataclass fields
+        allowed_keys = set(cls.__dataclass_fields__.keys())
+
         # Filter out None values for optional parameters to use defaults
-        filtered_kwargs = {k: v for k, v in kwargs.items() if v is not None or k in ['stranded']}
-        
+        filtered_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in allowed_keys and (v is not None or k in ['stranded'])
+        }
+
         return cls(**filtered_kwargs)
     
     def validate(self) -> None:

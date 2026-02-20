@@ -1,8 +1,8 @@
 import polars as pl
 import gc
 from ..utils.logging import log_info, log_warning, log_error
-from .orffinder import classify_orf
-from .orffinder import getexons_and_cds
+from .coordinates import classify_orf
+from ..file_handlers.bam import getexons_and_cds
 
 
 

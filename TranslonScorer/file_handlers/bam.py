@@ -191,7 +191,8 @@ def getexons_and_cds(annotation_file, tran=[]):
         annotation_file,
         has_header=False,
         separator="\t",
-        comment_char="#",
+        # Polars 1.36 uses comment_prefix instead of comment_char
+        comment_prefix="#",
         columns=["column_1", "column_3", "column_4", "column_5", "column_7", "column_9"],
     ).rename({
         "column_1": "chr",

@@ -325,6 +325,66 @@ def import_bed12(
                     'start_pos_tran': t_start, 'stop_pos_tran': t_end,
                     'transcript_ambiguity': (assign_policy=='all' and len(keep)>1),
                 })
+        chrom = _norm_chr(str(row[0])); start = int(row[1]); end = int(row[2])
+        name = str(row[3]) if not pd.isna(row[3]) else f'orf_{idx}'
+        strand = str(row[5])
+        blocks = _bed12_to_blocks(row)
+        if not blocks:
+            continue
+        juncs = _junctions_from_blocks(blocks, strand)
+        length_nt = sum(b2-b1 for b1,b2 in blocks)
+        candidates = by_chr_strand.get((chrom, strand), [])
+        scored: List[Tuple[int,int,str]] = []
+        for tid in candidates:
+            tx = tx_models[tid]
+            tb = tx_bounds[tid]
+            if _overlap_len((start,end), tb) == 0:
+                continue
+            ov = 0
+            for b in blocks:
+                for ex in tx.exons:
+                    ov += _overlap_len(b, ex)
+            tj = _junctions_from_blocks(tx.exons, strand)
+            jm = sum(1 for jj in juncs if jj in tj)
+            if require_junction_match and len(juncs) > 0 and jm != len(juncs):
+                continue
+            if ov == 0:
+                continue
+            scored.append((jm, ov, tid))
+        if not scored:
+            out_rows.append({
+                'orf_id': f'bed12:{name}:{chrom}:{start}-{end}:{strand}',
+                'source': 'bed12', 'chrom': chrom, 'start': start, 'end': end, 'strand': strand,
+                'block_starts': [b[0] for b in blocks], 'block_ends': [b[1] for b in blocks],
+                'length_nt': length_nt, 'tran_id': None, 'start_pos_tran': None, 'stop_pos_tran': None,
+                'transcript_ambiguity': True,
+            })
+            continue
+        if assign_policy == 'best':
+            scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+            keep = [scored[0]]
+        elif assign_policy == 'all':
+            keep = scored
+        else:
+            keep = scored
+        for jm, ov, tid in keep:
+            tx = tx_models[tid]
+            gstart = blocks[0][0]
+            gend_last = blocks[-1][1] - 1
+            t_start = _map_genomic_to_tran(tx, gstart)
+            if t_start is not None:
+                t_end = t_start + length_nt
+            else:
+                te_last = _map_genomic_to_tran(tx, gend_last)
+                t_end = te_last + 1 if te_last is not None else None
+            out_rows.append({
+                'orf_id': f'bed12:{name}:{chrom}:{start}-{end}:{strand}:{tid}',
+                'source': 'bed12', 'chrom': chrom, 'start': start, 'end': end, 'strand': strand,
+                'block_starts': [b[0] for b in blocks], 'block_ends': [b[1] for b in blocks],
+                'length_nt': length_nt, 'tran_id': tid,
+                'start_pos_tran': t_start, 'stop_pos_tran': t_end,
+                'transcript_ambiguity': (assign_policy=='all' and len(keep)>1),
+            })
     df = pl.from_pandas(pd.DataFrame(out_rows))
     os.makedirs(os.path.dirname(out_parquet) or '.', exist_ok=True)
     df.write_parquet(out_parquet)

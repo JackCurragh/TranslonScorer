@@ -13,6 +13,10 @@ class Config:
     
     # Input files
     bam: Optional[str] = None
+    bam_collapsed: bool = False
+    bam_count_from: Optional[str] = None  # 'name' or 'tag'
+    bam_count_pattern: Optional[str] = None
+    bam_count_tag: Optional[str] = None
     chromsizes: Optional[str] = None
     sequence: str = field(default="")
     annotation: str = field(default="")
@@ -21,6 +25,11 @@ class Config:
     bigwig: Optional[str] = None
     forward_bigwig: Optional[str] = None
     reverse_bigwig: Optional[str] = None
+
+    # Zarr unique read matrix
+    zarr_root: Optional[str] = None
+    read_index_parquet: Optional[str] = None
+    samples: Optional[List[str]] = None
     
     # Analysis options
     stranded: bool = False
@@ -108,9 +117,9 @@ class Config:
                 raise ValueError("Forward BigWig must be provided with Reverse BigWig")
         
         # Validate input combinations
-        if not self.bam and not self.bigwig and not (self.forward_bigwig and self.reverse_bigwig):
+        if not any([self.bam, self.bigwig, (self.forward_bigwig and self.reverse_bigwig), self.zarr_root]):
             raise ValueError(
-                "Either BAM file or BigWig file or forward/reverse BigWig files must be provided"
+                "Provide one of: BAM, BigWig, forward+reverse BigWigs, or Zarr root"
             )
             
         # Set up bigwig_paths based on inputs

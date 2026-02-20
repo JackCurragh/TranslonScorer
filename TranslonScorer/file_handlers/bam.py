@@ -23,16 +23,30 @@ else:
         return wrapper
 
 
-def readbam(bampath):
+def readbam(
+    bampath,
+    *,
+    collapsed: bool = False,
+    count_from: str | None = None,
+    count_pattern: str | None = None,
+    count_tag: str | None = None,
+    unique: bool = False,
+    include_qname: bool = False,
+):
     """
-    Reads a given BAM file, extracts relevant information, and returns it as a DataFrame.
+    Read a BAM file into a normalized table.
 
-    Parameters:
-    - bampath (str): Path to the BAM file to be processed.
+    Args:
+        bampath: Path to BAM file.
+        collapsed: Treat BAM as collapsed (counts per read encoded in name or tag).
+        count_from: One of {None, 'name', 'tag'}. If collapsed, where to parse count.
+        count_pattern: Regex with named group 'count' when count_from='name', e.g. r'.*_x(?P<count>\\d+)$'.
+        count_tag: SAM tag name when count_from='tag', e.g. 'RC'.
+        unique: If True, do not group/aggregate; return one row per alignment.
+        include_qname: If True, include 'qname' column (useful for Zarr linking).
 
     Returns:
-    - df (DataFrame): Polars DataFrame containing the extracted information from the BAM file.
-                     Contains columns: chr, start, stop, length, strand, count
+        Polars DataFrame with columns: chr, start, stop, length, strand, count[, qname]
     """
     # Check if index exists
     if not (os.path.exists(f"{bampath}.bai") or os.path.exists(bampath.replace(".bam", ".bai"))):
@@ -75,14 +89,63 @@ def readbam(bampath):
         .alias('strand')
     ).drop('flag')
     
-    # Keep only needed columns and add count
-    df = df.select(['chr', 'start', 'stop', 'length', 'strand']).with_columns(count=pl.lit(1))
+    # Keep only needed columns; optionally keep qname
+    keep_cols = ['chr', 'start', 'stop', 'length', 'strand']
+    if include_qname and 'qname' in df.columns:
+        keep_cols.append('qname')
+    df = df.select(keep_cols)
+
+    # Add count column
+    if collapsed:
+        if count_from == 'name':
+            import re
+            pattern = re.compile(count_pattern or r'.*_x(?P<count>\d+)$')
+            if 'qname' not in df.columns:
+                log_warning("Collapsed BAM count_from=name requested but qname not available; defaulting counts to 1")
+                df = df.with_columns(count=pl.lit(1))
+            else:
+                df = df.with_columns(
+                    pl.col('qname')
+                    .map_elements(lambda s: int(pattern.match(s).group('count')) if pattern.match(s) else 1)
+                    .alias('count')
+                )
+        elif count_from == 'tag':
+            # Fallback to pysam one-pass to fetch tag efficiently if oxbow didn't include it
+            if not count_tag:
+                log_warning("Collapsed BAM count_from=tag requested but count_tag not provided; defaulting counts to 1")
+                df = df.with_columns(count=pl.lit(1))
+            else:
+                # Build qname -> count map using pysam
+                try:
+                    import pysam as _pysam
+                    q2c = {}
+                    with _pysam.AlignmentFile(bampath, 'rb') as bam:
+                        for aln in bam.fetch(until_eof=True):
+                            try:
+                                q2c[aln.query_name] = int(aln.get_tag(count_tag))
+                            except Exception:
+                                q2c[aln.query_name] = 1
+                    if 'qname' in df.columns:
+                        df = df.with_columns(
+                            pl.col('qname').map_elements(lambda s: q2c.get(s, 1)).alias('count')
+                        )
+                    else:
+                        log_warning("qname not present; cannot apply tag-derived counts. Using count=1")
+                        df = df.with_columns(count=pl.lit(1))
+                except Exception as e:
+                    log_warning(f"Failed to parse tag-derived counts: {e}; using count=1")
+                    df = df.with_columns(count=pl.lit(1))
+        else:
+            df = df.with_columns(count=pl.lit(1))
+    else:
+        df = df.with_columns(count=pl.lit(1))
         
-    # Group by position to get counts
-    df = df.group_by(['chr', 'start', 'stop', 'length', 'strand']).agg(
-        pl.col('count').sum()
-    ).sort(['chr', 'start'])
-    
+    # Aggregate unless unique requested
+    if not unique:
+        df = df.group_by(['chr', 'start', 'stop', 'length', 'strand']).agg(
+            pl.col('count').sum()
+        ).sort(['chr', 'start'])
+
     log_info(f"Processed {len(df)} unique read positions")
     return df
 
@@ -155,12 +218,29 @@ def getexons_and_cds(annotation_file, tran=[]):
             pl.col("strand").first(),
         ])
     )
-    
-    # Calculate transcript coordinates
+
+    # Calculate transcript-space exon offsets (strand-aware cumulative coordinates)
+    # For each transcript, produce per-exon transcript starts and stops where
+    # tran_start[i] = sum_{k < i} (stop[k]-start[k])
+    # tran_stop[i]  = tran_start[i] + (stop[i]-start[i])
+    def _tran_coords(starts: list[int], stops: list[int]) -> tuple[list[int], list[int]]:
+        lens = [int(b) - int(a) for a, b in zip(starts, stops)]
+        tran_starts = []
+        acc = 0
+        for L in lens:
+            tran_starts.append(acc)
+            acc += L
+        tran_stops = [ts + L for ts, L in zip(tran_starts, lens)]
+        return tran_starts, tran_stops
+
     exon_df = exon_df.with_columns([
-        pl.col("start").apply(lambda x: list(range(len(x)))).alias("tran_start"),
-        pl.col("stop").apply(lambda x: list(range(len(x)))).alias("tran_stop"),
+        pl.struct(["start", "stop"]).map_elements(lambda s: _tran_coords(s["start"], s["stop"]))
+        .alias("_tc")
     ])
+    exon_df = exon_df.with_columns([
+        pl.col("_tc").map_elements(lambda t: t[0]).alias("tran_start"),
+        pl.col("_tc").map_elements(lambda t: t[1]).alias("tran_stop"),
+    ]).drop("_tc")
     
     log_info(f"Found {len(cds_df)} CDS and {len(exon_df)} exon features")
     return cds_df, exon_df

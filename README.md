@@ -22,11 +22,11 @@ Run the entire pipeline end-to-end with a single command:
 
 ```sh
 translonscorer all \
-    -b ribo.bam \
-    -c chrom.sizes \
-    -s genome.fa \
-    -a anno.gtf \
-    -o output
+  -b ribo.bam \
+  -c chrom.sizes \
+  -s genome.fa \
+  -a anno.gtf \
+  -o output
 ```
 
 This will:
@@ -42,10 +42,10 @@ For more control, you can run each step separately:
 #### Process BAM Files
 ```sh
 translonscorer process-bam \
-    -b ribo.bam \
-    -c chrom.sizes \
-    -a anno.gtf \
-    -o output
+  -b ribo.bam \
+  -c chrom.sizes \
+  -a anno.gtf \
+  -o output
 ```
 
 The tool automatically detects whether your BAM file contains genomic or transcriptomic alignments and processes it accordingly:
@@ -55,28 +55,27 @@ The tool automatically detects whether your BAM file contains genomic or transcr
 #### Find and Score ORFs
 ```sh
 translonscorer find-orfs \
-    -s genome.fa \
-    -a anno.gtf \
-    -bw coverage.bw \
-    -o output
+  -s genome.fa \
+  -a anno.gtf \
+  -o output
 ```
 
 #### Score Existing ORFs
 ```sh
 translonscorer score-orfs \
-    -f orfs.csv \
-    -bw coverage.bw \
-    -e exons.csv \
-    -o output
+  -f orfs.csv \
+  -w coverage.bw \
+  -e exons.csv \
+  -o output
 ```
 
 #### Generate Visualization Report
 ```sh
 translonscorer plot \
-    -s scored_orfs.csv \
-    -bw coverage.bw \
-    -e exons.csv \
-    -o report
+  -s scored_orfs.csv \
+  -w coverage.bw \
+  -e exons.csv \
+  -o report
 ```
 
 ## Command Options

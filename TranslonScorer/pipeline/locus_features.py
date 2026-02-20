@@ -25,6 +25,15 @@ def _read_gtf(gtf_path: str) -> pl.DataFrame:
             "column_7",  # strand
             "column_9",  # attributes
         ],
+        dtypes={
+            "column_1": pl.Utf8,
+            "column_3": pl.Utf8,
+            "column_4": pl.Int64,
+            "column_5": pl.Int64,
+            "column_7": pl.Utf8,
+            "column_9": pl.Utf8,
+        },
+        ignore_errors=True,
     ).rename(
         {
             "column_1": "chr",
@@ -36,6 +45,7 @@ def _read_gtf(gtf_path: str) -> pl.DataFrame:
         }
     )
 
+    # Normalize chromosome names: allow 'chr' or bare names; keep original text
     # Extract gene_id and transcript_id
     df = df.with_columns(
         pl.col("attributes").str.extract(r'gene_id "([^"]+)"').alias("gene_id"),

@@ -7,6 +7,7 @@ import polars as pl
 from .pipeline.config import Config
 from .pipeline.validator import validate_config
 from .utils.logging import setup_logging, log_info
+from .file_handlers import bam as bam_handlers
 
 
 def common_options(func):
@@ -147,7 +148,6 @@ def profiles(**kwargs):
         raise click.BadParameter('Provide one of: --bam (classic/collapsed), --zarr-root with --read-index-parquet and --sample, or --bigwig/--forward-bigwig+--reverse-bigwig')
 
     # Load annotation
-    from .file_handlers import bam as bam_handlers
     cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
 
     from .pipeline.profiles import profiles_from_bam, profiles_from_zarr, profiles_from_bigwig, write_profiles_parquet

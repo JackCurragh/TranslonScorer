@@ -7,16 +7,26 @@ including conversion to other formats and coordinate transformations.
 
 from typing import Dict, List, Optional, Union, Tuple, Any, Set
 import polars as pl
-# Robust import with a helpful message if NumPy/pyBigWig ABI mismatches
-try:
-    import pyBigWig as bw
-except Exception as e:  # ImportError, AttributeError due to NumPy 2.x ABI
-    raise ImportError(
-        "pyBigWig failed to import. This often indicates a NumPy ABI mismatch. "
-        "For a pip-only setup, install compatible wheels:\n"
-        "  pip install --upgrade 'numpy<2' 'pyBigWig>=0.3.22'\n"
-        "Then reinstall this package if needed (pip install -e .)."
-    ) from e
+import importlib
+
+_bw_mod = None
+_bw_err = None
+
+def _require_pybigwig():
+    global _bw_mod, _bw_err
+    if _bw_mod is None and _bw_err is None:
+        try:
+            _bw_mod = importlib.import_module('pyBigWig')
+        except Exception as e:
+            _bw_err = e
+    if _bw_mod is None:
+        raise ImportError(
+            "pyBigWig failed to import. This often indicates a NumPy ABI mismatch. "
+            "For a pip-only setup, install compatible wheels:\n"
+            "  pip install --upgrade 'numpy<2' 'pyBigWig>=0.3.22'\n"
+            "Then reinstall this package if needed (pip install -e .)."
+        ) from _bw_err
+    return _bw_mod
 from ..utils.logging import log_info, log_warning, log_error
 from ..core.scoring import oldscoring, newscoring, globalscores, existingscore, assigningscore
 
@@ -52,7 +62,8 @@ def open_bigwig(path: str):
     """Safely open and close a BigWig file."""
     bw_file = None
     try:
-        bw_file = bw.open(path)
+        bw_module = _require_pybigwig()
+        bw_file = bw_module.open(path)
         if not bw_file.isBigWig():
             raise ValueError(f"File {path} is not a valid bigWig file")
         yield bw_file
@@ -414,14 +425,14 @@ def transcriptreads(bigwig_file, exon_df, transcript_id=None):
     polars.DataFrame
         DataFrame containing transcript coverage with columns: tran_start, counts
     """
-    import pyBigWig as bw
+    bw_module = _require_pybigwig()
     import polars as pl
     from ..utils.logging import log_info, log_warning, log_error
     import numpy as np
     
     # Open BigWig file if a path was given
     if isinstance(bigwig_file, str):
-        bw_handle = bw.open(bigwig_file)
+        bw_handle = bw_module.open(bigwig_file)
         need_close = True
     else:
         bw_handle = bigwig_file
@@ -662,7 +673,7 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, stranded=False, batch_si
     """
     import os
     import polars as pl
-    import pyBigWig as bw
+    bw_module = _require_pybigwig()
     import time
     import concurrent.futures
     import gc
@@ -1041,7 +1052,7 @@ def score_single_transcript(bigwig_path, exon_df, orf_df, old_scoring, sru_range
         DataFrame: Scored ORFs
     """
     import polars as pl
-    import pyBigWig as bw
+    bw_module = _require_pybigwig()
     from ..utils.logging import log_info
     
     try:
@@ -1049,7 +1060,7 @@ def score_single_transcript(bigwig_path, exon_df, orf_df, old_scoring, sru_range
         tran_id = orf_df["tran_id"][0]
         
         # Open BigWig file
-        with bw.open(bigwig_path) as bw_file:
+        with bw_module.open(bigwig_path) as bw_file:
             # Get transcript coverage
             coverage_df = transcriptreads(bw_file, exon_df, tran_id)
             

@@ -137,6 +137,7 @@ def profiles_from_zarr(
     default_offset: int = 15,
 ) -> Iterator[Tuple[str, pl.DataFrame]]:
     """Compute transcript A-site profiles from Zarr (multi-sample). Yields per-sample profiles."""
+    # zarr_handlers safely defers importing the heavy zarr dependency
     log_info("Streaming Zarr + index for profiles…")
     seen_lengths: set[int] = set()
     offsets: Dict[int, int] | None = None
@@ -181,6 +182,8 @@ def profiles_from_bigwig(
 
     Returns tidy profiles with columns: tran_id, pos, count.
     """
+    # bigwig_handlers imports pyBigWig at module import; required for this path
+
     def _bw_to_profiles(bw) -> pl.DataFrame:
         tran = bigwig_handlers.transcriptreads(bw, exon_df)
         if tran.is_empty():

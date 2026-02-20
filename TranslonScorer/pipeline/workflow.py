@@ -1,277 +1,226 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Dict, Tuple, Union
+
+import polars as pl
 
 from ..utils import log_info
 from .config import Config
-import os
+from ..file_handlers import bam as bam_handlers
+from ..file_handlers import bed as bed_handlers
+from ..file_handlers import bigwig as bw_handlers
+from ..file_handlers import zarr as zarr_handlers
+from ..core import coordinates, orffinder
+from ..visualization import plots
 
 
-def process_bam_workflow(bam_path, annotation_file):
-    """Process BAM file and get exons/CDS."""
-    log_info('Processing BAM file...')
-    # bam_df = bam.readbam(bam_path)
-    
-    # # Get exons and CDS
-    # cds_df, exon_df = bam.getexons_and_cds(annotation_file)
-    
-    # # Process BAM data
-    # bam_type, _ = bam.detect_bam_type(bam_df, exon_df)
-    # if bam_type == 'genomic':
-    #     # First convert genomic coordinates to transcript coordinates
-    #     bam_df = bam.bamtranscript(bam_df, exon_df)
-    #     # Then calculate positions relative to CDS
-    #     bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
-    # else:
-    #     # For transcriptomic BAM, just calculate CDS positions
-    #     bam_df = bam.process_transcriptomic_bam(bam_df, cds_df)
-    
-    # return bam_df, exon_df
+def process_bam_workflow(config: Config) -> Tuple[Union[str, Dict[str, str]], pl.DataFrame, pl.DataFrame]:
+    """Process BAM -> bedGraph/bigWig and return (bigwig_paths, exon_df, cds_df).
+
+    If `config.stranded` is True, returns a dict with forward/reverse bigWig paths.
+    Otherwise returns a single bigWig path string.
+    """
+    log_info("Processing BAM file → coverage tracks…")
+
+    # Read BAM and annotation
+    bam_df = bam_handlers.readbam(
+        config.bam,
+        collapsed=config.bam_collapsed,
+        count_from=config.bam_count_from,
+        count_pattern=config.bam_count_pattern,
+        count_tag=config.bam_count_tag,
+        include_qname=bool(config.bam_count_from in ['name', 'tag'])
+    )
+    cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
+
+    # Detect BAM type and normalize
+    bam_type, _ = bam_handlers.detect_bam_type(bam_df, exon_df)
+    if bam_type == "genomic":
+        bam_df = bam_handlers.bamtranscript(bam_df, exon_df)
+    # Now annotate relative to CDS
+    bam_df = bam_handlers.process_transcriptomic_bam(bam_df, cds_df)
+
+    # Offsets and A-site positions
+    offsets = coordinates.change_point_analysis(bam_df)
+    bed_df = bed_handlers.asitecalc(bam_df, offsets)
+
+    # Write bedGraph and bigWig(s)
+    bedgraph_path = f"{config.output}.bedGraph"
+    bed_df.write_csv(bedgraph_path, separator="\t", include_header=False)
+
+    # Current A-site output is unstranded; write a single bigWig
+    bigwig_paths = bed_handlers.bedtobigwig(bedgraph_path, config.chromsizes, config.output)
+
+    return bigwig_paths, exon_df, cds_df
 
 
-def find_orfs_workflow(sequence_file, annotation_file, start_codons, stop_codons, min_len, max_len):
-    """Find ORFs in transcript sequences."""
-    log_info('Finding ORFs...')
-    # orf_df = orffinder.preporfs(sequence_file, start_codons.split(","), stop_codons.split(","), min_len, max_len)
-    
-    # log_info('Determining relative position of ORFs to CDS...')
-    # # Determine the relative position of ORFs to CDS
-    # orf_df, exon_coords = orfrelativeposition(annotation_file, orf_df)
-    
-    # return orf_df, exon_coords
+def _default_offsets_from_lengths(lengths: list[int]) -> dict:
+    # Conservative default if no offsets provided for Zarr lane
+    return {int(L): 15 for L in set(int(x) for x in lengths)}
 
 
-def score_orfs_workflow(bigwig_paths, exon_df, orf_df, scoring_method, sru_range, stranded):
-    """Score ORFs using BigWig data."""
-    log_info('Scoring ORFs...')
-    # scored_orfs = bigwig.scoring(bigwig_paths, exon_df, orf_df, scoring_method == 'classic', sru_range, stranded)
-    
-    # return scored_orfs
-
-
-def plot_workflow(scored_orfs, bigwig_path, exon_df, plot_range, outfile):
-    """Generate plots for top 10 ORFs."""
-    log_info('Generating plots...')
-    # plots.plottop10(scored_orfs, bigwig_path, exon_df, plot_range, outfile)
-
-
-
-
-
-def all_workflow(
-    config: Config,
-    ) -> None:
-    """Run the entire pipeline workflow.
-
-    Args:
-        config: The configuration object for the pipeline
+def process_zarr_workflow(config: Config) -> Dict[str, str]:
+    """Process Zarr unique-read matrix into per-sample bigWigs.
 
     Returns:
-        None
+        Dict[sample -> bigwig_path]
     """
-    log_info("Starting pipeline...")
+    log_info("Processing Zarr unique-read matrix → per-sample coverage…")
+
+    if not (config.zarr_root and config.read_index_parquet and config.samples):
+        raise ValueError("Zarr lane requires --zarr-root, --read-index-parquet and at least one --sample")
+
+    # Load annotation once
+    cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
+
+    # Determine offsets:
+    # - If user provided offsets file later (not yet wired), we would load it.
+    # - Else derive a conservative default=15 for observed lengths in first chunk.
+    offsets = None
+
+    # Prepare temp bedGraph writers per sample
+    tmp_paths: Dict[str, str] = {s: f"{config.output}_{s}.bedGraph" for s in config.samples}
+    # Clear existing temp files
+    for p in tmp_paths.values():
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+
+    # Iterate Zarr by chunks; function yields (sample, df)
+    for sample, chunk_df in zarr_handlers.iter_reads_from_zarr(
+        config.zarr_root,
+        config.read_index_parquet,
+        config.samples,
+        chunk_size=1_000_000,
+    ):
+        if chunk_df.is_empty():
+            continue
+
+        # Derive default offsets once from observed lengths if needed
+        if offsets is None:
+            lengths = chunk_df.get_column("length").unique().to_list()
+            offsets = _default_offsets_from_lengths(lengths)
+
+        # Use bed.asitecalc directly on genomic starts with offsets (consistent with BAM lane)
+        bed_df = bed_handlers.asitecalc(chunk_df.select(["chr", "start", "length", "count"]), offsets)
+        if not bed_df.is_empty():
+            # Append to per-sample bedGraph
+            bed_df.write_csv(tmp_paths[sample], separator="\t", include_header=False, mode="a")
+
+    # Convert each bedGraph to bigWig
+    sample_bw: Dict[str, str] = {}
+    for s, bedgraph in tmp_paths.items():
+        if not os.path.exists(bedgraph):
+            log_info(f"No data for sample {s}; skipping")
+            continue
+        bw_path = bed_handlers.bedtobigwig(bedgraph, config.chromsizes, f"{config.output}_{s}")
+        sample_bw[s] = bw_path
+
+    return sample_bw
 
 
-    # Handle strand-specific BigWig inputs
-    if Config.forward_bigwig and Config.reverse_bigwig:
-        bigwig_paths = {'forward': Config.forward_bigwig, 'reverse': Config.reverse_bigwig}
-        stranded = True
-    elif bigwig_path:
-        bigwig_paths = bigwig_path
-        stranded = False
+def find_orfs_workflow(config: Config) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    """Find ORFs and classify relative to CDS. Returns (orf_df, exon_df)."""
+    log_info("Finding ORFs…")
+
+    # Ensure transcript FASTA if input is genomic
+    transcript_fasta = config.sequence
+    if not transcript_fasta.endswith("_transcripts.fa"):
+        log_info("Generating transcript FASTA from genomic sequence and annotation")
+        transcript_fasta = coordinates.gettranscripts(config.sequence, config.annotation, config.output)
+
+    # Predict ORFs
+    orf_df = orffinder.preporfs(
+        transcript_fasta,
+        start_codons=config.start_codons,
+        stop_codons=config.stop_codons,
+        minlength=config.min_length,
+        maxlength=config.max_length,
+    )
+
+    # Classify ORFs relative to CDS and get exon coordinates
+    orf_df, exon_df = coordinates.orfrelativeposition(config.annotation, orf_df)
+    return orf_df, exon_df
+
+
+def score_orfs_workflow(config: Config, bigwig_paths: Union[str, Dict[str, str]], exon_df: pl.DataFrame, orf_df: pl.DataFrame) -> pl.DataFrame:
+    """Score ORFs using bigWig(s) and return scored DataFrame."""
+    log_info("Scoring ORFs…")
+    old_scoring = (config.scoring_method == "classic")
+    scored = bw_handlers.scoring(bigwig_paths, exon_df, orf_df, old_scoring, config.sru_range, stranded=config.stranded)
+    return scored
+
+
+def plot_workflow(config: Config, scored_orfs: pl.DataFrame, exon_df: pl.DataFrame) -> None:
+    """Generate plots and HTML report."""
+    log_info("Generating plots and report…")
+    # Persist scored ORFs to CSV for plotting convenience
+    scored_path = f"{config.output}_orfs_scored.csv"
+    scored_orfs.write_csv(scored_path)
+
+    # Choose a plotting bigWig: forward if dict provided, else single path
+    if isinstance(config.bigwig_paths, dict):
+        plot_bw = config.bigwig_paths.get('forward') or next(iter(config.bigwig_paths.values()))
     else:
-        bigwig_paths = None
-        stranded = False
+        plot_bw = config.bigwig_paths or ""
 
-    # Initialize exon_df
+    # Pass exon_df directly; plotting can handle DataFrame input
+    plots.plottop10(scored_path, plot_bw, exon_df, config.plot_range, config.output)
+
+
+def all_workflow(config: Config) -> None:
+    """Run the entire pipeline based on provided config."""
+    log_info("Starting pipeline…")
+
+    # Determine input lane: BigWig vs BAM (Zarr lane stubbed for future)
+    bigwig_paths: Union[str, Dict[str, str], None] = config.bigwig_paths
     exon_df = None
 
-    # Determine pipeline stages
-    if Config.bam_path:
-        if not bigwig_paths:
-            log_info("BAM file provided without BigWig. Will process BAM to generate coverage.")
-            location = os.path.abspath(Config.bam_path)
-            if not os.path.isfile(location):
-                raise click.BadParameter(f"BAM file not found: {bam_path}")
-
-            # Process BAM and get annotations
-            bam_df, exon_df = process_bam_workflow(location, annotation)
-
-            # Calculate A-site positions
-            offsets = coordinates.change_point_analysis(bam_df)
-
-            # Process by strand if requested
-            if stranded:
-                # Split BAM by strand
-                fwd_bam = bam_df.filter(pl.col("strand") == "+")
-                rev_bam = bam_df.filter(pl.col("strand") == "-")
-
-                # Process forward strand
-                fwd_bed = bed.asitecalc(fwd_bam, offsets)
-                fwd_bedgraph = f"{output}_fwd.bedGraph"
-                fwd_bed.write_csv(fwd_bedgraph, separator="\t", include_header=False)
-                fwd_bigwig = f"{output}_fwd.bw"
-                bed.bedtobigwig(fwd_bedgraph, chromsizes, f"{output}_fwd")
-
-                # Process reverse strand
-                rev_bed = bed.asitecalc(rev_bam, offsets)
-                rev_bedgraph = f"{output}_rev.bedGraph"
-                rev_bed.write_csv(rev_bedgraph, separator="\t", include_header=False)
-                rev_bigwig = f"{output}_rev.bw"
-                bed.bedtobigwig(rev_bedgraph, chromsizes, f"{output}_rev")
-
-                # Set up paths for scoring
-                bigwig_paths = {'forward': f"{output}_fwd.bw", 'reverse': f"{output}_rev.bw"}
-            else:
-                # Process combined strands (original behavior)
-                bed_df = bed.asitecalc(bam_df, offsets)
-                bedgraph_path = f"{output}.bedGraph"
-                bed_df.write_csv(bedgraph_path, separator="\t", include_header=False)
-                bigwig_path = f"{output}.bw"
-                bed.bedtobigwig(bedgraph_path, chromsizes, output)
-                bigwig_paths = bigwig_path
+    if config.bigwig or (config.forward_bigwig and config.reverse_bigwig):
+        # BigWig lane: ensure exon_df and continue
+        _, exon_df = bam_handlers.getexons_and_cds(config.annotation)
+        if config.forward_bigwig and config.reverse_bigwig:
+            config.bigwig_paths = {"forward": config.forward_bigwig, "reverse": config.reverse_bigwig}
+            config.stranded = True
         else:
-            log_info("Both BAM and BigWig provided. Using BigWig directly.")
+            config.bigwig_paths = config.bigwig
+    elif config.bam:
+        # BAM lane (classic or collapsed)
+        if not config.bam:
+            raise ValueError("Provide either BigWig(s) or a BAM file (classic or collapsed)")
+        bigwig_paths, exon_df, _ = process_bam_workflow(config)
+        config.bigwig_paths = bigwig_paths
+    elif config.zarr_root:
+        # Zarr lane (multi-sample)
+        sample_to_bw = process_zarr_workflow(config)
+        # Find ORFs once
+        orf_df, exon_df = find_orfs_workflow(config)
+        # Score per sample
+        for sample, bw_path in sample_to_bw.items():
+            scored = score_orfs_workflow(config, bw_path, exon_df, orf_df)
+            out_base = f"{config.output}_{sample}"
+            scored.write_csv(f"{out_base}_orfs_scored.csv")
+            # Report
+            plots.plottop10(f"{out_base}_orfs_scored.csv", bw_path, exon_df, config.plot_range, out_base)
+        log_info("Pipeline completed successfully for Zarr samples.")
+        return
 
-    # Ensure exon_df is set when using BigWig directly
+    # Find ORFs and classify
+    orf_df, exon_df2 = find_orfs_workflow(config)
     if exon_df is None:
-        log_info("Loading exon data from annotation file...")
-        _, exon_df = bam.getexons_and_cds(annotation)
+        exon_df = exon_df2
 
-    # Ensure transcriptomic input for ORF finding
-    log_info("Ensuring transcriptomic input for ORF finding...")
-    transcript_fasta = sequence
-    if not sequence.endswith('_transcripts.fa'):
-        log_info("Generating transcript sequences from genomic FASTA and GTF annotation...")
-        transcript_fasta = coordinates.gettranscripts(sequence, annotation, output)
+    # Score ORFs
+    scored = score_orfs_workflow(config, config.bigwig_paths, exon_df, orf_df)
 
-    # Find ORFs
-    log_info("Finding ORFs...")
-    orf_df = orffinder.preporfs(transcript_fasta, start_codons.split(","), stop_codons.split(","), min_len, max_len)
+    # Save results
+    scored_path = f"{config.output}_orfs_scored.csv"
+    scored.write_csv(scored_path)
 
-    log_info("Determining relative position of ORFs to CDS...")
-    # Determine the relative position of ORFs to CDS
-    orf_df, exon_coords = orfrelativeposition(annotation, orf_df, exon_df)
+    # Report
+    plot_workflow(config, scored, exon_df)
 
-    # Score ORFs using BigWig data
-    log_info("Scoring ORFs...")
-    scored_orfs = bigwig.scoring(bigwig_paths, exon_df, orf_df, scoring_method == 'classic', sru_range, stranded)
-
-    scored_orfs.write_csv(f"{output}_orfs_scored.csv")
-
-    # Generate plots
-    log_info("Generating plots...")
-    if stranded and isinstance(bigwig_paths, dict):
-        # Use forward strand for plotting if we have strand-specific data
-        plot_bigwig = bigwig_paths['forward']
-    else:
-        plot_bigwig = bigwig_paths
-
-    plots.plottop10(scored_orfs, plot_bigwig, exon_df, plot_range, output)
-
-    log_info("Pipeline completed successfully!")
-    log_info("Starting pipeline...")
-
-
-    # # Validate inputs
-    # if not bam_path and not bigwig_path and not (forward_bigwig and reverse_bigwig):
-    #     raise click.BadParameter(
-    #         "Either BAM file (-b) or BigWig file (-bw) or forward/reverse BigWig files must be provided"
-    #     )
-    
-    # if bam_path and not chromsizes:
-    #     raise click.BadParameter("Chromosome sizes file (-c) is required when processing BAM files")
-    
-    # # Handle strand-specific bigwig inputs
-    # if forward_bigwig and reverse_bigwig:
-    #     bigwig_paths = {'forward': forward_bigwig, 'reverse': reverse_bigwig}
-    #     stranded = True
-    # elif bigwig_path:
-    #     bigwig_paths = bigwig_path
-    # else:
-    #     bigwig_paths = None
-    
-    # # Initialize exon_df
-    # exon_df = None
-
-    # # Determine pipeline stages
-    # if bam_path:
-    #     if not bigwig_paths:
-    #         log_info("BAM file provided without BigWig. Will process BAM to generate coverage.")
-    #         location = os.path.abspath(bam_path)
-    #         if not os.path.isfile(location):
-    #             raise click.BadParameter(f"BAM file not found: {bam_path}")
-            
-    #         # Process BAM and get annotations
-    #         bam_df, exon_df = process_bam_file(location, annotation)
-            
-    #         # Calculate A-site positions
-    #         offsets = coordinates.change_point_analysis(bam_df)
-            
-    #         # Process by strand if requested
-    #         if stranded:
-    #             # Split BAM by strand
-    #             fwd_bam = bam_df.filter(pl.col("strand") == "+")
-    #             rev_bam = bam_df.filter(pl.col("strand") == "-")
-                
-    #             # Process forward strand
-    #             fwd_bed = bed.asitecalc(fwd_bam, offsets)
-    #             fwd_bedgraph = f"{outfile}_fwd.bedGraph"
-    #             fwd_bed.write_csv(fwd_bedgraph, separator="\t", include_header=False)
-    #             fwd_bigwig = f"{outfile}_fwd.bw"
-    #             bed.bedtobigwig(fwd_bedgraph, chromsizes, f"{outfile}_fwd")
-                
-    #             # Process reverse strand
-    #             rev_bed = bed.asitecalc(rev_bam, offsets)
-    #             rev_bedgraph = f"{outfile}_rev.bedGraph"
-    #             rev_bed.write_csv(rev_bedgraph, separator="\t", include_header=False)
-    #             rev_bigwig = f"{outfile}_rev.bw"
-    #             bed.bedtobigwig(rev_bedgraph, chromsizes, f"{outfile}_rev")
-                
-    #             # Set up paths for scoring
-    #             bigwig_paths = {'forward': f"{outfile}_fwd.bw", 'reverse': f"{outfile}_rev.bw"}
-    #         else:
-    #             # Process combined strands (original behavior)
-    #             bed_df = bed.asitecalc(bam_df, offsets)
-    #             bedgraph_path = f"{outfile}.bedGraph"
-    #             bed_df.write_csv(bedgraph_path, separator="\t", include_header=False)
-    #             bigwig_path = f"{outfile}.bw"
-    #             bed.bedtobigwig(bedgraph_path, chromsizes, outfile)
-    #             bigwig_paths = bigwig_path
-    #     else:
-    #         log_info("Both BAM and BigWig provided. Using BigWig directly.")
-    
-    # # Ensure exon_df is set when using BigWig directly
-    # if exon_df is None:
-    #     log_info("Loading exon data from annotation file...")
-    #     cds_df, exon_df = bam.getexons_and_cds(annotation)
-    
-    # # Ensure transcriptomic input for ORF finding
-    # log_info("Ensuring transcriptomic input for ORF finding...")
-    # transcript_fasta = sequence
-    # if not sequence.endswith('_transcripts.fa'):
-    #     log_info("Generating transcript sequences from genomic FASTA and GTF annotation...")
-    #     transcript_fasta = coordinates.gettranscripts(sequence, annotation, outfile)
-    
-    # # Find ORFs
-    # log_info("Finding ORFs...")
-    # orf_df = orffinder.preporfs(transcript_fasta, start_codons.split(","), stop_codons.split(","), min_len, max_len)
-    
-    # log_info("Determining relative position of ORFs to CDS...")
-    # # Determine the relative position of ORFs to CDS
-    # orf_df, exon_coords = orfrelativeposition(annotation, orf_df, cds_df)
-
-    # # Score ORFs using bigWig data
-    # log_info("Scoring ORFs...")
-    # scored_orfs = bigwig.scoring(bigwig_paths, exon_df, orf_df, scoring_method == 'classic', sru_range, stranded)
-    
-    # scored_orfs.write_csv(f"{outfile}_orfs_scored.csv")
-    
-    # # Generate plots
-    # log_info("Generating plots...")
-    # if stranded and isinstance(bigwig_paths, dict):
-    #     # Use forward strand for plotting if we have strand-specific data
-    #     plot_bigwig = bigwig_paths['forward']
-    # else:
-    #     plot_bigwig = bigwig_paths
-        
-    # plots.plottop10(scored_orfs, plot_bigwig, exon_df, plot_range, outfile)
-    
-    # log_info("Pipeline completed successfully!")
+    log_info("Pipeline completed successfully.")

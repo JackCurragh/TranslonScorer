@@ -1,0 +1,89 @@
+"""
+Zarr + unique-read index loader utilities.
+
+This module streams normalized read chunks from a Zarr counts array and a
+Parquet alignment index. It emits DataFrames with columns:
+  chr, start, stop, length, strand, count
+
+Assumptions:
+- Parquet index has columns: read_id (int or str), chr, start, stop, strand, length.
+- Zarr root contains an array "counts" shaped (n_samples, n_reads) or (n_reads, n_samples).
+
+These helpers are intentionally simple and functional; they stream in chunks and
+avoid materializing the full matrix.
+"""
+
+from __future__ import annotations
+
+from typing import Iterator, List, Tuple
+
+import polars as pl
+import zarr
+
+
+def _open_counts(zroot: str):
+    store = zarr.open(zroot, mode="r")
+    if "counts" not in store:
+        raise ValueError("Zarr root does not contain 'counts' array")
+    arr = store["counts"]
+    return arr
+
+
+def _counts_is_samples_first(arr) -> bool:
+    # Heuristic: assume samples dimension is the smaller one for typical setups
+    return arr.shape[0] <= arr.shape[1]
+
+
+def iter_reads_from_zarr(
+    zarr_root: str,
+    read_index_parquet: str,
+    samples: List[str],
+    *,
+    sample_to_index: dict | None = None,
+    chunk_size: int = 1_000_000,
+) -> Iterator[Tuple[str, pl.DataFrame]]:
+    """
+    Stream normalized read chunks for each sample from Zarr + Parquet index.
+
+    Yields: (sample_name, DataFrame[chr,start,stop,length,strand,count])
+    """
+    arr = _open_counts(zarr_root)
+    samples_first = _counts_is_samples_first(arr)
+
+    # Map sample names to indices if provided; otherwise assume integer names
+    if sample_to_index is None:
+        # If no mapping provided, assume samples are addressed by integer indices in order
+        sample_to_index = {s: i for i, s in enumerate(samples)}
+
+    # Lazy scan the index to get total n_reads
+    scan = pl.scan_parquet(read_index_parquet).select(pl.len())
+    n_reads = scan.collect().item()
+
+    # Iterate in read_id chunks
+    for start in range(0, n_reads, chunk_size):
+        end = min(start + chunk_size, n_reads)
+        # Load index slice
+        idx_df = (
+            pl.scan_parquet(read_index_parquet)
+            .slice(start, end - start)
+            .select(["chr", "start", "stop", "strand", "length"])  # keep only needed
+            .collect()
+        )
+
+        # Skip empty
+        if idx_df.is_empty():
+            continue
+
+        # For each sample, slice counts and emit
+        for s in samples:
+            si = sample_to_index[s]
+            if samples_first:
+                counts = arr.get_orthogonal_selection((si, slice(start, end)))
+            else:
+                counts = arr.get_orthogonal_selection((slice(start, end), si))
+
+            # Build DF with counts
+            df = idx_df.with_columns(pl.Series("count", counts))
+
+            yield s, df
+

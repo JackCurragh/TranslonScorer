@@ -18,11 +18,28 @@ from __future__ import annotations
 from typing import Iterator, List, Tuple
 
 import polars as pl
-import zarr
+import importlib
+
+_zarr_mod = None
+_zarr_err = None
+
+def _require_zarr():
+    global _zarr_mod, _zarr_err
+    if _zarr_mod is None and _zarr_err is None:
+        try:
+            _zarr_mod = importlib.import_module('zarr')
+        except Exception as e:
+            _zarr_err = e
+    if _zarr_mod is None:
+        raise ImportError(
+            "Zarr is required for Zarr-based profiles. Install with pip: "
+            "pip install 'zarr>=2.16' 'numcodecs>=0.12'"
+        ) from _zarr_err
 
 
 def _open_counts(zroot: str):
-    store = zarr.open(zroot, mode="r")
+    _require_zarr()
+    store = _zarr_mod.open(zroot, mode="r")
     if "counts" not in store:
         raise ValueError("Zarr root does not contain 'counts' array")
     arr = store["counts"]
@@ -86,4 +103,3 @@ def iter_reads_from_zarr(
             df = idx_df.with_columns(pl.Series("count", counts))
 
             yield s, df
-

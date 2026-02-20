@@ -93,15 +93,21 @@ def build_locus_features(gtf_path: str) -> tuple[pl.DataFrame, pl.DataFrame]:
     features: List[dict] = []
     tmap_rows: List[dict] = []
 
-    for (gene_id, chr_, strand), df_gene in (
+    grouped = (
         exons.group_by(["gene_id", "chr", "strand"]).agg(
-            [pl.col("start"), pl.col("end"), pl.col("transcript_id")]
-        ).iter_rows(named=True)
-    ):
-        # Expand row lists back to a tidy exon table
-        starts = df_gene["start"]
-        ends = df_gene["end"]
-        trans = df_gene["transcript_id"]
+            pl.col("start").list().alias("starts"),
+            pl.col("end").list().alias("ends"),
+            pl.col("transcript_id").list().alias("transcripts"),
+        )
+    )
+
+    for row in grouped.iter_rows(named=True):
+        gene_id = row["gene_id"]
+        chr_ = row["chr"]
+        strand = row["strand"]
+        starts = row["starts"]
+        ends = row["ends"]
+        trans = row["transcripts"]
         exon_tbl = pl.DataFrame({"start": starts, "end": ends, "transcript_id": trans})
         # Build exon chunks
         chunks = _chunks_for_gene(pl.DataFrame({"start": starts, "end": ends}))

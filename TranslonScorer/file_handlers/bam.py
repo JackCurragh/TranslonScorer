@@ -7,7 +7,10 @@ them to other formats, including coordinate transformations.
 
 import pysam
 import polars as pl
-import oxbow as ox
+try:
+    import oxbow as ox  # optional fast BAM reader
+except Exception:
+    ox = None
 from ..utils.logging import log_info, log_error, log_warning
 from typing import Optional
 import os
@@ -57,13 +60,32 @@ def readbam(
     else:
         log_info("Using existing BAM index")
     
-    # Read BAM file using oxbow for speed
-    bamfile = ox.read_bam(bampath)
-    log_info("BAM file read successfully")
-    
-    # Convert to DataFrame
-    df = pl.read_ipc(bamfile)
-    log_info(f"Available columns: {df.columns}")
+    # Read BAM
+    if ox is not None:
+        bamfile = ox.read_bam(bampath)
+        log_info("BAM file read via oxbow")
+        df = pl.read_ipc(bamfile)
+        log_info(f"Available columns: {df.columns}")
+    else:
+        log_info("oxbow not available; falling back to pysam (slower)")
+        rows = []
+        with pysam.AlignmentFile(bampath, 'rb') as bam:
+            for aln in bam.fetch(until_eof=True):
+                if aln.is_unmapped:
+                    continue
+                rows.append({
+                    'rname': bam.get_reference_name(aln.reference_id),
+                    'pos': int(aln.reference_start),
+                    'end': int(aln.reference_end),
+                    'seq': aln.query_sequence or '',
+                    'flag': int(aln.flag),
+                    'qname': aln.query_name,
+                })
+        if not rows:
+            return pl.DataFrame({
+                'chr': [], 'start': [], 'stop': [], 'length': [], 'strand': [], 'count': []
+            })
+        df = pl.from_dicts(rows)
     
     # Map oxbow column names to our expected names
     column_mapping = {

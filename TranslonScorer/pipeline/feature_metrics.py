@@ -6,6 +6,7 @@ import polars as pl
 import numpy as np
 
 from ..utils.logging import log_info
+import click
 from .frame_crosstalk import estimate_crosstalk_matrix, invert_and_correct
 from .junction_model import estimate_junction_expectation, junction_llr
 
@@ -172,17 +173,26 @@ def feature_metrics(
     tts = feats.filter(pl.col('feature_type') == 'TTS')
 
     # Exon chunks
-    for r in chunks.iter_rows(named=True):
-        m = compute_exon_chunk_metrics(profiles, r, fmap)
-        rows.append({**r, **m})
+    rows_iter = chunks.iter_rows(named=True)
+    with click.progressbar(length=chunks.height, label="Chunk metrics") as bar:
+        for r in rows_iter:
+            bar.update(1)
+            m = compute_exon_chunk_metrics(profiles, r, fmap)
+            rows.append({**r, **m})
 
     # TIS/TTS
-    for r in tis.iter_rows(named=True):
-        m = compute_tis_tts_metrics(profiles, r, fmap, sru_range=sru_range)
-        rows.append({**r, **m})
-    for r in tts.iter_rows(named=True):
-        m = compute_tis_tts_metrics(profiles, r, fmap, sru_range=sru_range)
-        rows.append({**r, **m})
+    rows_iter = tis.iter_rows(named=True)
+    with click.progressbar(length=tis.height, label="TIS metrics") as bar:
+        for r in rows_iter:
+            bar.update(1)
+            m = compute_tis_tts_metrics(profiles, r, fmap, sru_range=sru_range)
+            rows.append({**r, **m})
+    rows_iter = tts.iter_rows(named=True)
+    with click.progressbar(length=tts.height, label="TTS metrics") as bar:
+        for r in rows_iter:
+            bar.update(1)
+            m = compute_tis_tts_metrics(profiles, r, fmap, sru_range=sru_range)
+            rows.append({**r, **m})
 
     # Junctions
     if genome_bam_splits is not None and not genome_bam_splits.is_empty():

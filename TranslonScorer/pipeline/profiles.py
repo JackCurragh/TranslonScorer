@@ -14,6 +14,7 @@ Optionally include a 'sample' column for multi-sample sources.
 from __future__ import annotations
 
 from typing import Dict, Iterable, Iterator, Optional, Tuple
+import os
 
 import polars as pl
 
@@ -213,6 +214,10 @@ def write_profiles_parquet(df: pl.DataFrame, out_path: str, sample: Optional[str
     """Write profiles to Parquet; include sample column if provided."""
     if sample:
         df = df.with_columns(pl.lit(sample).alias('sample'))
+    # Ensure parent directory exists (Polars does not create it)
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     df.write_parquet(out_path)
     return out_path
 

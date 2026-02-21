@@ -29,11 +29,19 @@ class Config:
     # Zarr unique read matrix
     zarr_root: Optional[str] = None
     read_index_parquet: Optional[str] = None
+    splits_index_parquet: Optional[str] = None
     samples: Optional[List[str]] = None
+    # Zarr metadata for mapping
+    zarr_metadata_parquet: Optional[str] = None
+    zarr_reads_fasta: Optional[str] = None
+    zarr_read_key: Optional[str] = None  # one of: auto, row_id, qname, sequence
+    bam_key: Optional[str] = None        # one of: auto, qname, sequence
+    hash_alg: str = "sha1"
     
     # Analysis options
     stranded: bool = False
     offsets: Optional[str] = None
+    offsets_mode: str = "auto"  # auto, global, required
     start_codons: List[str] = field(default_factory=lambda: ["ATG"])
     stop_codons: List[str] = field(default_factory=lambda: ["TAA", "TAG", "TGA"])
     min_length: int = 0
@@ -46,6 +54,9 @@ class Config:
     output: str = field(default="")
     log_file: Optional[str] = None
     log_level: str = "INFO"
+    offsets_out: Optional[str] = None
+    junctions_out: Optional[str] = None
+    partitioned: bool = False
     
     # Runtime state
     bigwig_paths: Union[str, Dict[str, str], None] = None
@@ -144,6 +155,24 @@ class Config:
         output_dir = os.path.dirname(self.output)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir)
+
+        # Normalize options
+        if not self.zarr_read_key:
+            self.zarr_read_key = "auto"
+        if not self.bam_key:
+            self.bam_key = "auto"
+
+        # Auto-detect metadata files near Zarr root if not provided
+        if self.zarr_root:
+            zr_dir = os.path.dirname(self.zarr_root.rstrip('/')) or '.'
+            if not self.zarr_metadata_parquet:
+                candidate = os.path.join(zr_dir, 'global_metadata.parquet')
+                if os.path.isfile(candidate):
+                    self.zarr_metadata_parquet = candidate
+            if not self.zarr_reads_fasta:
+                candidate = os.path.join(zr_dir, 'global_reads.fasta')
+                if os.path.isfile(candidate):
+                    self.zarr_reads_fasta = candidate
     
     def _validate_file_exists(self, filepath: str, description: str) -> None:
         """Check if a file exists and raise an error if it doesn't."""

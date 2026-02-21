@@ -91,8 +91,11 @@ def profiles_from_bam(
     count_from: Optional[str] = None,
     count_pattern: Optional[str] = None,
     count_tag: Optional[str] = None,
-) -> pl.DataFrame:
-    """Compute transcript A-site profiles from a BAM (classic or collapsed)."""
+) -> tuple[pl.DataFrame, Dict[int,int]]:
+    """Compute transcript A-site profiles from a BAM (classic or collapsed).
+
+    Returns (profiles_df, offsets_dict).
+    """
     log_info("Reading BAM for profiles…")
     reads = bam_handlers.readbam(
         bam_path,
@@ -124,7 +127,7 @@ def profiles_from_bam(
     offsets = coordinates.change_point_analysis(reads_rel)
 
     profiles = _compute_asite_profiles(reads, offsets)
-    return profiles
+    return profiles, {int(k): int(v) for k, v in offsets.items()}
 
 
 def profiles_from_zarr(
@@ -135,12 +138,15 @@ def profiles_from_zarr(
     cds_df: pl.DataFrame,
     *,
     default_offset: int = 15,
+    offsets_mode: str = 'auto',
+    offsets_out: str | None = None,
+    sample_cap_per_len: int = 50000,
 ) -> Iterator[Tuple[str, pl.DataFrame]]:
     """Compute transcript A-site profiles from Zarr (multi-sample). Yields per-sample profiles."""
     # zarr_handlers safely defers importing the heavy zarr dependency
     log_info("Streaming Zarr + index for profiles…")
-    seen_lengths: set[int] = set()
-    offsets: Dict[int, int] | None = None
+    offsets_by_sample: Dict[str, Dict[int, int]] = {}
+    sampled_by_sample_len: Dict[tuple[str,int], int] = {}
 
     for sample, chunk in zarr_handlers.iter_reads_from_zarr(
         zarr_root, read_index_parquet, samples
@@ -151,14 +157,56 @@ def profiles_from_zarr(
         # Project to transcript coords
         mapped = _ensure_transcript_coords(chunk, exon_df)
 
-        # Establish offsets on first appearance of lengths if not computed globally
-        if offsets is None:
+        # Offsets per sample
+        if sample not in offsets_by_sample:
+            offsets_by_sample[sample] = {}
+        offsets = offsets_by_sample[sample]
+
+        if offsets_mode == 'auto':
+            # Accumulate a capped sample per read length for change-point
+            need: set[int] = set(int(x) for x in mapped.get_column('length').unique().to_list() if int(x) not in offsets)
+            if need:
+                # Join CDS to compute relative to CDS start using existing helper
+                rel = bam_handlers.process_transcriptomic_bam(
+                    mapped.rename({'tran_start_bam': 'start'}) if 'tran_start_bam' in mapped.columns else mapped.rename({'tran_start': 'start'}),
+                    cds_df
+                )
+                # For each needed length, take up to sample_cap_per_len rows
+                rows = []
+                for L in list(need):
+                    sub = rel.filter(pl.col('length') == int(L)).select(['bamcds_start','length','count'])
+                    if sub.height == 0:
+                        continue
+                    # Downsample if necessary
+                    take = min(sample_cap_per_len, sub.height)
+                    rows.append(sub.head(take))
+                if rows:
+                    pool = pl.concat(rows)
+                    off = coordinates.change_point_analysis(pool)
+                    offsets.update({int(k): int(v) for k,v in off.items()})
+                # Fill any remaining unseen with default
+                for L in need:
+                    offsets.setdefault(int(L), default_offset)
+        elif offsets_mode == 'required':
+            # Expect provided offsets via file (handled by caller); nothing to do
+            pass
+        else:
+            # global default
             lengths = set(int(x) for x in mapped.get_column('length').unique().to_list())
-            seen_lengths.update(lengths)
-            offsets = {L: default_offset for L in seen_lengths}
+            for L in lengths:
+                offsets.setdefault(int(L), default_offset)
 
         prof = _compute_asite_profiles(mapped, offsets)
         yield sample, prof
+
+    # Persist offsets if requested
+    if offsets_out:
+        rows = []
+        for s, od in offsets_by_sample.items():
+            for L, ofs in od.items():
+                rows.append({'sample': s, 'length': int(L), 'offset': int(ofs)})
+        if rows:
+            pl.from_dicts(rows).write_csv(offsets_out)
 
 
 def write_profiles_parquet(df: pl.DataFrame, out_path: str, sample: Optional[str] = None) -> str:

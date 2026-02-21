@@ -121,6 +121,21 @@ def find_orfs(**kwargs):
 )
 @click.option('--loci-bed', help='BED of loci to build genomic A-site profile matrices (Zarr).')
 @click.option('--offsets-file', help='CSV with columns length,offset to override defaults.')
+# Zarr + indexing helpers
+@click.option('--zarr-root', help='Root of Zarr counts matrix (samples x reads or reads x samples).')
+@click.option('--read-index-parquet', help='Parquet mapping read_id (Zarr row) to genomic alignment (chr,start,stop,strand,length).')
+@click.option('--splits-index-parquet', help='Optional Parquet of per-read junctions (read_id, chr, donor_pos, acceptor_pos, strand).')
+@click.option('--sample', 'samples', multiple=True, help='Sample name(s) to process from the Zarr matrix.')
+@click.option('--zarr-metadata-parquet', help='Parquet with read row metadata (e.g., row_id,qname or sequence).')
+@click.option('--zarr-reads-fasta', help='FASTA with reads in Zarr row order; headers or sequences used for mapping.')
+@click.option('--zarr-read-key', type=click.Choice(['auto','row_id','qname','sequence']), default='auto', help='Key to align Zarr rows to BAM.')
+@click.option('--bam-key', type=click.Choice(['auto','qname','sequence']), default='auto', help='Key to align BAM reads to Zarr.')
+@click.option('--hash-alg', type=click.Choice(['sha1','md5','xxh64']), default='sha1', help='Hash algorithm for sequence-based mapping.')
+# Outputs & policy
+@click.option('--junctions-out', help='Path to write junction counts when available.')
+@click.option('--offsets-out', help='Path to write discovered offsets per sample/length.')
+@click.option('--partitioned/--no-partitioned', default=False, help='Write profiles as a partitioned dataset by sample.')
+@click.option('--offsets-mode', type=click.Choice(['auto','global','required']), default='auto', help='Offsets selection policy.')
 def profiles(**kwargs):
     """Generate transcript-space A-site profiles from BAM (classic/collapsed), Zarr, or BigWig."""
     setup_logging()
@@ -153,8 +168,9 @@ def profiles(**kwargs):
     from .pipeline.profiles import profiles_from_bam, profiles_from_zarr, profiles_from_bigwig, write_profiles_parquet
     from .pipeline.locus_profiles import build_locus_profiles_zarr
 
-    if config.bam:
-        prof = profiles_from_bam(
+    # BAM lane
+    if config.bam and not config.zarr_root:
+        prof, offsets = profiles_from_bam(
             config.bam,
             exon_df,
             cds_df,
@@ -164,10 +180,40 @@ def profiles(**kwargs):
             count_tag=config.bam_count_tag,
         )
         write_profiles_parquet(prof, kwargs['profiles_out'])
+        if config.offsets_out:
+            # Persist discovered offsets
+            odf = pl.from_dicts([{'sample': kwargs.get('sample') or 'sample', 'length': int(L), 'offset': int(ofs)} for L, ofs in offsets.items()])
+            odf.write_csv(config.offsets_out)
+        if config.junctions_out:
+            # Aggregate junctions from BAM
+            from .pipeline.junctions import aggregate_bam_junctions
+            j = aggregate_bam_junctions(config.bam)
+            if not j.is_empty():
+                j.write_parquet(config.junctions_out)
+                log_info("Junction counts written from BAM")
         log_info("Profiles written")
+    # Zarr lane (with optional index build from BAM)
     elif config.zarr_root:
-        if not (config.read_index_parquet and config.samples):
-            raise click.BadParameter('Zarr mode requires --read-index-parquet and at least one --sample')
+        # Ensure samples provided
+        if not config.samples or len(config.samples) == 0:
+            raise click.BadParameter('Zarr mode requires at least one --sample')
+        # If index missing but BAM is present, build index now
+        if not config.read_index_parquet and config.bam:
+            from .pipeline.index_from_bam import build_read_index_from_bam
+            log_info('Building Zarr read index from BAM…')
+            out_idx = os.path.join(os.path.dirname(kwargs['profiles_out']), 'read_index.parquet') if kwargs.get('profiles_out') else 'read_index.parquet'
+            config.read_index_parquet = build_read_index_from_bam(
+                bam_path=config.bam,
+                zarr_root=config.zarr_root,
+                out_index=out_idx,
+                zarr_metadata=config.zarr_metadata_parquet,
+                zarr_reads_fasta=config.zarr_reads_fasta,
+                zarr_read_key=config.zarr_read_key,
+                bam_key=config.bam_key,
+                hash_alg=config.hash_alg,
+            )
+        if not config.read_index_parquet:
+            raise click.BadParameter('Zarr mode requires --read-index-parquet (or provide --bam to build it).')
         if kwargs.get('loci_bed'):
             # Locus matrices path
             build_locus_profiles_zarr(
@@ -187,11 +233,28 @@ def profiles(**kwargs):
                 list(config.samples),
                 exon_df,
                 cds_df,
+                offsets_mode=config.offsets_mode,
+                offsets_out=config.offsets_out,
             ):
                 out = kwargs['profiles_out']
                 stem, ext = (out.rsplit('.', 1) + ['parquet'])[:2]
                 write_profiles_parquet(prof, f"{stem}_{sample}.{ext}", sample=sample)
             log_info("Profiles written for all samples")
+            # Optional junction aggregation from splits index
+            if config.junctions_out:
+                if config.splits_index_parquet and os.path.isfile(config.splits_index_parquet):
+                    # Aggregate per junction over read_ids using counts as weights
+                    s = pl.read_parquet(config.splits_index_parquet)
+                    # Join with counts per read_id per sample
+                    # For Zarr, counts per read_id per sample are in the matrix; here we approximate unweighted counts (1 per split event)
+                    j = (
+                        s.group_by(['chr','donor_pos','acceptor_pos','strand'])
+                        .agg(pl.len().alias('count'))
+                    )
+                    j.write_parquet(config.junctions_out)
+                    log_info("Junction counts written from splits index")
+                else:
+                    log_info("No splits index provided; skipping junction aggregation for Zarr lane")
     else:
         # BigWig lane: single or stranded inputs
         bw = { 'forward': config.forward_bigwig, 'reverse': config.reverse_bigwig } if (config.forward_bigwig and config.reverse_bigwig) else config.bigwig
@@ -233,6 +296,31 @@ def plot(scored_orfs: str, bigwig: str, exons: str, plot_range: int, output: str
     from .visualization import plots
     plots.plottop10(scored_orfs, bigwig, exons, plot_range, output)
     log_info("Report generation complete!")
+
+@cli.command("index-from-bam")
+@click.option('--bam', '-b', required=True, help='Input BAM used to align reads.')
+@click.option('--zarr-root', required=True, help='Root of Zarr counts matrix (samples x reads or reads x samples).')
+@click.option('--out-index', required=True, help='Output Parquet path for read_id→alignment index.')
+@click.option('--zarr-metadata-parquet', help='Parquet with read row metadata (e.g., row_id,qname or sequence).')
+@click.option('--zarr-reads-fasta', help='FASTA with reads in Zarr row order; headers or sequences used for mapping.')
+@click.option('--zarr-read-key', type=click.Choice(['auto','row_id','qname','sequence']), default='auto')
+@click.option('--bam-key', type=click.Choice(['auto','qname','sequence']), default='auto')
+@click.option('--hash-alg', type=click.Choice(['sha1','md5','xxh64']), default='sha1')
+def index_from_bam_cmd(bam: str, zarr_root: str, out_index: str, zarr_metadata_parquet: str | None, zarr_reads_fasta: str | None, zarr_read_key: str, bam_key: str, hash_alg: str):
+    """Build read_index.parquet for Zarr counts by aligning rows to BAM reads."""
+    setup_logging()
+    from .pipeline.index_from_bam import build_read_index_from_bam
+    path = build_read_index_from_bam(
+        bam_path=bam,
+        zarr_root=zarr_root,
+        out_index=out_index,
+        zarr_metadata=zarr_metadata_parquet,
+        zarr_reads_fasta=zarr_reads_fasta,
+        zarr_read_key=zarr_read_key,
+        bam_key=bam_key,
+        hash_alg=hash_alg,
+    )
+    log_info(f"Read index written: {path}")
 
 @cli.command("orfs-import")
 @click.option('--bed12', required=True, help='Input ORFs in BED12 format.')

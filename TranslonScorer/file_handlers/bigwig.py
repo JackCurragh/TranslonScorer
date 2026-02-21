@@ -484,6 +484,7 @@ def process_genomic_bigwig(bw_handle, exon_df):
     """
     import polars as pl
     import numpy as np
+    import math
     from ..utils.logging import log_info, log_warning
     
     # Get chromosomes in BigWig
@@ -529,6 +530,10 @@ def process_genomic_bigwig(bw_handle, exon_df):
                     start = int(row["start"][i])
                     stop = int(row["stop"][i])
                     tran_start = int(row["tran_start"][i])
+                    # Guard against zero/negative length intervals
+                    if stop <= start:
+                        log_warning(f"Skipping invalid exon interval {chrom}:{start}-{stop} (zero/negative length)")
+                        continue
                     
                     # Calculate transcript length for this exon
                     exon_length = stop - start
@@ -537,12 +542,19 @@ def process_genomic_bigwig(bw_handle, exon_df):
                     try:
                         # Get coverage values from BigWig
                         values = bw_handle.values(chrom, start, stop)
-                        
-                        # Map to transcript coordinates
+                        # Map to transcript coordinates (sparse: keep only finite, non-zero)
                         for j, value in enumerate(values):
+                            if value is None:
+                                continue
+                            try:
+                                v = float(value)
+                            except Exception:
+                                # If conversion fails, skip
+                                continue
+                            if math.isnan(v) or v == 0.0:
+                                continue
                             tran_pos = tran_start + j
-                            if value is not None:
-                                coverage_dict[tran_pos] = coverage_dict.get(tran_pos, 0) + value
+                            coverage_dict[tran_pos] = coverage_dict.get(tran_pos, 0.0) + v
                     except Exception as e:
                         log_warning(f"Error reading {chrom}:{start}-{stop}: {str(e)}")
             else:
@@ -550,6 +562,10 @@ def process_genomic_bigwig(bw_handle, exon_df):
                 start = int(row["start"])
                 stop = int(row["stop"])
                 tran_start = int(row["tran_start"])
+                # Guard against zero/negative length intervals
+                if stop <= start:
+                    log_warning(f"Skipping invalid exon interval {chrom}:{start}-{stop} (zero/negative length)")
+                    continue
                 
                 # Calculate transcript length for this exon
                 exon_length = stop - start
@@ -558,22 +574,28 @@ def process_genomic_bigwig(bw_handle, exon_df):
                 try:
                     # Get coverage values from BigWig
                     values = bw_handle.values(chrom, start, stop)
-                    
-                    # Map to transcript coordinates
+                    # Map to transcript coordinates (sparse: keep only finite, non-zero)
                     for j, value in enumerate(values):
+                        if value is None:
+                            continue
+                        try:
+                            v = float(value)
+                        except Exception:
+                            continue
+                        if math.isnan(v) or v == 0.0:
+                            continue
                         tran_pos = tran_start + j
-                        if value is not None:
-                            coverage_dict[tran_pos] = coverage_dict.get(tran_pos, 0) + value
+                        coverage_dict[tran_pos] = coverage_dict.get(tran_pos, 0.0) + v
                 except Exception as e:
                     log_warning(f"Error reading {chrom}:{start}-{stop}: {str(e)}")
         
         # Add coverage data for this transcript
         if coverage_dict:
-            # Create coverage array
-            for tran_pos in range(max_tran_pos + 1):
+            # Emit sparse, non-zero coverage only
+            for tran_pos, v in coverage_dict.items():
                 all_tran_ids.append(tran_id)
-                all_tran_starts.append(tran_pos)
-                all_counts.append(coverage_dict.get(tran_pos, 0.0))
+                all_tran_starts.append(int(tran_pos))
+                all_counts.append(float(v))
     
     # Create DataFrame from collected data
     if all_tran_ids:
@@ -609,6 +631,7 @@ def process_transcriptomic_bigwig(bw_handle, exon_df):
     """
     import polars as pl
     import numpy as np
+    import math
     from ..utils.logging import log_warning
     
     # Get transcripts in BigWig
@@ -626,18 +649,29 @@ def process_transcriptomic_bigwig(bw_handle, exon_df):
         try:
             # Get transcript size from BigWig
             tran_size = bw_handle.chroms()[tran_id]
-            
             # Get coverage values for the entire transcript
             values = bw_handle.values(tran_id, 0, tran_size)
-            
-            # Create DataFrame for this transcript
-            tran_df = pl.DataFrame({
-                "tran_id": [tran_id] * len(values),
-                "tran_start": pl.arange(0, len(values)),
-                "counts": [v if v is not None else 0.0 for v in values]
-            })
-            
-            results.append(tran_df)
+            # Build sparse rows (non-zero, finite)
+            pos = []
+            vals = []
+            for i, v in enumerate(values):
+                if v is None:
+                    continue
+                try:
+                    fv = float(v)
+                except Exception:
+                    continue
+                if math.isnan(fv) or fv == 0.0:
+                    continue
+                pos.append(i)
+                vals.append(fv)
+            if pos:
+                tran_df = pl.DataFrame({
+                    "tran_id": [tran_id] * len(pos),
+                    "tran_start": pos,
+                    "counts": vals,
+                })
+                results.append(tran_df)
         except Exception as e:
             log_warning(f"Error reading transcript {tran_id}: {str(e)}")
     

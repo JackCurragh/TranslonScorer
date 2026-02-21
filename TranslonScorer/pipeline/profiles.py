@@ -23,6 +23,7 @@ from ..file_handlers import zarr as zarr_handlers
 from ..file_handlers import bigwig as bigwig_handlers
 from ..core import coordinates
 from ..utils import log_info, log_warning
+from ..utils.io import write_parquet_safe
 
 
 def _ensure_transcript_coords(reads_df: pl.DataFrame, exon_df: pl.DataFrame) -> pl.DataFrame:
@@ -211,15 +212,10 @@ def profiles_from_zarr(
 
 
 def write_profiles_parquet(df: pl.DataFrame, out_path: str, sample: Optional[str] = None) -> str:
-    """Write profiles to Parquet; include sample column if provided."""
+    """Write profiles to Parquet; include sample column if provided (safe I/O)."""
     if sample:
         df = df.with_columns(pl.lit(sample).alias('sample'))
-    # Ensure parent directory exists (Polars does not create it)
-    parent = os.path.dirname(out_path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    df.write_parquet(out_path)
-    return out_path
+    return write_parquet_safe(df, out_path)
 
 
 def profiles_from_bigwig(

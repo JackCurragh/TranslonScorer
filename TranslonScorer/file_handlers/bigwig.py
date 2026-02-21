@@ -484,7 +484,6 @@ def process_genomic_bigwig(bw_handle, exon_df):
     """
     import polars as pl
     import numpy as np
-    import math
     from ..utils.logging import log_info, log_warning
     
     # Get chromosomes in BigWig
@@ -494,6 +493,9 @@ def process_genomic_bigwig(bw_handle, exon_df):
     all_tran_ids = []
     all_tran_starts = []
     all_counts = []
+    # Simple in-memory cache to avoid re-reading identical exon intervals shared across isoforms
+    _cache: dict[tuple[str, int, int], np.ndarray] = {}
+    _cache_cap = 50000
     
     # Process each transcript
     for tran_id in exon_df["tran_id"].unique():
@@ -517,9 +519,9 @@ def process_genomic_bigwig(bw_handle, exon_df):
             else:
                 continue
         
-        # Initialize transcript data
-        coverage_dict = {}
-        max_tran_pos = 0
+        # Collect sparse positions/values directly (vectorized)
+        sparse_pos: list[int] = []
+        sparse_vals: list[float] = []
         
         # Process each exon in this transcript
         for row in tran_exons.iter_rows(named=True):
@@ -535,26 +537,20 @@ def process_genomic_bigwig(bw_handle, exon_df):
                         log_warning(f"Skipping invalid exon interval {chrom}:{start}-{stop} (zero/negative length)")
                         continue
                     
-                    # Calculate transcript length for this exon
-                    exon_length = stop - start
-                    max_tran_pos = max(max_tran_pos, tran_start + exon_length)
-                    
                     try:
-                        # Get coverage values from BigWig
-                        values = bw_handle.values(chrom, start, stop)
-                        # Map to transcript coordinates (sparse: keep only finite, non-zero)
-                        for j, value in enumerate(values):
-                            if value is None:
-                                continue
-                            try:
-                                v = float(value)
-                            except Exception:
-                                # If conversion fails, skip
-                                continue
-                            if math.isnan(v) or v == 0.0:
-                                continue
-                            tran_pos = tran_start + j
-                            coverage_dict[tran_pos] = coverage_dict.get(tran_pos, 0.0) + v
+                        key = (chrom, start, stop)
+                        arr = _cache.get(key)
+                        if arr is None:
+                            vals = bw_handle.values(chrom, start, stop, numpy=True)
+                            arr = np.asarray(vals, dtype=np.float32)
+                            if len(_cache) >= _cache_cap:
+                                _cache.clear()
+                            _cache[key] = arr
+                        mask = np.isfinite(arr) & (arr != 0.0)
+                        if mask.any():
+                            idx = np.nonzero(mask)[0]
+                            sparse_pos.extend((tran_start + idx).astype(int).tolist())
+                            sparse_vals.extend(arr[mask].astype(float).tolist())
                     except Exception as e:
                         log_warning(f"Error reading {chrom}:{start}-{stop}: {str(e)}")
             else:
@@ -567,35 +563,29 @@ def process_genomic_bigwig(bw_handle, exon_df):
                     log_warning(f"Skipping invalid exon interval {chrom}:{start}-{stop} (zero/negative length)")
                     continue
                 
-                # Calculate transcript length for this exon
-                exon_length = stop - start
-                max_tran_pos = max(max_tran_pos, tran_start + exon_length)
-                
                 try:
-                    # Get coverage values from BigWig
-                    values = bw_handle.values(chrom, start, stop)
-                    # Map to transcript coordinates (sparse: keep only finite, non-zero)
-                    for j, value in enumerate(values):
-                        if value is None:
-                            continue
-                        try:
-                            v = float(value)
-                        except Exception:
-                            continue
-                        if math.isnan(v) or v == 0.0:
-                            continue
-                        tran_pos = tran_start + j
-                        coverage_dict[tran_pos] = coverage_dict.get(tran_pos, 0.0) + v
+                    key = (chrom, start, stop)
+                    arr = _cache.get(key)
+                    if arr is None:
+                        vals = bw_handle.values(chrom, start, stop, numpy=True)
+                        arr = np.asarray(vals, dtype=np.float32)
+                        if len(_cache) >= _cache_cap:
+                            _cache.clear()
+                        _cache[key] = arr
+                    mask = np.isfinite(arr) & (arr != 0.0)
+                    if mask.any():
+                        idx = np.nonzero(mask)[0]
+                        sparse_pos.extend((tran_start + idx).astype(int).tolist())
+                        sparse_vals.extend(arr[mask].astype(float).tolist())
                 except Exception as e:
                     log_warning(f"Error reading {chrom}:{start}-{stop}: {str(e)}")
         
         # Add coverage data for this transcript
-        if coverage_dict:
-            # Emit sparse, non-zero coverage only
-            for tran_pos, v in coverage_dict.items():
-                all_tran_ids.append(tran_id)
-                all_tran_starts.append(int(tran_pos))
-                all_counts.append(float(v))
+        if sparse_pos:
+            n = len(sparse_pos)
+            all_tran_ids.extend([tran_id] * n)
+            all_tran_starts.extend(sparse_pos)
+            all_counts.extend(sparse_vals)
     
     # Create DataFrame from collected data
     if all_tran_ids:
@@ -631,7 +621,6 @@ def process_transcriptomic_bigwig(bw_handle, exon_df):
     """
     import polars as pl
     import numpy as np
-    import math
     from ..utils.logging import log_warning
     
     # Get transcripts in BigWig
@@ -650,22 +639,11 @@ def process_transcriptomic_bigwig(bw_handle, exon_df):
             # Get transcript size from BigWig
             tran_size = bw_handle.chroms()[tran_id]
             # Get coverage values for the entire transcript
-            values = bw_handle.values(tran_id, 0, tran_size)
-            # Build sparse rows (non-zero, finite)
-            pos = []
-            vals = []
-            for i, v in enumerate(values):
-                if v is None:
-                    continue
-                try:
-                    fv = float(v)
-                except Exception:
-                    continue
-                if math.isnan(fv) or fv == 0.0:
-                    continue
-                pos.append(i)
-                vals.append(fv)
-            if pos:
+            arr = np.asarray(bw_handle.values(tran_id, 0, tran_size, numpy=True), dtype=np.float32)
+            mask = np.isfinite(arr) & (arr != 0.0)
+            if mask.any():
+                pos = np.nonzero(mask)[0].astype(int).tolist()
+                vals = arr[mask].astype(float).tolist()
                 tran_df = pl.DataFrame({
                     "tran_id": [tran_id] * len(pos),
                     "tran_start": pos,

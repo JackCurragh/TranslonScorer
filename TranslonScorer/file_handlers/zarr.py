@@ -14,8 +14,6 @@ These helpers are intentionally simple and functional; they stream in chunks and
 avoid materializing the full matrix.
 """
 
-from __future__ import annotations
-
 from typing import Iterator, List, Tuple, Optional, Dict
 
 import polars as pl

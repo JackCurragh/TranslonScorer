@@ -40,9 +40,15 @@ def _make_transcripts_table(exon_df: pl.DataFrame, fmap_df: Optional[pl.DataFram
         .select(['tran_id', 'chr', 'strand', 'length_tran'])
         .unique(subset=['tran_id'])
     )
-    if fmap_df is not None and 'locus_id' in fmap_df.columns and 'transcript_id' in fmap_df.columns:
-        lut = fmap_df.select(['transcript_id', 'locus_id']).unique()
-        lens = lens.join(lut, left_on='tran_id', right_on='transcript_id', how='left').drop('transcript_id').rename({'locus_id':'gene_id'})
+    # Join locus/gene id if present in feature_map; tolerate either 'transcript_id' or 'tran_id'
+    if fmap_df is not None and 'locus_id' in fmap_df.columns:
+        tx_col = 'tran_id' if 'tran_id' in fmap_df.columns else ('transcript_id' if 'transcript_id' in fmap_df.columns else None)
+        if tx_col is not None:
+            lut = fmap_df.select([tx_col, 'locus_id']).unique()
+            # Normalize key name to 'tran_id' to avoid extra columns
+            if tx_col != 'tran_id':
+                lut = lut.rename({tx_col: 'tran_id'})
+            lens = lens.join(lut, on='tran_id', how='left').rename({'locus_id': 'gene_id'})
     return lens
 
 
@@ -137,4 +143,3 @@ def load_annotation_bundle(dir_path: str) -> Tuple[pl.DataFrame, pl.DataFrame, p
         with open(manifest_path, 'r') as fh:
             manifest = json.load(fh)
     return exons, cds, feats, fmap, tx, loci_bed, manifest
-

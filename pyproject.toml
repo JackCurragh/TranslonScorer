@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "TranslonScorer"
+version = "0.1.0"
+description = "A CLI for scoring translational events from Ribo-seq data"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [ { name = "Jack Tierney", email = "jackcurragh@gmail.com" } ]
+keywords = ["Ribo-seq", "translation", "ORF", "bioinformatics"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+]
+
+# Core runtime deps; heavy/optional ones are in extras below
+dependencies = [
+  "polars==1.36.1",
+  "numpy>=1.26,<2",
+  "pandas==2.3.3",
+  "pyarrow==21.0.0",
+  "pysam==0.22.1",
+  "pyfaidx==0.8.1.1",
+  "pyahocorasick==2.1.0",
+  "pyranges==0.0.129",
+  "click>=8.1.7,<9",
+]
+
+[project.optional-dependencies]
+bigwig = [
+  "pyBigWig>=0.3.22",
+]
+zarr = [
+  "zarr==2.17.2",
+  "numcodecs>=0.15,<0.16",
+]
+viz = [
+  "matplotlib==3.9.0",
+  "plotly==5.22.0",
+  "Jinja2==3.1.4",
+]
+fastbam = [
+  "oxbow==0.5.1",
+]
+perf = [
+  "psutil>=5.9",
+  "memory-profiler==0.61.0",
+]
+dev = [
+  "pytest==8.2.0",
+]
+full = [
+  "TranslonScorer[bigwig, zarr, viz, fastbam, perf, dev]",
+]
+
+[project.urls]
+Homepage = "https://github.com/JackCurragh/TranslonScorer"
+Issues = "https://github.com/JackCurragh/TranslonScorer/issues"
+
+[project.scripts]
+translonscorer = "TranslonScorer.cli:cli"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["TranslonScorer", "TranslonScorer.*"]
+exclude = ["data/*"]

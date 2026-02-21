@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Zarr + unique-read index loader utilities.
 

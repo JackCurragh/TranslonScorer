@@ -20,6 +20,7 @@ class Config:
     chromsizes: Optional[str] = None
     sequence: str = field(default="")
     annotation: str = field(default="")
+    annotation_dir: Optional[str] = None
     
     # BigWig options
     bigwig: Optional[str] = None
@@ -107,15 +108,22 @@ class Config:
         if not self.sequence:
             raise ValueError("Sequence file is required")
         
-        if not self.annotation:
-            raise ValueError("Annotation file is required")
+        # Annotation requirements:
+        # - features step: requires GTF (handled at CLI level)
+        # - other steps: either annotation_dir (bundle) OR GTF
+        if not self.annotation_dir and not self.annotation:
+            raise ValueError("Provide --annotation-dir (annotation bundle) or --annotation (GTF)")
         
         if not self.output:
             raise ValueError("Output path is required")
             
         # Validate input files exist
         self._validate_file_exists(self.sequence, "Sequence")
-        self._validate_file_exists(self.annotation, "Annotation")
+        if self.annotation:
+            self._validate_file_exists(self.annotation, "Annotation")
+        if self.annotation_dir:
+            if not os.path.isdir(self.annotation_dir):
+                raise FileNotFoundError(f"Annotation dir not found: {self.annotation_dir}")
         
         if self.bam:
             self._validate_file_exists(self.bam, "BAM")

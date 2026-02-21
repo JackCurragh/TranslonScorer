@@ -14,6 +14,7 @@ Optionally include a 'sample' column for multi-sample sources.
 from __future__ import annotations
 
 from typing import Dict, Iterable, Iterator, Optional, Tuple
+from __future__ import annotations
 
 import polars as pl
 

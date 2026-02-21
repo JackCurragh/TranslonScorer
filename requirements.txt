@@ -13,6 +13,8 @@ pyahocorasick==2.1.0
 oxbow==0.5.1
 pyranges==0.0.129
 zarr==2.17.2
+# Pin numcodecs below 0.16; 0.16 removed cbuffer_* used by zarr 2.x
+numcodecs>=0.15,<0.16
 
 # CLI and Configuration
 click>=8.1.7,<9

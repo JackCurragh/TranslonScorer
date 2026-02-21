@@ -15,7 +15,7 @@ avoid materializing the full matrix.
 
 from __future__ import annotations
 
-from typing import Iterator, List, Tuple
+from typing import Iterator, List, Tuple, Optional, Dict
 
 import polars as pl
 import importlib
@@ -72,18 +72,18 @@ def iter_reads_from_zarr(
         # If no mapping provided, assume samples are addressed by integer indices in order
         sample_to_index = {s: i for i, s in enumerate(samples)}
 
-    # Lazy scan the index to get total n_reads
+    # Lazy scan the index to get total rows
     scan = pl.scan_parquet(read_index_parquet).select(pl.len())
-    n_reads = scan.collect().item()
+    n_rows = scan.collect().item()
 
     # Iterate in read_id chunks
-    for start in range(0, n_reads, chunk_size):
-        end = min(start + chunk_size, n_reads)
-        # Load index slice
+    for start in range(0, n_rows, chunk_size):
+        end = min(start + chunk_size, n_rows)
+        # Load index slice with read_id
         idx_df = (
             pl.scan_parquet(read_index_parquet)
             .slice(start, end - start)
-            .select(["chr", "start", "stop", "strand", "length"])  # keep only needed
+            .select(["read_id", "chr", "start", "stop", "strand", "length"])  # keep only needed
             .collect()
         )
 
@@ -94,12 +94,13 @@ def iter_reads_from_zarr(
         # For each sample, slice counts and emit
         for s in samples:
             si = sample_to_index[s]
+            read_ids = idx_df.get_column('read_id').to_numpy()
             if samples_first:
-                counts = arr.get_orthogonal_selection((si, slice(start, end)))
+                counts = arr.get_orthogonal_selection((si, read_ids))
             else:
-                counts = arr.get_orthogonal_selection((slice(start, end), si))
+                counts = arr.get_orthogonal_selection((read_ids, si))
 
             # Build DF with counts
-            df = idx_df.with_columns(pl.Series("count", counts))
+            df = idx_df.with_columns(pl.Series("count", counts)).select(["chr","start","stop","strand","length","count"])  # drop read_id
 
             yield s, df

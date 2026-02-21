@@ -202,6 +202,11 @@ def getexons_and_cds(annotation_file, tran=[]):
         "column_7": "strand",
         "column_9": "attributes",
     })
+    # Normalize to 0-based, half-open coordinates for consistency with BAM/BigWig
+    df = df.with_columns([
+        (pl.col("start").cast(pl.Int64) - 1).alias("start"),
+        pl.col("stop").cast(pl.Int64).alias("stop"),
+    ])
     
     # Extract transcript IDs
     df = df.with_columns(

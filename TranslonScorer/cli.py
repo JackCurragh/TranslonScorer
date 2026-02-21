@@ -177,6 +177,7 @@ def profiles(**kwargs):
     if not (config.bam or config.zarr_root or config.bigwig or (config.forward_bigwig and config.reverse_bigwig)):
         raise click.BadParameter('Provide one of: --bam (classic/collapsed), --zarr-root with --read-index-parquet and --sample, or --bigwig/--forward-bigwig+--reverse-bigwig')
 
+    log_info("Starting profiles workflow…")
     # Load annotation: prefer bundle if provided
     exon_df = cds_df = None
     if config.annotation_dir:
@@ -188,6 +189,9 @@ def profiles(**kwargs):
     from .pipeline.profiles import profiles_from_bam, profiles_from_zarr, profiles_from_bigwig, write_profiles_parquet
     from .pipeline.locus_profiles import build_locus_profiles_zarr
 
+    log_info("Inputs detected: " + (
+        "BAM" if config.bam else ("Zarr" if config.zarr_root else ("BigWig" if (config.bigwig or (config.forward_bigwig and config.reverse_bigwig)) else "Unknown"))
+    ))
     # BAM lane
     if config.bam and not config.zarr_root:
         prof, offsets = profiles_from_bam(
@@ -199,6 +203,7 @@ def profiles(**kwargs):
             count_pattern=config.bam_count_pattern,
             count_tag=config.bam_count_tag,
         )
+        log_info(f"Writing profiles to: {kwargs['profiles_out']}")
         write_profiles_parquet(prof, kwargs['profiles_out'])
         if config.offsets_out:
             # Persist discovered offsets
@@ -207,9 +212,12 @@ def profiles(**kwargs):
         if config.junctions_out:
             # Aggregate junctions from BAM
             from .pipeline.junctions import aggregate_bam_junctions
+            log_info("Aggregating junctions from BAM…")
             j = aggregate_bam_junctions(config.bam)
             if not j.is_empty():
-                j.write_parquet(config.junctions_out)
+                from .utils.io import write_parquet_safe
+                log_info(f"Writing junctions to: {config.junctions_out}")
+                write_parquet_safe(j, config.junctions_out)
                 log_info("Junction counts written from BAM")
         log_info("Profiles written")
     # Zarr lane (with optional index build from BAM)
@@ -258,7 +266,9 @@ def profiles(**kwargs):
             ):
                 out = kwargs['profiles_out']
                 stem, ext = (out.rsplit('.', 1) + ['parquet'])[:2]
-                write_profiles_parquet(prof, f"{stem}_{sample}.{ext}", sample=sample)
+                out_path = f"{stem}_{sample}.{ext}"
+                log_info(f"Writing sample {sample} profiles to: {out_path}")
+                write_profiles_parquet(prof, out_path, sample=sample)
             log_info("Profiles written for all samples")
             # Optional junction aggregation from splits index
             if config.junctions_out:
@@ -278,7 +288,9 @@ def profiles(**kwargs):
     else:
         # BigWig lane: single or stranded inputs
         bw = { 'forward': config.forward_bigwig, 'reverse': config.reverse_bigwig } if (config.forward_bigwig and config.reverse_bigwig) else config.bigwig
+        log_info("Computing profiles from BigWig…")
         prof = profiles_from_bigwig(bw, exon_df, stranded=config.stranded)
+        log_info(f"Writing profiles to: {kwargs['profiles_out']}")
         write_profiles_parquet(prof, kwargs['profiles_out'])
         log_info("Profiles written from BigWig")
 

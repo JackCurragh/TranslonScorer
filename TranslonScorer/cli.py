@@ -40,7 +40,9 @@ def common_options(func):
     func = click.option('--plot-range', 'plot_range', type=int, default=30, help='Plot range around start position (default: 30)')(func)
     
     # Output options
-    func = click.option('--output', '-o', required=True, help='Base name for output files')(func)
+    # Not all commands require an explicit -o (e.g., profiles when --profiles-out is given).
+    # Keep optional here; commands that require -o should validate explicitly.
+    func = click.option('--output', '-o', required=False, help='Base name for output files')(func)
     func = click.option('--log-file', 'log_file', help='Path to log file. If not provided, logs will only be written to console.')(func)
     func = click.option('--log-level', 'log_level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']), default='INFO', help='Set the logging level (default: INFO)')(func)
     
@@ -142,25 +144,36 @@ def profiles(**kwargs):
     """Generate transcript-space A-site profiles from BAM (classic/collapsed), Zarr, or BigWig."""
     setup_logging()
     config = Config.from_click_args(**kwargs)
-    # Decide default output path when --profiles-out is omitted
+    # Decide default output path when --profiles-out is omitted (do not require -o)
     if not kwargs.get('profiles_out'):
-        out_base = kwargs.get('output') or '.'
-        # If -o looks like a directory (exists, '.', or endswith '/'), drop file inside it.
-        if out_base in (None, '', '.') or out_base.endswith('/') or os.path.isdir(out_base):
-            out_dir = out_base if out_base and out_base != '' else '.'
-            kwargs['profiles_out'] = os.path.join(
-                out_dir,
+        out_base = kwargs.get('output')
+        if out_base:
+            # If -o provided, derive from it
+            if out_base.endswith('/') or os.path.isdir(out_base):
+                out_dir = out_base
+                kwargs['profiles_out'] = os.path.join(
+                    out_dir,
+                    'locus_profiles.zarr' if kwargs.get('loci_bed') else 'transcript_profiles.parquet'
+                )
+            else:
+                base = out_base.rstrip('/')
+                kwargs['profiles_out'] = (
+                    f"{base}_locus_profiles.zarr" if kwargs.get('loci_bed')
+                    else f"{base}_transcript_profiles.parquet"
+                )
+        else:
+            # Neither --profiles-out nor -o given: write into cwd with sensible default name
+            kwargs['profiles_out'] = (
                 'locus_profiles.zarr' if kwargs.get('loci_bed') else 'transcript_profiles.parquet'
             )
-        else:
-            # Treat -o as a prefix; append a suffix + extension
-            base = out_base.rstrip('/')
-            kwargs['profiles_out'] = (
-                f"{base}_locus_profiles.zarr" if kwargs.get('loci_bed')
-                else f"{base}_transcript_profiles.parquet"
-            )
-    # Minimal file checks
-    config._validate_file_exists(config.annotation, 'Annotation')
+    # Minimal file checks: accept --annotation-dir (bundle) or --annotation (GTF)
+    if not (config.annotation_dir or config.annotation):
+        raise click.BadParameter('Provide --annotation-dir (bundle) or --annotation (GTF)')
+    if config.annotation_dir:
+        # Bundle provided; no need to validate GTF path here
+        pass
+    else:
+        config._validate_file_exists(config.annotation, 'Annotation')
     if not (config.bam or config.zarr_root or config.bigwig or (config.forward_bigwig and config.reverse_bigwig)):
         raise click.BadParameter('Provide one of: --bam (classic/collapsed), --zarr-root with --read-index-parquet and --sample, or --bigwig/--forward-bigwig+--reverse-bigwig')
 

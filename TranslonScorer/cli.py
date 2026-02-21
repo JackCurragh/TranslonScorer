@@ -1,4 +1,5 @@
 """Command-line interface for TranslonScorer."""
+from __future__ import annotations
 
 import os
 import click
@@ -20,7 +21,8 @@ def common_options(func):
     func = click.option('--bam-count-tag', help='SAM tag for tag-based collapsed BAM (e.g. RC).')(func)
     func = click.option('--chromsizes', '-c', help='Chromosome sizes file (required if processing BAM)')(func)
     func = click.option('--sequence', '-s', required=True, help='Input FASTA file (genomic or transcriptomic)')(func)
-    func = click.option('--annotation', '-a', required=True, help='GTF annotation file for identifying exons and transcripts')(func)
+    func = click.option('--annotation', '-a', required=False, help='GTF annotation file for identifying exons and transcripts')(func)
+    func = click.option('--annotation-dir', required=False, help='Annotation bundle directory (preferred)')(func)
     
     # BigWig options
     func = click.option('--bigwig', '-w', help='BigWig file containing Ribo-seq coverage. If provided, skips BAM/Zarr processing')(func)
@@ -162,8 +164,13 @@ def profiles(**kwargs):
     if not (config.bam or config.zarr_root or config.bigwig or (config.forward_bigwig and config.reverse_bigwig)):
         raise click.BadParameter('Provide one of: --bam (classic/collapsed), --zarr-root with --read-index-parquet and --sample, or --bigwig/--forward-bigwig+--reverse-bigwig')
 
-    # Load annotation
-    cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
+    # Load annotation: prefer bundle if provided
+    exon_df = cds_df = None
+    if config.annotation_dir:
+        from .pipeline.annotation_bundle import load_annotation_bundle
+        exon_df, cds_df, feats_df, fmap_df, tx_df, loci_bed, manifest = load_annotation_bundle(config.annotation_dir)
+    else:
+        cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
 
     from .pipeline.profiles import profiles_from_bam, profiles_from_zarr, profiles_from_bigwig, write_profiles_parquet
     from .pipeline.locus_profiles import build_locus_profiles_zarr
@@ -345,16 +352,34 @@ def orfs_import_cmd(bed12: str, annotation: str, out_parquet: str, assign_policy
 
 @cli.command("features")
 @click.option('-a', '--annotation', required=True, help='GTF annotation file.')
-@click.option('-o', '--output', '--output-prefix', 'output_prefix', required=True, help='Output prefix for feature tables (Parquet).')
+@click.option('--out-dir', required=False, help='Output annotation bundle directory (recommended).')
+@click.option('-o', '--output', '--output-prefix', 'output_prefix', required=False, help='Legacy output prefix for feature tables (Parquet).')
 @click.option('--progress/--no-progress', default=True, help='Show progress bars (default: on).')
-def features(annotation: str, output_prefix: str, progress: bool):
-    """Emit locus features and transcript→feature mappings (no signals)."""
+def features(annotation: str, out_dir: str = None, output_prefix: str = None, progress: bool = True):
+    """Build an annotation bundle (exons, CDS, features, feature_map, transcripts, loci, manifest)."""
     setup_logging()
-    from .pipeline.locus_features import build_locus_features
-    feats, fmap = build_locus_features(annotation, progress=progress)
-    feats.write_parquet(f"{output_prefix}.features.parquet")
-    fmap.write_parquet(f"{output_prefix}.feature_map.parquet")
-    log_info("Feature tables written")
+    # Backward-compat mode: if only -o is provided, write old files and also emit a bundle next to it
+    if not out_dir and output_prefix:
+        import os
+        base = os.path.basename(output_prefix)
+        root = os.path.dirname(output_prefix) or '.'
+        out_dir = os.path.join(root, f"{base}.annotation")
+    if not out_dir and not output_prefix:
+        raise click.BadParameter('Provide either --out-dir for the bundle or -o for legacy outputs')
+
+    # Always build the bundle
+    from .pipeline.annotation_bundle import build_annotation_bundle
+    bdir, paths = build_annotation_bundle(annotation, out_dir, progress=progress)
+    log_info(f"Annotation bundle written at: {bdir}")
+
+    # Write legacy outputs if requested
+    if output_prefix:
+        import polars as pl
+        feats = pl.read_parquet(paths['features'])
+        fmap = pl.read_parquet(paths['feature_map'])
+        feats.write_parquet(f"{output_prefix}.features.parquet")
+        fmap.write_parquet(f"{output_prefix}.feature_map.parquet")
+        log_info("Legacy feature tables written")
 
 
 @cli.command("feature-metrics")

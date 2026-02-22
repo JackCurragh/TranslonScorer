@@ -99,10 +99,23 @@ def readbam(
         if old_name in df.columns:
             df = df.rename({old_name: new_name})
     
-    # Calculate length from sequence
-    df = df.with_columns(
-        pl.col('seq').str.lengths().alias('length')
-    )
+    # Calculate read length robustly across Polars versions and backends
+    # Prefer string length when sequence is present; otherwise fall back to stop-start
+    if 'length' not in df.columns:
+        if 'seq' in df.columns:
+            # Polars 1.36+: use str.len_chars() (str.lengths() was removed)
+            df = df.with_columns(
+                pl.when(pl.col('seq').is_not_null())
+                .then(pl.col('seq').cast(pl.Utf8).str.len_chars())
+                .otherwise(0)
+                .alias('length')
+            )
+        elif {'start', 'stop'}.issubset(set(df.columns)):
+            df = df.with_columns((pl.col('stop') - pl.col('start')).cast(pl.Int64).alias('length'))
+        elif 'rlen' in df.columns:
+            df = df.with_columns(pl.col('rlen').cast(pl.Int64).alias('length'))
+        elif 'read_len' in df.columns:
+            df = df.with_columns(pl.col('read_len').cast(pl.Int64).alias('length'))
     
     # Add strand based on SAM flag (0x10 is the reverse strand bit)
     df = df.with_columns(

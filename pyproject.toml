@@ -31,6 +31,8 @@ dependencies = [
   "pyahocorasick==2.1.0",
   "pyranges==0.0.129",
   "click>=8.1.7,<9",
+  "pyBigWig>=0.3.22",
+  "oxbow==0.5.1",
 ]
 
 [project.optional-dependencies]

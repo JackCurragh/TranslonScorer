@@ -168,9 +168,18 @@ def profiles_from_zarr(
             # Accumulate a capped sample per read length for change-point
             need: set[int] = set(int(x) for x in mapped.get_column('length').unique().to_list() if int(x) not in offsets)
             if need:
+                # Prepare input for relative-to-CDS shift detection:
+                # ensure the 'start' column refers to transcript start.
+                if 'tran_start_bam' in mapped.columns:
+                    rel_input = mapped.with_columns(pl.col('tran_start_bam').alias('start'))
+                elif 'tran_start' in mapped.columns:
+                    rel_input = mapped.with_columns(pl.col('tran_start').alias('start'))
+                else:
+                    # Fall back to existing 'start' as-is
+                    rel_input = mapped
                 # Join CDS to compute relative to CDS start using existing helper
                 rel = bam_handlers.process_transcriptomic_bam(
-                    mapped.rename({'tran_start_bam': 'start'}) if 'tran_start_bam' in mapped.columns else mapped.rename({'tran_start': 'start'}),
+                    rel_input,
                     cds_df
                 )
                 # For each needed length, take up to sample_cap_per_len rows

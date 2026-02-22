@@ -226,44 +226,50 @@ def profiles(**kwargs):
         # Ensure samples provided
         if not config.samples or len(config.samples) == 0:
             if kwargs.get('all_samples'):
-                # Discover sample names from Zarr store (robust to group/array roots)
-                import importlib
-                zmod = importlib.import_module('zarr')
+                # Discover sample names from Zarr store (v2/v3; group/array roots)
                 try:
-                    store = zmod.open(config.zarr_root, mode='r')
+                    # Reuse robust opener to locate counts array
+                    from .file_handlers.zarr import _open_counts as _open_counts_helper  # type: ignore
                 except Exception:
-                    # Try appending '/counts' if the root is a group path
-                    store = zmod.open(config.zarr_root.rstrip('/') + '/counts', mode='r')
-                # If root is an array, use it; else prefer 'counts' child or first child
-                counts = None
-                try:
-                    from zarr.core import Array as _ZarrArray  # zarr 2.x
-                except Exception:
-                    _ZarrArray = None
-                if _ZarrArray is not None and isinstance(store, _ZarrArray):
-                    counts = store
-                else:
-                    if hasattr(store, '__contains__') and ('counts' in store):
-                        counts = store['counts']
-                    else:
-                        keys = list(store.keys()) if hasattr(store, 'keys') else []
-                        counts = store[keys[0]] if keys else store
-                # Prefer an existing '/samples' 1D array of names if present
-                grp = store if hasattr(store, '__contains__') else None
-                if grp is not None and 'samples' in grp:
-                    names_arr = grp['samples'][...]
+                    _open_counts_helper = None
+                names: list[str] | None = None
+                if _open_counts_helper is not None:
                     try:
-                        names = [n.decode() if isinstance(n, (bytes, bytearray)) else str(n) for n in list(names_arr)]
+                        arr = _open_counts_helper(config.zarr_root)
+                        # Heuristic: smaller dim = samples
+                        n = arr.shape[0] if arr.shape[0] <= arr.shape[1] else arr.shape[1]
+                        names = [str(i) for i in range(n)]
                     except Exception:
-                        names = [str(n) for n in list(names_arr)]
-                else:
-                    n = counts.shape[0] if counts.shape[0] <= counts.shape[1] else counts.shape[1]
-                    names = [str(i) for i in range(n)]
+                        names = None
+                if names is None:
+                    # Fallback: open root, prefer group attrs['samples'] if present
+                    import importlib
+                    zmod = importlib.import_module('zarr')
+                    store = zmod.open(config.zarr_root, mode='r')
+                    # Prefer root attribute 'samples' (Zarr v3/v2 attrs)
+                    try:
+                        attrs = getattr(store, 'attrs', None)
+                        if attrs is not None and 'samples' in attrs:
+                            names_arr = attrs['samples']
+                            names = [n.decode() if isinstance(n, (bytes, bytearray)) else str(n) for n in list(names_arr)]
+                        else:
+                            raise KeyError('no attrs[samples]')
+                    except Exception:
+                        # Otherwise: if group has a dataset named 'samples', use it; else fall back to counts shape
+                        grp = store if hasattr(store, '__contains__') else None
+                        if grp is not None and 'samples' in grp:
+                            names_arr = grp['samples'][...]
+                            try:
+                                names = [n.decode() if isinstance(n, (bytes, bytearray)) else str(n) for n in list(names_arr)]
+                            except Exception:
+                                names = [str(n) for n in list(names_arr)]
+                        else:
+                            counts = zmod.open(config.zarr_root.rstrip('/') + '/counts', mode='r')
+                            n = counts.shape[0] if counts.shape[0] <= counts.shape[1] else counts.shape[1]
+                            names = [str(i) for i in range(n)]
                 config.samples = names
             else:
                 raise click.BadParameter('Zarr mode requires at least one --sample or use --all-samples')
-
-            raise click.BadParameter('Zarr mode requires at least one --sample')
         # If index missing but BAM is present, build index now
         if not config.read_index_parquet and config.bam:
             from .pipeline.index_from_bam import build_read_index_from_bam

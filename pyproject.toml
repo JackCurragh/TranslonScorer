@@ -34,8 +34,10 @@ dependencies = [
   "pyBigWig>=0.3.22",
   "oxbow==0.5.1",
   "setuptools<70",
-  "zarr==2.17.2",
-  "numcodecs>=0.15,<0.16",
+  # Zarr v3 store compatibility (global_matrix.zarr uses zarr.json)
+  "zarr>=3.1,<4",
+  # numcodecs 0.16+ changed APIs; stay below 0.16
+  "numcodecs>=0.12,<0.16",
 ]
 
 [project.optional-dependencies]
@@ -43,8 +45,8 @@ bigwig = [
   "pyBigWig>=0.3.22",
 ]
 zarr = [
-  "zarr==2.17.2",
-  "numcodecs>=0.15,<0.16",
+  "zarr>=3.1,<4",
+  "numcodecs>=0.12,<0.16",
 ]
 viz = [
   "matplotlib==3.9.0",

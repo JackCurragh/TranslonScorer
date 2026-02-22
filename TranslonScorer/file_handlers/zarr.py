@@ -37,12 +37,45 @@ def _require_zarr():
 
 
 def _open_counts(zroot: str):
+    """Open and return the counts array from a Zarr root path.
+
+    Handles stores that either:
+      - have a root group with a child array named 'counts' (recommended), or
+      - point directly to the array path (e.g. ".../global_matrix.zarr/counts"), or
+      - have a single top-level array (fallback to the first child).
+    """
     _require_zarr()
-    store = _zarr_mod.open(zroot, mode="r")
-    if "counts" not in store:
-        raise ValueError("Zarr root does not contain 'counts' array")
-    arr = store["counts"]
-    return arr
+    # First, try to open as a group and access 'counts'
+    try:
+        root = _zarr_mod.open(zroot, mode="r")
+        # If this is already an Array (path points directly to an array), return it
+        try:
+            from zarr.core import Array as _ZarrArray  # zarr 2.x
+        except Exception:
+            _ZarrArray = None  # type: ignore
+        if _ZarrArray is not None and isinstance(root, _ZarrArray):
+            return root
+        # Otherwise, it's a group-like; prefer 'counts' child
+        if hasattr(root, "__contains__") and ("counts" in root):
+            return root["counts"]
+        # If no 'counts', but there are children, pick the first child
+        keys = list(root.keys()) if hasattr(root, "keys") else []
+        if keys:
+            # Prefer a child literally named 'counts' if present
+            if 'counts' in keys:
+                return root['counts']
+            return root[keys[0]]
+    except Exception:
+        # Could not open as group; fall through to direct array paths
+        pass
+
+    # Try an explicit '/counts' child path
+    try:
+        return _zarr_mod.open(zroot.rstrip('/') + '/counts', mode='r')
+    except Exception:
+        # Final attempt: open the given path as an array
+        arr = _zarr_mod.open(zroot, mode='r')
+        return arr
 
 
 def _counts_is_samples_first(arr) -> bool:

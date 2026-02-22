@@ -20,6 +20,7 @@ import polars as pl
 
 from ..file_handlers import bam as bam_handlers
 from ..file_handlers import zarr as zarr_handlers
+from .mapped_index import build_mapped_index
 from ..file_handlers import bigwig as bigwig_handlers
 from ..core import coordinates
 from ..utils import log_info, log_warning
@@ -143,12 +144,25 @@ def profiles_from_zarr(
     offsets_mode: str = 'auto',
     offsets_out: str | None = None,
     sample_cap_per_len: int = 50000,
+    mapped_index_parquet: str | None = None,
 ) -> Iterator[Tuple[str, pl.DataFrame]]:
-    """Compute transcript A-site profiles from Zarr (multi-sample). Yields per-sample profiles."""
+    """Compute transcript A-site profiles from Zarr (multi-sample). Yields per-sample profiles.
+
+    If mapped_index_parquet is provided (or path does not exist and can be written),
+    we use a precomputed mapping read_id->(tran_id,tran_start_bam,length,strand) to
+    avoid re-running genomic->transcript projection for each sample/chunk.
+    """
     # zarr_handlers safely defers importing the heavy zarr dependency
     log_info("Streaming Zarr + index for profiles…")
     offsets_by_sample: Dict[str, Dict[int, int]] = {}
     sampled_by_sample_len: Dict[tuple[str,int], int] = {}
+
+    mapped_path: str | None = None
+    if mapped_index_parquet:
+        mapped_path = mapped_index_parquet
+        if not os.path.exists(mapped_path):
+            log_info("Building mapped index (one-time)…")
+            build_mapped_index(read_index_parquet, exon_df, out_parquet=mapped_path)
 
     for sample, chunk in zarr_handlers.iter_reads_from_zarr(
         zarr_root, read_index_parquet, samples
@@ -156,8 +170,24 @@ def profiles_from_zarr(
         if chunk.is_empty():
             continue
 
-        # Project to transcript coords
-        mapped = _ensure_transcript_coords(chunk, exon_df)
+        if mapped_path:
+            # Join to mapped index via read_id (faster; no projection)
+            # Ensure read_id present; the index provides it
+            if 'read_id' not in chunk.columns:
+                # Add sequential row ids won't match; enforce safeguard
+                raise RuntimeError("read_id missing in chunk; expected from index join")
+            mapped = (
+                chunk.join(
+                    pl.scan_parquet(mapped_path).select(["read_id","tran_id","tran_start_bam","length","strand"]).collect(),
+                    on=["read_id","length","strand"],  # use length/strand to reduce collisions
+                    how='inner'
+                )
+            )
+            if mapped.is_empty():
+                continue
+        else:
+            # Project to transcript coords on the fly
+            mapped = _ensure_transcript_coords(chunk, exon_df)
 
         # Offsets per sample
         if sample not in offsets_by_sample:
@@ -175,7 +205,6 @@ def profiles_from_zarr(
                 elif 'tran_start' in mapped.columns:
                     rel_input = mapped.with_columns(pl.col('tran_start').alias('start'))
                 else:
-                    # Fall back to existing 'start' as-is
                     rel_input = mapped
                 # Join CDS to compute relative to CDS start using existing helper
                 rel = bam_handlers.process_transcriptomic_bam(

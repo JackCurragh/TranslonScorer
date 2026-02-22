@@ -140,6 +140,7 @@ def find_orfs(**kwargs):
 @click.option('--junctions-out', help='Path to write junction counts when available.')
 @click.option('--offsets-out', help='Path to write discovered offsets per sample/length.')
 @click.option('--partitioned/--no-partitioned', default=False, help='Write profiles as a partitioned dataset by sample.')
+@click.option('--mapped-index', 'mapped_index_parquet', help='Optional path to a precomputed mapped index (read_id→tran_id/tran_start_bam). If provided and missing, it will be built.')
 @click.option('--offsets-mode', type=click.Choice(['auto','global','required']), default='auto', help='Offsets selection policy.')
 def profiles(**kwargs):
     """Generate transcript-space A-site profiles from BAM (classic/collapsed), Zarr, or BigWig."""
@@ -308,6 +309,7 @@ def profiles(**kwargs):
                 cds_df,
                 offsets_mode=config.offsets_mode,
                 offsets_out=config.offsets_out,
+                mapped_index_parquet=kwargs.get('mapped_index_parquet'),
             ):
                 out = kwargs['profiles_out']
                 stem, ext = (out.rsplit('.', 1) + ['parquet'])[:2]

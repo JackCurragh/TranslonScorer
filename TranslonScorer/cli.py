@@ -226,14 +226,32 @@ def profiles(**kwargs):
         # Ensure samples provided
         if not config.samples or len(config.samples) == 0:
             if kwargs.get('all_samples'):
-                # Discover sample names from Zarr store
+                # Discover sample names from Zarr store (robust to group/array roots)
                 import importlib
                 zmod = importlib.import_module('zarr')
-                store = zmod.open(config.zarr_root, mode='r')
-                counts = store['counts']
+                try:
+                    store = zmod.open(config.zarr_root, mode='r')
+                except Exception:
+                    # Try appending '/counts' if the root is a group path
+                    store = zmod.open(config.zarr_root.rstrip('/') + '/counts', mode='r')
+                # If root is an array, use it; else prefer 'counts' child or first child
+                counts = None
+                try:
+                    from zarr.core import Array as _ZarrArray  # zarr 2.x
+                except Exception:
+                    _ZarrArray = None
+                if _ZarrArray is not None and isinstance(store, _ZarrArray):
+                    counts = store
+                else:
+                    if hasattr(store, '__contains__') and ('counts' in store):
+                        counts = store['counts']
+                    else:
+                        keys = list(store.keys()) if hasattr(store, 'keys') else []
+                        counts = store[keys[0]] if keys else store
                 # Prefer an existing '/samples' 1D array of names if present
-                if 'samples' in store:
-                    names_arr = store['samples'][...]
+                grp = store if hasattr(store, '__contains__') else None
+                if grp is not None and 'samples' in grp:
+                    names_arr = grp['samples'][...]
                     try:
                         names = [n.decode() if isinstance(n, (bytes, bytearray)) else str(n) for n in list(names_arr)]
                     except Exception:

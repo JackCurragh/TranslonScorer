@@ -165,7 +165,7 @@ def profiles_from_zarr(
             build_mapped_index(read_index_parquet, exon_df, out_parquet=mapped_path)
 
     for sample, chunk in zarr_handlers.iter_reads_from_zarr(
-        zarr_root, read_index_parquet, samples
+        zarr_root, read_index_parquet, samples, include_read_id=bool(mapped_path)
     ):
         if chunk.is_empty():
             continue

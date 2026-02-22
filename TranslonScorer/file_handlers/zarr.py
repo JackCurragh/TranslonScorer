@@ -90,6 +90,7 @@ def iter_reads_from_zarr(
     *,
     sample_to_index: dict | None = None,
     chunk_size: int = 1_000_000,
+    include_read_id: bool = False,
 ) -> Iterator[Tuple[str, pl.DataFrame]]:
     """
     Stream normalized read chunks for each sample from Zarr + Parquet index.
@@ -133,6 +134,9 @@ def iter_reads_from_zarr(
                 counts = arr.get_orthogonal_selection((read_ids, si))
 
             # Build DF with counts
-            df = idx_df.with_columns(pl.Series("count", counts)).select(["chr","start","stop","strand","length","count"])  # drop read_id
+            if include_read_id:
+                df = idx_df.with_columns(pl.Series("count", counts)).select(["read_id","chr","start","stop","strand","length","count"])  # keep read_id
+            else:
+                df = idx_df.with_columns(pl.Series("count", counts)).select(["chr","start","stop","strand","length","count"])  # drop read_id
 
             yield s, df

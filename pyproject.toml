@@ -33,6 +33,7 @@ dependencies = [
   "click>=8.1.7,<9",
   "pyBigWig>=0.3.22",
   "oxbow==0.5.1",
+  "setuptools<70",
 ]
 
 [project.optional-dependencies]

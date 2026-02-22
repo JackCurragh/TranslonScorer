@@ -34,6 +34,8 @@ dependencies = [
   "pyBigWig>=0.3.22",
   "oxbow==0.5.1",
   "setuptools<70",
+  "zarr==2.17.2",
+  "numcodecs>=0.15,<0.16",
 ]
 
 [project.optional-dependencies]

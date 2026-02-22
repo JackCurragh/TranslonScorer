@@ -130,6 +130,7 @@ def find_orfs(**kwargs):
 @click.option('--read-index-parquet', help='Parquet mapping read_id (Zarr row) to genomic alignment (chr,start,stop,strand,length).')
 @click.option('--splits-index-parquet', help='Optional Parquet of per-read junctions (read_id, chr, donor_pos, acceptor_pos, strand).')
 @click.option('--sample', 'samples', multiple=True, help='Sample name(s) to process from the Zarr matrix.')
+@click.option('--all-samples', is_flag=True, default=False, help='Process all samples found in the Zarr counts array (uses /samples names if present).')
 @click.option('--zarr-metadata-parquet', help='Parquet with read row metadata (e.g., row_id,qname or sequence).')
 @click.option('--zarr-reads-fasta', help='FASTA with reads in Zarr row order; headers or sequences used for mapping.')
 @click.option('--zarr-read-key', type=click.Choice(['auto','row_id','qname','sequence']), default='auto', help='Key to align Zarr rows to BAM.')
@@ -224,6 +225,26 @@ def profiles(**kwargs):
     elif config.zarr_root:
         # Ensure samples provided
         if not config.samples or len(config.samples) == 0:
+            if kwargs.get('all_samples'):
+                # Discover sample names from Zarr store
+                import importlib
+                zmod = importlib.import_module('zarr')
+                store = zmod.open(config.zarr_root, mode='r')
+                counts = store['counts']
+                # Prefer an existing '/samples' 1D array of names if present
+                if 'samples' in store:
+                    names_arr = store['samples'][...]
+                    try:
+                        names = [n.decode() if isinstance(n, (bytes, bytearray)) else str(n) for n in list(names_arr)]
+                    except Exception:
+                        names = [str(n) for n in list(names_arr)]
+                else:
+                    n = counts.shape[0] if counts.shape[0] <= counts.shape[1] else counts.shape[1]
+                    names = [str(i) for i in range(n)]
+                config.samples = names
+            else:
+                raise click.BadParameter('Zarr mode requires at least one --sample or use --all-samples')
+
             raise click.BadParameter('Zarr mode requires at least one --sample')
         # If index missing but BAM is present, build index now
         if not config.read_index_parquet and config.bam:

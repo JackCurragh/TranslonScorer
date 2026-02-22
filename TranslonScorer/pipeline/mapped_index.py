@@ -51,15 +51,34 @@ def build_mapped_index(
             idx_df = idx_df.with_columns(pl.lit(1).alias("count"))
 
             # Map genomic -> transcript coords (sample-independent)
-            mapped = bam_handlers.bamtranscript(idx_df.select(["chr","start","stop","length","strand","count"]).unique(), exon_df)
+            mapped = bam_handlers.bamtranscript(
+                idx_df.select(["chr","start","stop","length","strand","count"]).unique(),
+                exon_df,
+            )
             if mapped.is_empty():
                 continue
+
+            # Normalize dtypes for a reliable join (avoid cat vs str mismatches)
+            mapped = mapped.with_columns([
+                pl.col("chr").cast(pl.Utf8),
+                pl.col("strand").cast(pl.Utf8),
+                pl.col("start").cast(pl.Int64),
+                pl.col("stop").cast(pl.Int64),
+                pl.col("length").cast(pl.Int64),
+            ])
+            idx_keys = idx_df.select(["chr","start","stop","length","strand","read_id"]).with_columns([
+                pl.col("chr").cast(pl.Utf8),
+                pl.col("strand").cast(pl.Utf8),
+                pl.col("start").cast(pl.Int64),
+                pl.col("stop").cast(pl.Int64),
+                pl.col("length").cast(pl.Int64),
+            ])
 
             # Re-attach read_id via genomic keys
             joined = (
                 mapped
                 .join(
-                    idx_df.select(["chr","start","stop","length","strand","read_id"]),
+                    idx_keys,
                     on=["chr","start","stop","length","strand"],
                     how="inner",
                 )
@@ -80,4 +99,3 @@ def build_mapped_index(
 
     log_info(f"Mapped-index written: {out_parquet}")
     return out_parquet
-

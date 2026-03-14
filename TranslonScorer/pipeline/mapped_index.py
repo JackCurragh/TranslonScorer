@@ -35,6 +35,7 @@ def build_mapped_index(
     log_info(f"Mapped-index build: {n_rows:,} reads; chunk_size={chunk_size}")
 
     writer = None
+    total_mapped = 0
     try:
         for start in range(0, n_rows, chunk_size):
             end = min(start + chunk_size, n_rows)
@@ -74,18 +75,28 @@ def build_mapped_index(
                 pl.col("length").cast(pl.Int64),
             ])
 
+            # Align chromosome naming: add 'chr' prefix to index if absent
+            mapped = mapped.with_columns(pl.col("chr").alias("chr_join"))
+            idx_keys = idx_keys.with_columns(
+                pl.when(pl.col("chr").str.starts_with("chr"))
+                .then(pl.col("chr"))
+                .otherwise(pl.lit("chr") + pl.col("chr"))
+                .alias("chr_join")
+            )
+
             # Re-attach read_id via genomic keys
             joined = (
                 mapped
                 .join(
                     idx_keys,
-                    on=["chr","start","stop","length","strand"],
+                    on=["chr_join","start","stop","length","strand"],
                     how="inner",
                 )
                 .select(["read_id","tran_id","tran_start_bam","length","strand"])  # order cols
             )
 
             # Append to Parquet
+            total_mapped += joined.height
             tbl = joined.to_arrow()
             if writer is None:
                 from pyarrow import parquet as pq
@@ -97,5 +108,5 @@ def build_mapped_index(
         if writer is not None:
             writer.close()  # type: ignore
 
-    log_info(f"Mapped-index written: {out_parquet}")
+    log_info(f"Mapped-index written: {out_parquet} ({total_mapped:,} rows)")
     return out_parquet

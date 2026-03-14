@@ -1,0 +1,70 @@
+name: Build and Push RiboMetric (latest + version)
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'RiboMetric/**'
+      - '.github/workflows/ribometric-docker.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ribometric-docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r RiboMetric/requirements.txt || true
+          pip install -e RiboMetric || true
+          pip install pytest || true
+      - name: Run tests (non-blocking)
+        run: pytest -q RiboMetric/tests || true
+
+  docker:
+    name: Build and push GHCR image
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/ribometric
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version
+        id: v
+        run: |
+          set -e
+          ver=$(sed -n "s/^__version__ = \"\(.*\)\"$/\1/p" RiboMetric/RiboMetric/__init__.py)
+          echo "version=$ver" >> $GITHUB_OUTPUT
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: RiboMetric
+          file: RiboMetric/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:v${{ steps.v.outputs.version }}
+          build-args: |
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

@@ -121,6 +121,23 @@ Current violations to remove during the refactor:
 - [x] **T14** Deleted the 3 genuine pure re-export shims (`event_extract`, `event_score`, `profile_clustering`) and repointed importers at the new tree (event_score→model+scoring.run; profile_clustering→clustering, both in pipeline modules matrix_normalisation/matrix_scoring and tests). Final gate green. STATUS: gate 41 passed; full 121 passed, 3 skipped — commit 0132bb1.
   - **DEFERRED (correctly out of scope):** `pipeline/matrix_qc.py` is a 739-line *partially-migrated real module* (not a pure shim — only some helpers re-export io/matrix), depended on by matrix_rollup + tests. `pipeline/frame_support.py` is a live **Config→FrameSupportParams adapter** depended on by cli + 3 un-migrated pipeline modules (workflow, frame_method_compare, rdg_flux_export). Removing either requires migrating those un-migrated modules off Config — a larger task than the Phase-1–3 shim cleanup. Track as **T15** if/when those modules are migrated.
 - [x] **T13.1** Per-translon report composition + dynamic consequentiality (the two remaining stubs). `report.compose_report(scores, feature_event)` aggregates long-form event scores to one row/translon (per-aspect call/metric/n_reads/supported_frac; shared events → identical aspect score for both translons). `consequential.apply_policy` is now real: `consequentiality_score = tier_confidence * (0.5 + 0.5*expression_pct) * context_weight`, gated by `min_tier_confidence`/`min_expression_percentile` — dynamic/context-aware, NO hard length/biotype gates. `workflows.report_workflow` + CLI `report` wire store+events→report→policy. Tests `tests/test_report_consequential.py` (6) + e2e. mypy-clean. STATUS: gate 41 passed; full 129 passed, 3 skipped — commits 9f017b5, de95e90.
-- [ ] **T15 (follow-up)** Migrate the remaining un-migrated `pipeline/` modules (matrix_*, read_assignment, frame_*, orf*, profiles, workflow) to the new tree / FrameSupportParams, then remove the `frame_support` adapter and fold `matrix_qc` into `io/`+`events`. STATUS: not started.
-
 `=== PHASE 4 complete — DONE (T13.1 closed the scoring stubs) ===`
+
+## Phase 5 — T15: finish the `pipeline/` migration (strangler-fig, per subsystem)
+
+`pipeline/` still holds ~30 un-migrated real modules. Migrate them subsystem by
+subsystem into the new tree, **gate green after every sub-task**, leaving a
+re-export shim at the old path until the final sweep, then delete `pipeline/`.
+Same discipline as Phases 1–4: NO Claude in commits, STATUS line + commit hash
+per task, never advance on red. Ordered so leaves move before their dependents.
+
+- [ ] **T15.1 — frame_support adapter retirement.** Migrate the 4 Config-style callers (`cli.py`, `pipeline/workflow.py`, `pipeline/frame_method_compare.py`, `pipeline/rdg_flux_export.py`) to build `FrameSupportParams` and call `TranslonScorer.frame_support.build_frame_support` directly; relocate the optional file-write into the callers. Delete `pipeline/frame_support.py`. Tests: test_golden, test_score_first_gates repoint. STATUS:
+- [ ] **T15.2 — matrix_qc fold-in.** Move the real periodicity/QC logic from `pipeline/matrix_qc.py` into `qc.py` (+ any manifest helpers into `io/matrix.py`); leave a re-export shim. Repoint `pipeline/matrix_rollup.py` + matrix tests. STATUS:
+- [ ] **T15.3 — matrix engine.** Migrate `matrix_rollup` / `matrix_scoring` / `matrix_normalisation` into `coverage/matrix.py` (+ `scoring/`), behind the existing `MatrixProvider`/golden path. Biggest single chunk; split further if needed (rollup → coverage; scoring/normalisation → scoring). Re-export shims; matrix tests green. STATUS:
+- [ ] **T15.4 — frame subsystem.** New `frame/` package for `read_assignment`, `frame_method_compare`, `frame_disambiguation`, `frame_crosstalk`. Repoint CLI (`frame-disambiguation`, `compare-frame-methods`, `compare-read-assignment`). STATUS:
+- [ ] **T15.5 — profiles / coords / indexing.** Migrate `profiles`, `locus_profiles`, `locus_features`, `transcript_coords`, `mapped_index`, `index_from_bam`, `junctions`, `junction_model` into `coverage/` + `io/`. Repoint `profiles`/`index-from-bam` CLI. STATUS:
+- [ ] **T15.6 — ORF-composite path (deprecated).** `orfs_import`, `orf_composite`, `map_orfs`, `assemble`, `score_gates`, `score_schema`, `panel_manifest`, `profile_compare`, `rdg_flux_export`. These back the *deprecated* CLI commands — decide per module: migrate to `orf/` or delete with the deprecated command. STATUS:
+- [ ] **T15.7 — shell + config.** `annotation_bundle`, `validator`, `inspect`, `config`, `workflow` → fold into `io/`, `model.py`, `workflows.py`. STATUS:
+- [ ] **T15.8 — final sweep.** Delete `pipeline/` entirely; repoint any stragglers; `make gate` + full suite + `make lint` green; update architecture.md to drop the shim notes. STATUS:
+
+`=== PHASE 5 complete — single-architecture codebase ===`

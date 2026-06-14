@@ -60,17 +60,28 @@ def read_scores(
     return df
 
 
-def read_events(events_dir: str) -> pl.DataFrame:
-    """Read events Parquet (events/, one file per chrom)."""
-    paths = sorted(Path(events_dir).rglob("*.parquet"))
+def _read_event_subdir(base: str, subdir: str) -> pl.DataFrame:
+    """Read one event-store sub-tree (one Parquet per chrom).
+
+    Accepts either the sub-tree itself (``.../events``) or the extract-events
+    output root (``...`` containing ``events/``), so callers can pass whichever
+    path is natural.  Reads only direct ``*.parquet`` children (never descends
+    into sibling sub-trees, whose schemas differ).
+    """
+    root = Path(base)
+    if (root / subdir).is_dir():
+        root = root / subdir
+    paths = sorted(root.glob("*.parquet"))
     if not paths:
         return pl.DataFrame()
     return pl.concat([pl.read_parquet(str(p)) for p in paths])
+
+
+def read_events(events_dir: str) -> pl.DataFrame:
+    """Read events Parquet (events/, one file per chrom)."""
+    return _read_event_subdir(events_dir, "events")
 
 
 def read_feature_event(feature_event_dir: str) -> pl.DataFrame:
     """Read feature_event Parquet (feature_event/, one file per chrom)."""
-    paths = sorted(Path(feature_event_dir).rglob("*.parquet"))
-    if not paths:
-        return pl.DataFrame()
-    return pl.concat([pl.read_parquet(str(p)) for p in paths])
+    return _read_event_subdir(feature_event_dir, "feature_event")

@@ -1,0 +1,5 @@
+# Run outputs are data, not source — ignore everything except the script + docs.
+*
+!.gitignore
+!run_matrix_scoring.sh
+!README.md

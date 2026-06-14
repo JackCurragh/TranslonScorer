@@ -51,13 +51,18 @@ def extract_events_workflow(
     out_dir: str,
     *,
     annotation_version: str = "",
+    chroms: Optional[List[str]] = None,
 ) -> dict:
     """Extract deduplicated genomic events from an annotation sqlite db.
 
     Thin shell over ``events.run_extract``; writes events/, feature_event/ and
     event_overlap/ Parquet trees under ``out_dir`` and returns a summary dict.
+    ``chroms`` optionally restricts extraction to specific chromosomes.
     """
-    return run_extract(sqlite_path, out_dir, annotation_version=annotation_version)
+    return run_extract(
+        sqlite_path, out_dir,
+        annotation_version=annotation_version, chroms=chroms,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +226,7 @@ def report_workflow(
     consequentiality policy, writes Parquet, and returns the report.
     """
     scores = read_scores(store_dir, data_version=data_version, tier=tier)
-    feature_event = read_feature_event(str(Path(events_dir) / "feature_event"))
+    feature_event = read_feature_event(events_dir)
     report = compose_report(scores, feature_event)
     report = apply_policy(report, policy or ConsequentialityPolicy())
     report.write_parquet(out_path)

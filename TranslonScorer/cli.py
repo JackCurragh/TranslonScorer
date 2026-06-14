@@ -990,11 +990,15 @@ def inspect_cmd(parquet_path: str, limit: int, expand: bool, out_csv: Optional[s
 @click.option('--sqlite', 'sqlite_path', required=True, help='Annotation sqlite database with translons + translon_blocks tables.')
 @click.option('--out-dir', required=True, help='Output directory for events/, feature_event/, event_overlap/ Parquet trees.')
 @click.option('--annotation-version', default='', help='Annotation version string stamped into event records (for reproducible event_ids).')
-def extract_events_cmd(sqlite_path: str, out_dir: str, annotation_version: str):
+@click.option('--chrom', 'chroms', multiple=True, help='Restrict extraction to these chromosome(s) (repeatable; default: all).')
+def extract_events_cmd(sqlite_path: str, out_dir: str, annotation_version: str, chroms):
     """Extract deduplicated genomic events from an annotation database."""
     setup_logging()
     from .workflows import extract_events_workflow
-    summary = extract_events_workflow(sqlite_path, out_dir, annotation_version=annotation_version)
+    summary = extract_events_workflow(
+        sqlite_path, out_dir,
+        annotation_version=annotation_version, chroms=list(chroms) or None,
+    )
     log_info(
         f"Extracted events: {summary['events']} events, "
         f"{summary['feature_event']} feature links, "

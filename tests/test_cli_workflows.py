@@ -20,7 +20,7 @@ from TranslonScorer.cli import cli
 # Command registration + help
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("name", ["extract-events", "score-matrix", "score-bams", "consequential"])
+@pytest.mark.parametrize("name", ["extract-events", "score-matrix", "score-bams", "report", "consequential"])
 def test_new_subcommands_registered(name):
     runner = CliRunner()
     result = runner.invoke(cli, [name, "--help"])
@@ -87,6 +87,43 @@ def test_score_events_over_provider_empty():
 # ---------------------------------------------------------------------------
 # consequential end-to-end via CliRunner
 # ---------------------------------------------------------------------------
+
+def test_report_workflow_end_to_end(tmp_path: Path):
+    """persist_scores + feature_event on disk -> report_workflow -> consequential."""
+    from TranslonScorer.io.store import persist_scores
+    from TranslonScorer.workflows import report_workflow
+
+    scores = pl.DataFrame({
+        "event_id": [1, 2, 3],
+        "aspect": ["init", "elongation", "term"],
+        "group": ["aggregate"] * 3,
+        "tier": ["aggregate"] * 3,
+        "n_reads": [100.0, 200.0, 50.0],
+        "metric": [2.0, 0.8, 1.5],
+        "metric_name": ["rise", "elong_in_frame", "drop"],
+        "eligibility": ["ELIGIBLE"] * 3,
+        "call": ["SUPPORTED", "SUPPORTED", "SUPPORTED"],
+        "evidence": ["{}"] * 3,
+        "thresholds_version": ["v1"] * 3,
+    })
+    store = tmp_path / "store"
+    persist_scores(scores, str(store), data_version="d1")
+
+    events_dir = tmp_path / "events"
+    fe_dir = events_dir / "feature_event"
+    fe_dir.mkdir(parents=True)
+    pl.DataFrame({
+        "feature_id": ["A", "A", "A"],
+        "event_id": [1, 2, 3],
+        "role": ["init", "elongation", "term"],
+    }).write_parquet(fe_dir / "chr1.parquet")
+
+    out_path = tmp_path / "report.parquet"
+    rep = report_workflow(str(store), str(events_dir), str(out_path), data_version="d1")
+    assert out_path.exists()
+    assert rep.filter(pl.col("feature_id") == "A")["consequential"][0] is True
+    assert "consequentiality_score" in rep.columns
+
 
 def test_consequential_cmd_roundtrip(tmp_path: Path):
     report = pl.DataFrame({"translon_id": ["a", "b"], "score": [0.9, 0.1]})

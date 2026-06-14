@@ -63,6 +63,12 @@ perf = [
 ]
 dev = [
   "pytest==8.2.0",
+  "pytest-xdist>=3.5",
+  "pytest-cov>=5.0",
+  "mypy>=1.10",
+  "build>=1.2",
+  "twine>=5.0",
+  "bump2version>=1.0",
 ]
 full = [
   "TranslonScorer[bigwig, zarr, viz, fastbam, perf, dev]",

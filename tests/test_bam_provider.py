@@ -84,6 +84,42 @@ def test_bam_set_provider_coverage_empty():
     assert result.is_empty()
 
 
+def test_metagene_offsets_picks_plausible_peak():
+    """metagene_offsets picks the max-count rel_pos within the plausible window."""
+    from TranslonScorer.offsets import metagene_offsets
+    from TranslonScorer.model import OffsetParams
+    df = pl.DataFrame({
+        "read_length": [29, 29, 29, 30, 30],
+        "rel_pos":     [12, 11, 40, 13, 12],   # 40 is implausible (hi=19 for L29) → dropped
+        "count":       [100.0, 10.0, 999.0, 80.0, 20.0],
+    })
+    off = metagene_offsets(df, OffsetParams())
+    assert off[29] == 12   # 40 filtered out; 12 wins among plausible
+    assert off[30] == 13
+
+
+@pytest.mark.skipif(not HAS_BAM, reason="genome GAPDH fixture not in data/")
+def test_metagene_offsets_on_fixture():
+    """Real metagene on the GAPDH start codon yields plausible per-length offsets."""
+    from pathlib import Path as _P
+    from TranslonScorer.coverage.bam import BamSetProvider
+    from TranslonScorer.offsets import metagene_offsets
+    from TranslonScorer.model import OffsetParams
+
+    p = BamSetProvider(
+        [str(GENOME_BAM)],
+        offsets=OffsetParams(method="metagene"),
+        start_codons=[("chr12", 6534832, 1)],  # GAPDH canonical start (+ strand)
+    )
+    hist = p._build_metagene_histogram(_P(str(GENOME_BAM)))
+    assert not hist.is_empty(), "metagene histogram should have reads near the start codon"
+    mo = metagene_offsets(hist, OffsetParams())
+    dominant = [L for L in (28, 29, 30, 31) if L in mo]
+    assert dominant, "expected metagene offsets for dominant RPF lengths"
+    for L in dominant:
+        assert 8 <= mo[L] <= 20, f"implausible metagene offset {mo[L]} for length {L}"
+
+
 def test_site_position_strand_aware():
     """P/A-site placement is strand-aware: + uses 5'=ref_start, - uses 5'=ref_end-1."""
     from TranslonScorer.coverage.profile import site_position

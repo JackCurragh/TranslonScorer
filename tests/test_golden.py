@@ -291,6 +291,167 @@ def test_chr22_event_counts():
 
 
 # ---------------------------------------------------------------------------
+# T9 smoke tests — new-tree modules: qc, frame_support, clustering,
+#                  report, consequential
+# ---------------------------------------------------------------------------
+
+def test_qc_periodicity_from_frames():
+    """_compute_periodicity_from_frames returns expected structure."""
+    from TranslonScorer.qc import _compute_periodicity_from_frames
+    # Perfect frame-0 dominance → high periodicity score
+    r = _compute_periodicity_from_frames({0: 100, 1: 1, 2: 1})
+    assert "periodicity_score" in r
+    assert r["periodicity_score"] > 0.7
+
+    # All zeros → score 0
+    r2 = _compute_periodicity_from_frames({0: 0, 1: 0, 2: 0})
+    assert r2["periodicity_score"] == 0.0
+
+
+def test_qc_frame_dominance_matrix_empty():
+    """frame_dominance_matrix on empty input returns schema-only DataFrame."""
+    from TranslonScorer.qc import frame_dominance_matrix
+    empty = pl.DataFrame()
+    result = frame_dominance_matrix(empty)
+    assert "read_length" in result.columns
+
+
+def test_qc_nudge_to_frame0():
+    """_nudge_to_frame0 leaves frame-0-dominant lengths alone."""
+    from TranslonScorer.qc import _nudge_to_frame0
+    rfd = {28: {0: 200, 1: 10, 2: 10}, 29: {0: 10, 1: 200, 2: 10}}
+    base = {28: 12, 29: 12}
+    out = _nudge_to_frame0(rfd, base, min_reads=50, min_fraction=0.60)
+    assert out[28] == 12  # already frame-0 dominant — no change
+    assert out[29] != 12  # frame-1 dominant — nudged
+
+
+def test_qc_assign_frames_sweep_smoke():
+    """_assign_frames_sweep returns a dict keyed by read_ids."""
+    import numpy as np
+    from TranslonScorer.qc import _assign_frames_sweep
+    rids = [1, 2, 3]
+    asites = np.array([105, 108, 120])
+    ivs = [(100, 130, 0)]
+    result = _assign_frames_sweep(rids, asites, "+", ivs)
+    assert isinstance(result, dict)
+    assert all(k in rids for k in result)
+
+
+def test_frame_support_none_method():
+    """build_frame_support with method='none' returns empty DataFrame."""
+    from TranslonScorer.frame_support import build_frame_support
+    from TranslonScorer.model import FrameSupportParams
+    profiles = pl.DataFrame(schema={"tran_id": pl.Utf8, "pos": pl.Int64, "count": pl.Float64})
+    cds_df = pl.DataFrame()
+    result = build_frame_support(profiles, cds_df, FrameSupportParams(frame_method="none"))
+    assert result.is_empty()
+    assert "tran_id" in result.columns
+
+
+def test_clustering_normalise_profiles():
+    """normalise_profiles total_count method: each row sums to ~1e6."""
+    import numpy as np
+    from TranslonScorer.clustering import normalise_profiles
+    mat = np.array([[10.0, 20.0, 30.0], [5.0, 5.0, 5.0]])
+    out = normalise_profiles(mat, method="total_count")
+    assert out.shape == mat.shape
+    assert abs(out[0].sum() - 1e6) < 1.0
+    assert abs(out[1].sum() - 1e6) < 1.0
+
+
+def test_clustering_cluster_profiles_smoke():
+    """cluster_profiles: 4 samples → 2 clusters, none excluded."""
+    import numpy as np
+    from TranslonScorer.clustering import cluster_profiles
+    mat = np.array([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.9, 0.1, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.1, 0.9, 0.0],
+    ])
+    names = ["s1", "s2", "s3", "s4"]
+    labels, included, excluded = cluster_profiles(mat, names, n_clusters=2, method="kmeans")
+    assert len(excluded) == 0
+    assert len(set(labels[labels >= 0])) <= 2
+
+
+def test_clustering_build_profile_matrix_smoke():
+    """build_profile_matrix round-trips a tidy profile DataFrame."""
+    import numpy as np
+    from TranslonScorer.clustering import build_profile_matrix
+    profiles = pl.DataFrame({
+        "sample_id": ["s1", "s1", "s2"],
+        "pos": [0, 1, 0],
+        "count": [5.0, 3.0, 7.0],
+    })
+    mat, pos_vec = build_profile_matrix(profiles, ["s1", "s2"])
+    assert mat.shape == (2, 2)
+    assert float(mat[0, 0]) == 5.0
+    assert float(mat[1, 0]) == 7.0
+
+
+def test_report_compose_passthrough():
+    """compose_report returns the input scores DataFrame unchanged when no filter."""
+    from TranslonScorer.report import compose_report
+    scores = pl.DataFrame({
+        "event_id": [1, 2],
+        "aspect": ["init", "elong"],
+        "eligibility": ["ELIGIBLE", "ELIGIBLE"],
+        "call": ["SUPPORTED", "SUPPORTED"],
+        "group": ["g", "g"],
+        "tier": ["t", "t"],
+    })
+    out = compose_report(scores)
+    assert out.shape == scores.shape
+
+
+def test_consequential_apply_policy():
+    """apply_policy adds a boolean consequential column."""
+    from TranslonScorer.consequential import apply_policy
+    from TranslonScorer.model import ConsequentialityPolicy
+    report = pl.DataFrame({"event_id": [1, 2]})
+    out = apply_policy(report, ConsequentialityPolicy())
+    assert "consequential" in out.columns
+    assert out.height == 2
+
+
+def test_pipeline_shim_qc_importable():
+    """pipeline/matrix_qc.py shim: moved functions importable from old path."""
+    from TranslonScorer.pipeline.matrix_qc import (
+        _compute_periodicity_from_frames,
+        _ribometric_frame_scores,
+        _nudge_to_frame0,
+        _assign_frames_sweep,
+        frame_dominance_matrix,
+        _empty_periodicity_schema,
+    )
+    assert callable(_compute_periodicity_from_frames)
+    assert callable(frame_dominance_matrix)
+    schema = _empty_periodicity_schema()
+    assert "sample_id" in schema.columns
+
+
+def test_pipeline_shim_frame_support_importable():
+    """pipeline/frame_support.py shim: build_frame_support importable."""
+    from TranslonScorer.pipeline.frame_support import build_frame_support
+    assert callable(build_frame_support)
+
+
+def test_pipeline_shim_clustering_importable():
+    """pipeline/profile_clustering.py shim: public API importable from old path."""
+    from TranslonScorer.pipeline.profile_clustering import (
+        normalise_profiles,
+        cluster_profiles,
+        cluster_locus_profiles,
+        build_profile_matrix,
+        ProfileClusteringResult,
+    )
+    assert callable(normalise_profiles)
+    assert callable(cluster_profiles)
+
+
+# ---------------------------------------------------------------------------
 # Golden creation  (python3 tests/test_golden.py)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":

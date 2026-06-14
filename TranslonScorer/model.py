@@ -71,6 +71,18 @@ class ScoreRecord:
 
 
 # ---------------------------------------------------------------------------
+# Frame support config
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class FrameSupportParams:
+    frame_method: str = "none"        # "none"|"linear"|"linear+hmm"|"deblur+linear+hmm"|"latent"
+    frame_by_length: bool = False
+    frame_background: str = "uniform"
+    frame_hmm_lambda: float = 1.0
+
+
+# ---------------------------------------------------------------------------
 # Consequentiality policy (weights for tier × confidence × expression × context)
 # ---------------------------------------------------------------------------
 

@@ -20,7 +20,7 @@ across chromosomes.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence, Union, cast
 
 import polars as pl
 
@@ -85,8 +85,8 @@ def _score_events_over_provider(
     parts: List[pl.DataFrame] = []
     for chrom in events["chrom"].unique().sort().to_list():
         ev_chrom = events.filter(pl.col("chrom") == chrom)
-        start = int(ev_chrom["start"].min())
-        end = int(ev_chrom["end"].max())
+        start = int(cast(int, ev_chrom["start"].min()))
+        end = int(cast(int, ev_chrom["end"].max()))
         region = Region(str(chrom), start, end + 1)
         cov_df = provider.coverage([region], site=site)
         if cov_df.is_empty():
@@ -151,7 +151,7 @@ def score_matrix_workflow(
 
 def score_bams_workflow(
     events_dir: str,
-    bams: List[str],
+    bams: Sequence[Union[str, Path]],
     store_dir: str,
     *,
     data_version: str,
@@ -173,7 +173,7 @@ def score_bams_workflow(
 
     events = read_events(events_dir)
     provider = BamSetProvider(
-        bams,
+        list(bams),
         offsets=offsets,
         multimap=multimap,
         sample_names=sample_names,

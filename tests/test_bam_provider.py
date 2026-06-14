@@ -120,6 +120,13 @@ def test_metagene_offsets_on_fixture():
         assert 8 <= mo[L] <= 20, f"implausible metagene offset {mo[L]} for length {L}"
 
 
+def test_transcriptome_not_yet_supported():
+    """transcriptome=True fails loudly (no silent wrong coords) until projection lands."""
+    from TranslonScorer.coverage.bam import BamSetProvider
+    with pytest.raises(NotImplementedError):
+        BamSetProvider(["t.bam"], transcriptome=True)
+
+
 def test_site_position_strand_aware():
     """P/A-site placement is strand-aware: + uses 5'=ref_start, - uses 5'=ref_end-1."""
     from TranslonScorer.coverage.profile import site_position

@@ -347,7 +347,7 @@ class TestM3ProfileMatrix:
         })
 
     def test_shape(self):
-        from TranslonScorer.pipeline.profile_clustering import build_profile_matrix
+        from TranslonScorer.clustering import build_profile_matrix
 
         profs = self._make_profiles()
         matrix, pos_vec = build_profile_matrix(profs, ["S1", "S2"])
@@ -356,7 +356,7 @@ class TestM3ProfileMatrix:
         assert len(pos_vec) == 3
 
     def test_values(self):
-        from TranslonScorer.pipeline.profile_clustering import build_profile_matrix
+        from TranslonScorer.clustering import build_profile_matrix
 
         profs = self._make_profiles()
         matrix, pos_vec = build_profile_matrix(profs, ["S1", "S2"])
@@ -371,7 +371,7 @@ class TestM3ProfileMatrix:
         assert matrix[s2_idx, 2] == pytest.approx(0.0)  # S2 pos 2 absent = 0
 
     def test_total_count_normalisation(self):
-        from TranslonScorer.pipeline.profile_clustering import normalise_profiles
+        from TranslonScorer.clustering import normalise_profiles
 
         matrix = np.array([[1.0, 2.0, 3.0],
                            [4.0, 6.0, 0.0],
@@ -385,7 +385,7 @@ class TestM3ProfileMatrix:
         assert normed[2].sum() == pytest.approx(0.0)
 
     def test_zscore_normalisation(self):
-        from TranslonScorer.pipeline.profile_clustering import normalise_profiles
+        from TranslonScorer.clustering import normalise_profiles
 
         rng = np.random.default_rng(0)
         matrix = rng.uniform(0, 10, (4, 50))
@@ -396,7 +396,7 @@ class TestM3ProfileMatrix:
             assert normed[i].std() == pytest.approx(1.0, rel=1e-5)
 
     def test_unknown_normalisation_raises(self):
-        from TranslonScorer.pipeline.profile_clustering import normalise_profiles
+        from TranslonScorer.clustering import normalise_profiles
 
         with pytest.raises(ValueError, match="Unknown normalisation"):
             normalise_profiles(np.ones((2, 3)), method="bad_method")
@@ -429,7 +429,7 @@ class TestM4Clustering:
         return np.vstack([A, B])
 
     def test_two_groups_recovered(self):
-        from TranslonScorer.pipeline.profile_clustering import cluster_profiles
+        from TranslonScorer.clustering import cluster_profiles
 
         matrix = self._two_group_matrix()
         names = ["A1", "A2", "A3", "B1", "B2"]
@@ -444,7 +444,7 @@ class TestM4Clustering:
         assert a_labels != b_labels, "A and B clusters must be distinct"
 
     def test_min_coverage_excludes_samples(self):
-        from TranslonScorer.pipeline.profile_clustering import cluster_profiles
+        from TranslonScorer.clustering import cluster_profiles
 
         matrix = np.array([
             [10.0, 10.0],   # S1 – high
@@ -458,7 +458,7 @@ class TestM4Clustering:
         assert labels[2] == -1
 
     def test_aggregate_is_mean_of_members(self):
-        from TranslonScorer.pipeline.profile_clustering import aggregate_cluster_profiles
+        from TranslonScorer.clustering import aggregate_cluster_profiles
 
         matrix = np.array([
             [2.0, 4.0],   # cluster 0
@@ -507,7 +507,7 @@ class TestM4Clustering:
 
     def test_hierarchical_cosine_threshold_recovers_two_shapes(self):
         from TranslonScorer.pipeline.matrix_normalisation import normalise_locus_matrices
-        from TranslonScorer.pipeline.profile_clustering import cluster_locus_profiles
+        from TranslonScorer.clustering import cluster_locus_profiles
 
         matrix = self._two_group_matrix()
         names = ["A1", "A2", "A3", "B1", "B2"]
@@ -528,7 +528,7 @@ class TestM4Clustering:
 
     def test_one_shape_locus_returns_one_cluster(self):
         from TranslonScorer.pipeline.matrix_normalisation import normalise_locus_matrices
-        from TranslonScorer.pipeline.profile_clustering import cluster_locus_profiles
+        from TranslonScorer.clustering import cluster_locus_profiles
 
         matrix = np.zeros((4, 20))
         matrix[:, 5:10] = np.array([[5.0], [10.0], [20.0], [40.0]])
@@ -548,7 +548,7 @@ class TestM4Clustering:
 
     def test_weak_cluster_smaller_than_min_size_is_pruned(self):
         from TranslonScorer.pipeline.matrix_normalisation import normalise_locus_matrices
-        from TranslonScorer.pipeline.profile_clustering import cluster_locus_profiles
+        from TranslonScorer.clustering import cluster_locus_profiles
 
         matrix = self._two_group_matrix()
         names = ["A1", "A2", "A3", "B1", "B2"]
@@ -648,7 +648,7 @@ class TestM5MatrixQC:
 
     def test_normalise_known_rpm(self):
         """Verify total-count normalisation produces correct RPM."""
-        from TranslonScorer.pipeline.profile_clustering import normalise_profiles
+        from TranslonScorer.clustering import normalise_profiles
 
         # Row with known total = 500
         matrix = np.array([[100.0, 200.0, 200.0]])  # total = 500

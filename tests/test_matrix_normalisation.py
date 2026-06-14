@@ -82,7 +82,7 @@ def test_normalise_locus_matrices_does_not_cluster_or_aggregate():
 
 def test_cluster_aggregate_uses_score_matrix_not_cluster_matrix():
     from TranslonScorer.pipeline.matrix_normalisation import normalise_locus_matrices
-    from TranslonScorer.pipeline.profile_clustering import (
+    from TranslonScorer.clustering import (
         aggregate_score_profiles_by_cluster,
         cluster_locus_profiles,
     )
@@ -112,7 +112,7 @@ def test_cluster_aggregate_uses_score_matrix_not_cluster_matrix():
 
 
 def test_homogeneous_shape_clustering_ignores_depth_and_prunes_outliers():
-    from TranslonScorer.pipeline.profile_clustering import cluster_locus_shape_homogeneous
+    from TranslonScorer.clustering import cluster_locus_shape_homogeneous
 
     raw = np.array(
         [
@@ -156,7 +156,7 @@ def test_homogeneous_shape_clustering_ignores_depth_and_prunes_outliers():
 
 
 def test_homogeneous_shape_clustering_rejects_forced_heterogeneous_cluster():
-    from TranslonScorer.pipeline.profile_clustering import cluster_locus_shape_homogeneous
+    from TranslonScorer.clustering import cluster_locus_shape_homogeneous
 
     raw = np.array(
         [
@@ -184,7 +184,7 @@ def test_homogeneous_shape_clustering_rejects_forced_heterogeneous_cluster():
 
 
 def test_shape_cluster_driver_diagnostics_rank_discriminating_positions():
-    from TranslonScorer.pipeline.profile_clustering import (
+    from TranslonScorer.clustering import (
         cluster_locus_shape_homogeneous,
         explain_shape_cluster_drivers,
     )

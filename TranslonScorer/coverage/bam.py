@@ -28,7 +28,7 @@ import polars as pl
 from TranslonScorer.model import OffsetParams, Region
 from TranslonScorer.offsets import make_offset_table
 from TranslonScorer.coverage.base import MAPPABILITY_LEDGER_SCHEMA
-from TranslonScorer.coverage.profile import apply_offsets
+from TranslonScorer.coverage.profile import apply_offsets, site_position
 
 
 PathLike = Union[str, Path]
@@ -180,40 +180,33 @@ class BamSetProvider:
                         if chrom is None:
                             continue
                         for rec in bam.fetch(chrom, region.start, region.end):
-                            if rec.is_unmapped or rec.is_secondary:
+                            if rec.is_unmapped or rec.is_secondary or rec.is_supplementary:
                                 continue
-                            if self._multimap == "unique" and rec.mapping_quality == 0:
+                            if self._multimap == "unique" and not _is_unique(rec):
                                 continue
                             length = rec.query_length or 0
                             if length == 0:
                                 continue
                             p_offset = table.get(length, self._offset_params.global_offset)
-                            a_shift = 3 if site == "A" else 0
-                            pos = rec.reference_start + p_offset + a_shift
-                            bam_rows.append({"sample_id": sample_id, "pos": pos, "count": 1.0})
+                            strand, pos = site_position(
+                                rec.reference_start, rec.reference_end, rec.is_reverse, p_offset, site)
+                            bam_rows.append(
+                                {"sample_id": sample_id, "strand": strand, "pos": pos, "count": 1.0})
             except (OSError, ValueError):
                 continue
 
             rows.extend(bam_rows)
 
         if not rows:
-            schema: Dict[str, type] = {"pos": pl.Int64, "count": pl.Float64}
+            schema: Dict[str, type] = {"strand": pl.Int64, "pos": pl.Int64, "count": pl.Float64}
             if by_sample:
                 schema["sample_id"] = pl.Utf8
             return pl.DataFrame(schema=schema)
 
-        df = pl.DataFrame(rows, schema={"sample_id": pl.Utf8, "pos": pl.Int64, "count": pl.Float64})
-        if by_sample:
-            return (
-                df.group_by(["sample_id", "pos"])
-                .agg(pl.col("count").sum())
-                .sort(["sample_id", "pos"])
-            )
-        return (
-            df.group_by("pos")
-            .agg(pl.col("count").sum())
-            .sort("pos")
-        )
+        df = pl.DataFrame(rows, schema={"sample_id": pl.Utf8, "strand": pl.Int64,
+                                        "pos": pl.Int64, "count": pl.Float64})
+        keys = (["sample_id", "strand", "pos"] if by_sample else ["strand", "pos"])
+        return df.group_by(keys).agg(pl.col("count").sum()).sort(keys)
 
     def size_factors(self) -> Dict[str, float]:
         """Library-size normalisation factors (median-ratio; 1.0 per sample until computed)."""
@@ -311,3 +304,15 @@ def _resolve_chrom(chrom: str, refs: set) -> Optional[str]:
         return chrom
     alt = f"chr{chrom}" if not chrom.startswith("chr") else chrom[3:]
     return alt if alt in refs else None
+
+
+def _is_unique(rec) -> bool:
+    """Uniquely-mapped read. Prefer the NH tag (NH==1); fall back to STAR's
+    unique MAPQ of 255 when NH is absent. (MAPQ==0 alone is wrong: STAR gives
+    multimappers MAPQ 3/1/0, so it keeps 2–4-locus multimappers.)"""
+    try:
+        if rec.has_tag("NH"):
+            return int(rec.get_tag("NH")) == 1
+    except (KeyError, ValueError):
+        pass
+    return rec.mapping_quality == 255

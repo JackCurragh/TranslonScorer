@@ -28,6 +28,24 @@ import polars as pl
 
 
 # ---------------------------------------------------------------------------
+# Strand-aware genomic site placement (pure)
+# ---------------------------------------------------------------------------
+
+def site_position(ref_start: int, ref_end: int, is_reverse: bool,
+                  p_offset: int, site: str = "A") -> Tuple[int, int]:
+    """Genomic (strand, position) of the P- or A-site for one aligned read.
+
+    The 5' end of the footprint is `ref_start` on + strand and `ref_end - 1`
+    on - strand. The P-site sits `p_offset` nt 3' of the 5' end; the A-site is
+    one codon (3 nt) further 3'. Returns (strand∈{1,-1}, genomic_pos).
+    """
+    a_shift = 3 if site == "A" else 0
+    if is_reverse:
+        return -1, (ref_end - 1) - p_offset - a_shift
+    return 1, ref_start + p_offset + a_shift
+
+
+# ---------------------------------------------------------------------------
 # Core profile builder (pure — no I/O, no offset inference)
 # ---------------------------------------------------------------------------
 

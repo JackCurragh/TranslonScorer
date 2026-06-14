@@ -6,7 +6,7 @@ from typing import Dict, Tuple, Union
 
 import polars as pl
 
-from ..utils import log_info
+from ..utils import log_info, log_warning
 from .config import Config
 from ..file_handlers import bam as bam_handlers
 from ..file_handlers import bed as bed_handlers
@@ -14,6 +14,7 @@ from ..file_handlers import bigwig as bw_handlers
 from ..file_handlers import zarr as zarr_handlers
 from ..core import coordinates, orffinder
 from ..visualization import plots
+from .transcript_coords import cds_to_transcript_space
 
 
 def process_bam_workflow(config: Config) -> Tuple[Union[str, Dict[str, str]], pl.DataFrame, pl.DataFrame]:
@@ -40,7 +41,8 @@ def process_bam_workflow(config: Config) -> Tuple[Union[str, Dict[str, str]], pl
     if bam_type == "genomic":
         bam_df = bam_handlers.bamtranscript(bam_df, exon_df)
     # Now annotate relative to CDS
-    bam_df = bam_handlers.process_transcriptomic_bam(bam_df, cds_df)
+    cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
+    bam_df = bam_handlers.process_transcriptomic_bam(bam_df, cds_tran_df)
 
     # Offsets and A-site positions
     offsets = coordinates.change_point_analysis(bam_df)
@@ -150,7 +152,26 @@ def score_orfs_workflow(config: Config, bigwig_paths: Union[str, Dict[str, str]]
     """Score ORFs using bigWig(s) and return scored DataFrame."""
     log_info("Scoring ORFs…")
     old_scoring = (config.scoring_method == "classic")
-    scored = bw_handlers.scoring(bigwig_paths, exon_df, orf_df, old_scoring, config.sru_range, stranded=config.stranded)
+    scored = bw_handlers.scoring(
+        bigwig_paths, exon_df, orf_df, old_scoring, config.sru_range, stranded=config.stranded,
+        frame_weighted_scoring=bool(getattr(config, 'frame_weighted_scoring', False)),
+        frame_support_path=getattr(config, 'frame_support_out', None),
+    )
+    from .score_schema import add_frame_score_columns, ensure_score_schema
+    scored = ensure_score_schema(
+        scored,
+        score_mode="frame_weighted" if bool(getattr(config, 'frame_weighted_scoring', False)) else "raw",
+        input_type="bigwig",
+        frame_method=getattr(config, 'frame_method', None),
+        assignment_model="none",
+    )
+    frame_support_path = getattr(config, 'frame_support_out', None)
+    if frame_support_path and os.path.exists(frame_support_path):
+        try:
+            frame_support = pl.read_parquet(frame_support_path)
+            scored = add_frame_score_columns(scored, frame_support)
+        except Exception as e:
+            log_warning(f"Could not attach frame score summaries: {e}")
     return scored
 
 
@@ -171,6 +192,91 @@ def plot_workflow(config: Config, scored_orfs: pl.DataFrame, exon_df: pl.DataFra
     plots.plottop10(scored_path, plot_bw, exon_df, config.plot_range, config.output)
 
 
+def _load_offsets(config: Config) -> dict:
+    """Load A-site offsets from file or return empty dict (will use default=15 downstream)."""
+    if getattr(config, "offsets", None):
+        try:
+            import polars as pl
+            df = pl.read_csv(config.offsets)
+            return {int(r[0]): int(r[1]) for r in df.select([df.columns[0], df.columns[1]]).iter_rows()}
+        except Exception as e:
+            log_warning(f"Could not load offsets file {config.offsets}: {e}")
+    return {}
+
+
+def _load_sample_offsets(config: Config) -> "pl.DataFrame":
+    """Load per-sample offsets parquet/CSV if provided, else return empty DataFrame."""
+    import polars as pl
+    path = getattr(config, "sample_offsets_path", None)
+    if path and __import__("os").path.isfile(path):
+        try:
+            if path.endswith(".parquet"):
+                return pl.read_parquet(path)
+            return pl.read_csv(path)
+        except Exception as e:
+            log_warning(f"Could not load sample offsets from {path}: {e}")
+    return pl.DataFrame(schema={"sample_id": pl.Utf8, "length": pl.Int64, "offset": pl.Int64})
+
+
+def _sparse_matrix_workflow(config: Config) -> None:
+    """Dispatch sparse Parquet matrix → scored ORFs via aggregate or per-sample mode."""
+    from .matrix_scoring import score_aggregate, score_per_sample
+
+    log_info("Sparse Parquet matrix lane…")
+
+    if not config.bam:
+        raise ValueError(
+            "Sparse Parquet matrix scoring requires --bam (the unique_reads_bam from ensembl-genes-nf)"
+        )
+
+    # Annotation
+    cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
+
+    # ORFs
+    orf_df, _ = find_orfs_workflow(config)
+
+    # Offsets
+    offsets = _load_offsets(config)
+    if not offsets:
+        log_warning("No offsets file provided for sparse matrix mode; using default offset=15")
+
+    matrix_mode = getattr(config, "matrix_scoring_mode", "aggregate")
+
+    if matrix_mode == "per_sample":
+        sample_offsets = _load_sample_offsets(config)
+        results = score_per_sample(
+            config.sparse_matrix_manifest,
+            config.bam,
+            orf_df,
+            exon_df,
+            sample_offsets,
+            sample_names=config.samples,
+            sru_range=config.sru_range,
+            old_scoring=(config.scoring_method == "classic"),
+        )
+        for sid, scored in results.items():
+            out_path = f"{config.output}_{sid}_orfs_scored.csv"
+            scored.write_csv(out_path)
+            log_info(f"Saved per-sample scores for {sid} → {out_path}")
+
+    else:  # aggregate (default)
+        scored = score_aggregate(
+            config.sparse_matrix_manifest,
+            config.bam,
+            orf_df,
+            exon_df,
+            offsets,
+            sample_names=config.samples,
+            sru_range=config.sru_range,
+            old_scoring=(config.scoring_method == "classic"),
+        )
+        out_path = f"{config.output}_orfs_scored.csv"
+        scored.write_csv(out_path)
+        log_info(f"Aggregate matrix scoring complete → {out_path}")
+
+    log_info("Sparse Parquet matrix lane complete.")
+
+
 def all_workflow(config: Config) -> None:
     """Run the entire pipeline based on provided config."""
     log_info("Starting pipeline…")
@@ -181,12 +287,24 @@ def all_workflow(config: Config) -> None:
 
     if config.bigwig or (config.forward_bigwig and config.reverse_bigwig):
         # BigWig lane: ensure exon_df and continue
-        _, exon_df = bam_handlers.getexons_and_cds(config.annotation)
+        cds_df2, exon_df = bam_handlers.getexons_and_cds(config.annotation)
         if config.forward_bigwig and config.reverse_bigwig:
             config.bigwig_paths = {"forward": config.forward_bigwig, "reverse": config.reverse_bigwig}
             config.stranded = True
         else:
             config.bigwig_paths = config.bigwig
+        # Optional: build frame support from BigWig-derived profiles
+        if getattr(config, 'frame_method', 'none') != 'none':
+            from .profiles import profiles_from_bigwig
+            from .frame_support import build_frame_support
+            from ..utils import log_info
+            log_info("Computing transcript profiles from BigWig for frame support…")
+            prof = profiles_from_bigwig(config.bigwig_paths, exon_df, stranded=config.stranded)
+            if not config.frame_support_out:
+                base = (config.output or 'output').rstrip('/') or 'output'
+                config.frame_support_out = f"{base}_frame_support.parquet"
+            cds_tran_df = cds_to_transcript_space(cds_df2, exon_df)
+            build_frame_support(prof, cds_tran_df, config)
     elif config.bam:
         # BAM lane (classic or collapsed)
         if not config.bam:
@@ -206,6 +324,11 @@ def all_workflow(config: Config) -> None:
             # Report
             plots.plottop10(f"{out_base}_orfs_scored.csv", bw_path, exon_df, config.plot_range, out_base)
         log_info("Pipeline completed successfully for Zarr samples.")
+        return
+
+    elif config.sparse_matrix_manifest:
+        # Sparse Parquet matrix lane
+        _sparse_matrix_workflow(config)
         return
 
     # Find ORFs and classify

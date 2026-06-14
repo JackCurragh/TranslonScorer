@@ -19,12 +19,14 @@ import os
 import polars as pl
 
 from ..file_handlers import bam as bam_handlers
+from ..file_handlers import sparse_parquet as sparse_parquet_handlers
 from ..file_handlers import zarr as zarr_handlers
 from .mapped_index import build_mapped_index
 from ..file_handlers import bigwig as bigwig_handlers
 from ..core import coordinates
 from ..utils import log_info, log_warning
 from ..utils.io import write_parquet_safe
+from .transcript_coords import cds_to_transcript_space
 
 
 def _ensure_transcript_coords(reads_df: pl.DataFrame, exon_df: pl.DataFrame) -> pl.DataFrame:
@@ -54,7 +56,7 @@ def _ensure_transcript_coords(reads_df: pl.DataFrame, exon_df: pl.DataFrame) -> 
     return projected
 
 
-def _compute_asite_profiles(df_with_tran: pl.DataFrame, offsets: Dict[int, int]) -> pl.DataFrame:
+def _compute_asite_profiles(df_with_tran: pl.DataFrame, offsets: Dict[int, int], *, keep_length: bool = False) -> pl.DataFrame:
     """Compute A-site transcript profiles (tran_id, pos, count) from transcript-mapped reads.
 
     Expects columns: tran_id, tran_start_bam, length, count
@@ -69,6 +71,8 @@ def _compute_asite_profiles(df_with_tran: pl.DataFrame, offsets: Dict[int, int])
         except Exception:
             return 15
 
+    sample_cols = [c for c in ("sample_id", "sample_index", "study_id", "study_id_int") if c in df_with_tran.columns]
+    cols = sample_cols + ['tran_id', 'pos'] + (['length'] if keep_length and 'length' in df_with_tran.columns else [])
     out = (
         df_with_tran
         .with_columns(
@@ -76,11 +80,11 @@ def _compute_asite_profiles(df_with_tran: pl.DataFrame, offsets: Dict[int, int])
             pl.col('tran_start_bam').cast(pl.Int64)
         )
         .with_columns((pl.col('tran_start_bam') + pl.col('ofs')).alias('pos'))
-        .select(['tran_id', 'pos', 'count'])
-        .group_by(['tran_id', 'pos'])
+        .select(sample_cols + ['tran_id', 'pos', 'count'] + (['length'] if keep_length and 'length' in df_with_tran.columns else []))
+        .group_by(cols)
         .agg(pl.col('count').sum())
         .rename({'count': 'count'})
-        .sort(['tran_id', 'pos'])
+        .sort(cols)
     )
     return out
 
@@ -94,12 +98,14 @@ def profiles_from_bam(
     count_from: Optional[str] = None,
     count_pattern: Optional[str] = None,
     count_tag: Optional[str] = None,
+    keep_length: bool = False,
 ) -> tuple[pl.DataFrame, Dict[int,int]]:
     """Compute transcript A-site profiles from a BAM (classic or collapsed).
 
     Returns (profiles_df, offsets_dict).
     """
     log_info("Reading BAM for profiles…")
+    cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
     reads = bam_handlers.readbam(
         bam_path,
         collapsed=collapsed,
@@ -126,11 +132,123 @@ def profiles_from_bam(
     # Reuse existing routine which expects positions relative to CDS; for now,
     # derive a coarse per-length offset by calling change_point_analysis on the
     # transcriptomic read table after joining CDS (as done in process_transcriptomic_bam).
-    reads_rel = bam_handlers.process_transcriptomic_bam(reads, cds_df)
+    reads_rel = bam_handlers.process_transcriptomic_bam(reads, cds_tran_df)
     offsets = coordinates.change_point_analysis(reads_rel)
 
-    profiles = _compute_asite_profiles(reads, offsets)
+    profiles = _compute_asite_profiles(reads, offsets, keep_length=keep_length)
     return profiles, {int(k): int(v) for k, v in offsets.items()}
+
+
+def _default_offsets_for_profiles(reads: pl.DataFrame, default_offset: int) -> dict[int, int]:
+    if reads.is_empty() or "length" not in reads.columns:
+        return {0: int(default_offset)}
+    return {
+        int(length): int(default_offset)
+        for length in reads.get_column("length").drop_nulls().unique().to_list()
+    }
+
+
+def _transcript_gene_map(
+    *,
+    exon_df: pl.DataFrame,
+    transcripts_df: pl.DataFrame | None = None,
+    feature_map_df: pl.DataFrame | None = None,
+) -> pl.DataFrame:
+    if transcripts_df is not None and {"tran_id", "gene_id"}.issubset(set(transcripts_df.columns)):
+        return transcripts_df.select(["tran_id", "gene_id"]).drop_nulls().unique()
+    if feature_map_df is not None and "locus_id" in feature_map_df.columns:
+        tx_col = "tran_id" if "tran_id" in feature_map_df.columns else ("transcript_id" if "transcript_id" in feature_map_df.columns else None)
+        if tx_col:
+            out = feature_map_df.select([tx_col, "locus_id"]).drop_nulls().unique()
+            if tx_col != "tran_id":
+                out = out.rename({tx_col: "tran_id"})
+            return out.rename({"locus_id": "gene_id"})
+    return exon_df.select("tran_id").unique().with_columns(pl.col("tran_id").alias("gene_id"))
+
+
+def gene_expression_matrix_from_profiles(
+    profiles: pl.DataFrame,
+    *,
+    exon_df: pl.DataFrame,
+    transcripts_df: pl.DataFrame | None = None,
+    feature_map_df: pl.DataFrame | None = None,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Build long and wide gene expression matrices from sample-resolved profiles."""
+    if profiles.is_empty():
+        empty_long = pl.DataFrame(schema={"sample_id": pl.Utf8, "gene_id": pl.Utf8, "count": pl.Float64})
+        empty_wide = pl.DataFrame(schema={"gene_id": pl.Utf8})
+        return empty_long, empty_wide
+    if "sample_id" not in profiles.columns:
+        raise ValueError("Gene expression matrix requires profiles with sample_id")
+    tx_gene = _transcript_gene_map(
+        exon_df=exon_df,
+        transcripts_df=transcripts_df,
+        feature_map_df=feature_map_df,
+    )
+    long = (
+        profiles.join(tx_gene, on="tran_id", how="left")
+        .with_columns(pl.coalesce([pl.col("gene_id"), pl.col("tran_id")]).alias("gene_id"))
+        .group_by(["gene_id", "sample_id"])
+        .agg(pl.col("count").sum().alias("count"))
+        .sort(["gene_id", "sample_id"])
+    )
+    wide = (
+        long.pivot(index="gene_id", on="sample_id", values="count", aggregate_function="sum")
+        .fill_null(0)
+        .sort("gene_id")
+    )
+    return long, wide
+
+
+def profiles_from_sparse_parquet_matrix(
+    *,
+    bam_path: str,
+    manifest_path: str,
+    exon_df: pl.DataFrame,
+    cds_df: pl.DataFrame,
+    samples: list[str] | None = None,
+    default_offset: int = 15,
+    keep_length: bool = False,
+    regions: list[sparse_parquet_handlers.Region] | None = None,
+) -> tuple[pl.DataFrame, Dict[int, int], pl.DataFrame]:
+    """Compute sample-resolved transcript A-site profiles from a sparse Parquet matrix.
+
+    Returns ``(profiles, offsets, genomic_counts)``. ``profiles`` keeps one
+    long-form row per sample/run, transcript, and position.
+    """
+    log_info("Joining sparse Parquet matrix counts to global BAM alignments...")
+    genomic_counts = sparse_parquet_handlers.sparse_matrix_genomic_counts(
+        bam_path=bam_path,
+        manifest_path=manifest_path,
+        exon_df=exon_df if regions is None else None,
+        regions=regions,
+        sample_names=samples,
+    )
+    if genomic_counts.is_empty():
+        return (
+            pl.DataFrame(schema={"sample_id": pl.Utf8, "tran_id": pl.Utf8, "pos": pl.Int64, "count": pl.Float64}),
+            {},
+            genomic_counts,
+        )
+    mapped = bam_handlers.bamtranscript(genomic_counts, exon_df)
+    if mapped.is_empty():
+        return (
+            pl.DataFrame(schema={"sample_id": pl.Utf8, "tran_id": pl.Utf8, "pos": pl.Int64, "count": pl.Float64}),
+            {},
+            genomic_counts,
+        )
+    cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
+    try:
+        rel = bam_handlers.process_transcriptomic_bam(mapped, cds_tran_df)
+        offsets = coordinates.change_point_analysis(rel)
+        offsets = {int(k): int(v) for k, v in offsets.items()}
+    except Exception as exc:
+        log_warning(f"Could not infer offsets from sparse matrix profiles; using default offset {default_offset}: {exc}")
+        offsets = _default_offsets_for_profiles(mapped, default_offset)
+    for length in mapped.get_column("length").drop_nulls().unique().to_list():
+        offsets.setdefault(int(length), int(default_offset))
+    profiles = _compute_asite_profiles(mapped, offsets, keep_length=keep_length)
+    return profiles, offsets, genomic_counts
 
 
 def profiles_from_zarr(
@@ -154,6 +272,7 @@ def profiles_from_zarr(
     """
     # zarr_handlers safely defers importing the heavy zarr dependency
     log_info("Streaming Zarr + index for profiles…")
+    cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
     offsets_by_sample: Dict[str, Dict[int, int]] = {}
     sampled_by_sample_len: Dict[tuple[str,int], int] = {}
 
@@ -209,7 +328,7 @@ def profiles_from_zarr(
                 # Join CDS to compute relative to CDS start using existing helper
                 rel = bam_handlers.process_transcriptomic_bam(
                     rel_input,
-                    cds_df
+                    cds_tran_df
                 )
                 # For each needed length, take up to sample_cap_per_len rows
                 rows = []
@@ -236,7 +355,7 @@ def profiles_from_zarr(
             for L in lengths:
                 offsets.setdefault(int(L), default_offset)
 
-        prof = _compute_asite_profiles(mapped, offsets)
+        prof = _compute_asite_profiles(mapped, offsets, keep_length=True)
         yield sample, prof
 
     # Persist offsets if requested

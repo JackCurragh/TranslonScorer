@@ -29,6 +29,10 @@ class Config:
 
     # Zarr unique read matrix
     zarr_root: Optional[str] = None
+    sparse_matrix_manifest: Optional[str] = None
+    # Sparse Parquet matrix scoring options
+    matrix_scoring_mode: str = "aggregate"      # "aggregate" | "per_sample"
+    sample_offsets_path: Optional[str] = None   # CSV/Parquet: sample_id, length, offset
     read_index_parquet: Optional[str] = None
     splits_index_parquet: Optional[str] = None
     samples: Optional[List[str]] = None
@@ -50,6 +54,14 @@ class Config:
     sru_range: int = 15
     scoring_method: str = "modern"
     plot_range: int = 30
+
+    # Frame assignment options (opt-in)
+    frame_method: str = "none"  # none|linear|linear+hmm|deblur+linear+hmm|latent
+    frame_by_length: bool = True
+    frame_hmm_lambda: float = 2.0
+    frame_background: str = "flat"  # flat|zero (used by latent)
+    frame_support_out: Optional[str] = None
+    frame_weighted_scoring: bool = False
     
     # Output options
     output: str = field(default="")
@@ -57,6 +69,8 @@ class Config:
     log_level: str = "INFO"
     offsets_out: Optional[str] = None
     junctions_out: Optional[str] = None
+    gene_expression_out: Optional[str] = None
+    gene_expression_long_out: Optional[str] = None
     partitioned: bool = False
     
     # Runtime state
@@ -151,9 +165,9 @@ class Config:
                 raise ValueError("Forward BigWig must be provided with Reverse BigWig")
         
         # Validate input combinations
-        if not any([self.bam, self.bigwig, (self.forward_bigwig and self.reverse_bigwig), self.zarr_root]):
+        if not any([self.bam, self.bigwig, (self.forward_bigwig and self.reverse_bigwig), self.zarr_root, self.sparse_matrix_manifest]):
             raise ValueError(
-                "Provide one of: BAM, BigWig, forward+reverse BigWigs, or Zarr root"
+                "Provide one of: BAM, BigWig, forward+reverse BigWigs, Zarr root, or sparse matrix manifest"
             )
             
         # Set up bigwig_paths based on inputs

@@ -525,6 +525,9 @@ def process_genomic_bigwig(bw_handle, exon_df):
         
         # Process each exon in this transcript
         for row in tran_exons.iter_rows(named=True):
+            # Determine strand for position mapping
+            strand = row.get("strand", "+") or "+"
+
             # Get genomic coordinates
             if isinstance(row["start"], list):
                 # Multiple exons case
@@ -536,7 +539,7 @@ def process_genomic_bigwig(bw_handle, exon_df):
                     if stop <= start:
                         log_warning(f"Skipping invalid exon interval {chrom}:{start}-{stop} (zero/negative length)")
                         continue
-                    
+
                     try:
                         key = (chrom, start, stop)
                         arr = _cache.get(key)
@@ -549,7 +552,13 @@ def process_genomic_bigwig(bw_handle, exon_df):
                         mask = np.isfinite(arr) & (arr != 0.0)
                         if mask.any():
                             idx = np.nonzero(mask)[0]
-                            sparse_pos.extend((tran_start + idx).astype(int).tolist())
+                            exon_len = stop - start
+                            if strand == "-":
+                                # For – strand: genomic index k → transcript pos tran_start + (exon_len - 1 - k)
+                                tran_idx = (tran_start + (exon_len - 1 - idx)).astype(int)
+                            else:
+                                tran_idx = (tran_start + idx).astype(int)
+                            sparse_pos.extend(tran_idx.tolist())
                             sparse_vals.extend(arr[mask].astype(float).tolist())
                     except Exception as e:
                         log_warning(f"Error reading {chrom}:{start}-{stop}: {str(e)}")
@@ -562,7 +571,7 @@ def process_genomic_bigwig(bw_handle, exon_df):
                 if stop <= start:
                     log_warning(f"Skipping invalid exon interval {chrom}:{start}-{stop} (zero/negative length)")
                     continue
-                
+
                 try:
                     key = (chrom, start, stop)
                     arr = _cache.get(key)
@@ -575,7 +584,12 @@ def process_genomic_bigwig(bw_handle, exon_df):
                     mask = np.isfinite(arr) & (arr != 0.0)
                     if mask.any():
                         idx = np.nonzero(mask)[0]
-                        sparse_pos.extend((tran_start + idx).astype(int).tolist())
+                        exon_len = stop - start
+                        if strand == "-":
+                            tran_idx = (tran_start + (exon_len - 1 - idx)).astype(int)
+                        else:
+                            tran_idx = (tran_start + idx).astype(int)
+                        sparse_pos.extend(tran_idx.tolist())
                         sparse_vals.extend(arr[mask].astype(float).tolist())
                 except Exception as e:
                     log_warning(f"Error reading {chrom}:{start}-{stop}: {str(e)}")
@@ -665,7 +679,10 @@ def process_transcriptomic_bigwig(bw_handle, exon_df):
         })
 
         
-def scoring(bigwig, exon, orfs, old_scoring, sru_range, stranded=False, batch_size=500, max_workers=None):
+from typing import Optional
+
+def scoring(bigwig, exon, orfs, old_scoring, sru_range, stranded=False, batch_size=500, max_workers=None,
+            frame_weighted_scoring: bool = False, frame_support_path: Optional[str] = None):
     """
     Score ORFs using bigwig coverage data with memory-efficient streaming.
     Now supports genomic BigWig files and strand-specific analysis.
@@ -768,19 +785,22 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, stranded=False, batch_si
         # Process positive strand ORFs with forward BigWig
         if not pos_strand_orfs.is_empty():
             log_info("Scoring positive strand ORFs")
-            pos_results = process_strand_orfs(forward_bw, exon_df, pos_strand_orfs, old_scoring, sru_range, batch_size, max_workers)
+            pos_results = process_strand_orfs(forward_bw, exon_df, pos_strand_orfs, old_scoring, sru_range, batch_size, max_workers,
+                                             frame_weighted_scoring=frame_weighted_scoring, frame_support_path=frame_support_path)
             results.append(pos_results)
         
         # Process negative strand ORFs with reverse BigWig
         if not neg_strand_orfs.is_empty():
             log_info("Scoring negative strand ORFs")
-            neg_results = process_strand_orfs(reverse_bw, exon_df, neg_strand_orfs, old_scoring, sru_range, batch_size, max_workers)
+            neg_results = process_strand_orfs(reverse_bw, exon_df, neg_strand_orfs, old_scoring, sru_range, batch_size, max_workers,
+                                             frame_weighted_scoring=frame_weighted_scoring, frame_support_path=frame_support_path)
             results.append(neg_results)
         
         # Process unstranded ORFs with forward BigWig (default)
         if not unstrand_orfs.is_empty():
             log_info("Scoring unstranded ORFs using forward strand data")
-            unstrand_results = process_strand_orfs(forward_bw, exon_df, unstrand_orfs, old_scoring, sru_range, batch_size, max_workers)
+            unstrand_results = process_strand_orfs(forward_bw, exon_df, unstrand_orfs, old_scoring, sru_range, batch_size, max_workers,
+                                                  frame_weighted_scoring=frame_weighted_scoring, frame_support_path=frame_support_path)
             results.append(unstrand_results)
         
         # Combine results
@@ -792,7 +812,8 @@ def scoring(bigwig, exon, orfs, old_scoring, sru_range, stranded=False, batch_si
             return pl.DataFrame()
     else:
         # Process all ORFs with the same BigWig (original behavior)
-        return process_strand_orfs(forward_bw, exon_df, orf_df, old_scoring, sru_range, batch_size, max_workers)
+        return process_strand_orfs(forward_bw, exon_df, orf_df, old_scoring, sru_range, batch_size, max_workers,
+                                   frame_weighted_scoring=frame_weighted_scoring, frame_support_path=frame_support_path)
 
 
 # Add this function outside of process_strand_orfs
@@ -809,7 +830,7 @@ def process_transcript_wrapper(args):
     """
     from ..utils.logging import log_error
     
-    tran_id, bigwig_path, orf_df_data, exon_df_data, old_scoring, sru_range = args
+    tran_id, bigwig_path, orf_df_data, exon_df_data, old_scoring, sru_range, frame_weighted_scoring, frame_support_path = args
     
     try:
         import polars as pl
@@ -837,7 +858,9 @@ def process_transcript_wrapper(args):
             tran_exons, 
             tran_orfs, 
             old_scoring, 
-            sru_range
+            sru_range,
+            frame_weighted_scoring=frame_weighted_scoring,
+            frame_support_path=frame_support_path
         )
         
         # Convert result to dictionary format for serialization
@@ -849,7 +872,8 @@ def process_transcript_wrapper(args):
         return None
 
 # Then modify process_strand_orfs to use this function
-def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, batch_size=500, max_workers=None):
+def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, batch_size=500, max_workers=None,
+                        frame_weighted_scoring: bool = False, frame_support_path: Optional[str] = None):
     """
     Process and score ORFs for a specific strand.
     
@@ -923,7 +947,7 @@ def process_strand_orfs(bigwig_path, exon_df, orf_df, old_scoring, sru_range, ba
         
         # Prepare tasks - include all necessary data
         tasks = [
-            (tran_id, bigwig_path, orf_df_dict, exon_df_dict, old_scoring, sru_range) 
+            (tran_id, bigwig_path, orf_df_dict, exon_df_dict, old_scoring, sru_range, frame_weighted_scoring, frame_support_path)
             for tran_id in transcript_batch
         ]
         
@@ -1049,7 +1073,7 @@ def append_to_csv(df, file_path):
             return False
 
 
-def score_single_transcript(bigwig_path, exon_df, orf_df, old_scoring, sru_range):
+def score_single_transcript(bigwig_path, exon_df, orf_df, old_scoring, sru_range, frame_weighted_scoring: bool = False, frame_support_path: Optional[str] = None):
     """
     Score ORFs for a single transcript.
     
@@ -1083,6 +1107,20 @@ def score_single_transcript(bigwig_path, exon_df, orf_df, old_scoring, sru_range
             if hasattr(coverage_df, "collect"):
                 coverage_df = coverage_df.collect()
             
+            # Optional frame-weighting of coverage using frame support p0 per codon
+            if frame_weighted_scoring and frame_support_path:
+                try:
+                    fs = pl.read_parquet(frame_support_path)
+                    fs_tx = fs.filter(pl.col("tran_id") == tran_id)
+                    if not fs_tx.is_empty():
+                        fs_tx = fs_tx.select(["codon", "p0"]).rename({"codon": "codon_idx"})
+                        coverage_df = coverage_df.with_columns((pl.col("tran_start") // 3).alias("codon_idx"))
+                        coverage_df = coverage_df.join(fs_tx, on="codon_idx", how="left").fill_null(1.0)
+                        coverage_df = coverage_df.with_columns((pl.col("counts") * pl.col("p0")).alias("counts")).select(["tran_start", "counts"])  # keep schema
+                except Exception as e:
+                    from ..utils.logging import log_warning
+                    log_warning(f"Frame-weighted scoring skipped for {tran_id}: {e}")
+
             # Process different ORF types separately
             results = []
             

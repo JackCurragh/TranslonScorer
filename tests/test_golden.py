@@ -548,6 +548,61 @@ import pytest  # noqa: E402 — needed for approx above
 
 
 # ---------------------------------------------------------------------------
+# T11 — GAPDH golden through the provider path (Δ=0)
+# ---------------------------------------------------------------------------
+
+def test_gapdh_golden_via_provider():
+    """GAPDH golden reproduced through MatrixProvider.coverage() interface.
+
+    Uses DictCoverageProvider (in-memory, no real matrix files) to verify
+    that the provider path produces bit-identical results to the direct
+    dict-based scoring path.  This proves the provider interface does not
+    alter the scoring arithmetic.
+    """
+    from TranslonScorer.coverage.matrix import DictCoverageProvider
+    from TranslonScorer.coverage.base import CoverageProvider
+
+    provider = DictCoverageProvider(_gapdh_coverage())
+    assert isinstance(provider, CoverageProvider)
+
+    # Pull coverage over the GAPDH locus via the provider interface
+    from TranslonScorer.model import Region
+    locus = Region("chr12", 40, 260)
+    cov_df = provider.coverage([locus])
+    assert "pos" in cov_df.columns
+    assert "count" in cov_df.columns
+
+    # Convert provider output back to a dict (same shape as _gapdh_coverage)
+    cov_via_provider: dict = dict(zip(
+        cov_df["pos"].to_list(),
+        cov_df["count"].to_list(),
+    ))
+
+    # Score using both paths and assert bit-identical
+    direct = score_events(_gapdh_events(), _gapdh_coverage(),
+                          group="gapdh", tier="aggregate", thr=_THR)
+    via_provider = score_events(_gapdh_events(), cov_via_provider,
+                                group="gapdh", tier="aggregate", thr=_THR)
+    _assert_identical(direct, via_provider, "gapdh_via_provider")
+
+
+def test_provider_protocol_compliance():
+    """DictCoverageProvider and MatrixProvider satisfy the expected protocols."""
+    from TranslonScorer.coverage.matrix import DictCoverageProvider, MatrixProvider
+    from TranslonScorer.coverage.base import (
+        CoverageProvider, SupportsSites, SupportsJunctions, SupportsMappability,
+    )
+    provider = DictCoverageProvider({})
+    assert isinstance(provider, CoverageProvider)
+    # MatrixProvider should satisfy all four protocols
+    mp = MatrixProvider([])
+    assert isinstance(mp, CoverageProvider)
+    assert isinstance(mp, SupportsSites)
+    assert isinstance(mp, SupportsJunctions)
+    assert isinstance(mp, SupportsMappability)
+
+
+# ---------------------------------------------------------------------------
 # Golden creation  (python3 tests/test_golden.py)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":

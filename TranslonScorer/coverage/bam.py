@@ -76,6 +76,14 @@ class BamSetProvider:
         # whole-sample evidence for metagene offset calibration. Required only
         # when offsets.method == "metagene".
         self._start_codons = start_codons or []
+        if transcriptome:
+            # Inverse (transcript→genome) read projection with isoform-multimapper
+            # resolution is not implemented yet. Fail loudly rather than silently
+            # treating transcript references as genomic (which would be wrong).
+            raise NotImplementedError(
+                "transcriptome→genome projection not implemented (REFACTOR_TASKS T12.1). "
+                "Provide genome-aligned BAMs, or wait for the projection feature."
+            )
         self._sample_names = sample_names or [
             Path(b).stem for b in bams
         ]

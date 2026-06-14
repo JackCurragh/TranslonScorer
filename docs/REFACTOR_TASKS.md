@@ -109,6 +109,11 @@ Current violations to remove during the refactor:
 - [x] **T11** `coverage/matrix.py`: `MatrixProvider` wrapping `region_coverage`/`tabulate_junctions`. Must reproduce the **GAPDH golden through the provider path** (Δ=0). STATUS: 24 passed in 0.55s — commit 0d32b01
 - [x] **T12** `coverage/bam.py`: `BamSetProvider` (whole-sample per-BAM/per-length offset calibration before any locus profile; P/A; transcriptome→genome isoform-multimapper resolution; unique default + mappability ledger). `coverage/bigwig.py`: `BigwigSetProvider` (only `CoverageProvider`). **New behaviour → new tests** (`tests/test_bam_provider.py`: score SRR11005875 genome BAM on GAPDH, assert sane in-frame/init/term; assert offsets are calibrated once per BAM/length and reused for locus profiles). Existing golden still green. STATUS: 27 passed in 0.69s — commit 9247417
 
+### Phase 3 follow-ups (BAM-provider correctness — surfaced in real-data testing)
+- [x] **T12.a** Strand-aware P/A placement (`-` strand used `reference_start`) + emit `strand` column; NH-based unique filter (was `MAPQ==0`, kept 2–4-locus multimappers). Tests + GAPDH genome fixture (`data/gapdh_cohort_genome.bam`). STATUS: 38 passed — commit (strand/unique).
+- [x] **T12.b** Implement metagene P-site offset calibration (5′ pile-up at start codons), pure `metagene_offsets` + provider `_build_metagene_histogram`. Unit + real-data tests. STATUS: 40 passed — commit (metagene). Real GAPDH offsets 9–12 for 25–32mers.
+- [ ] **T12.1** Transcriptome→genome read projection + isoform-multimapper resolution (the largest; needs inverse exon mapping + validation against the SRR transcriptome BAM). For now `transcriptome=True` raises `NotImplementedError` (no silent wrong coords). STATUS: guarded + tracked.
+
 `=== PHASE 3 complete — report ===`
 
 ## Phase 4 — orchestration + cleanup

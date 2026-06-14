@@ -452,6 +452,102 @@ def test_pipeline_shim_clustering_importable():
 
 
 # ---------------------------------------------------------------------------
+# T10 smoke tests — coverage/base.py protocols + coverage/profile.py
+# ---------------------------------------------------------------------------
+
+def test_coverage_base_protocols_importable():
+    """coverage/base.py: all four protocols importable and runtime-checkable."""
+    from TranslonScorer.coverage.base import (
+        CoverageProvider,
+        SupportsSites,
+        SupportsJunctions,
+        SupportsMappability,
+        MAPPABILITY_LEDGER_SCHEMA,
+    )
+    import polars as pl
+    assert "event_id" in MAPPABILITY_LEDGER_SCHEMA
+    # runtime_checkable: isinstance() works
+    class FakeProvider:
+        def coverage(self, regions, *, by_sample=False):
+            return pl.DataFrame()
+        def size_factors(self):
+            return {}
+    fp = FakeProvider()
+    assert isinstance(fp, CoverageProvider)
+
+
+def test_coverage_profile_apply_offsets_psite():
+    """apply_offsets with site='P' adds P-site offset to tran_start_bam."""
+    import numpy as np
+    from TranslonScorer.coverage.profile import apply_offsets
+    reads = pl.DataFrame({
+        "tran_id": ["t1", "t1"],
+        "tran_start_bam": [100, 200],
+        "length": [28, 29],
+        "count": [1.0, 2.0],
+    })
+    offsets = {28: 12, 29: 13}
+    out = apply_offsets(reads, offsets, site="P")
+    assert "pos" in out.columns
+    pos_set = set(out["pos"].to_list())
+    assert 112 in pos_set  # 100 + 12
+    assert 213 in pos_set  # 200 + 13
+
+
+def test_coverage_profile_apply_offsets_asite():
+    """apply_offsets with site='A' adds P-site offset + 3."""
+    from TranslonScorer.coverage.profile import apply_offsets
+    reads = pl.DataFrame({
+        "tran_id": ["t1"],
+        "tran_start_bam": [100],
+        "length": [28],
+        "count": [5.0],
+    })
+    offsets = {28: 12}
+    out = apply_offsets(reads, offsets, site="A")
+    assert out["pos"].item() == 115  # 100 + 12 + 3
+
+
+def test_coverage_profile_apply_offsets_empty():
+    """apply_offsets on empty reads returns correct schema."""
+    from TranslonScorer.coverage.profile import apply_offsets
+    reads = pl.DataFrame(schema={
+        "tran_id": pl.Utf8, "tran_start_bam": pl.Int64,
+        "length": pl.Int64, "count": pl.Float64,
+    })
+    out = apply_offsets(reads, {}, site="A")
+    assert out.is_empty()
+    assert "pos" in out.columns
+
+
+def test_coverage_profile_prefix_sums_bit_identical():
+    """_prefix_sums/_range_sums in coverage/profile.py produce same results
+    as the re-exported versions in scoring/run.py (bit-identical after migration)."""
+    import numpy as np
+    from TranslonScorer.coverage.profile import _prefix_sums as prof_ps, _range_sums as prof_rs
+    from TranslonScorer.scoring.run import _prefix_sums as run_ps, _range_sums as run_rs
+    # They should be the same function object after the re-import
+    assert prof_ps is run_ps
+    assert prof_rs is run_rs
+
+    pos = np.array([100, 101, 102, 103, 104, 105], dtype=np.int64)
+    cnt = np.array([10.0, 5.0, 3.0, 8.0, 2.0, 6.0], dtype=np.float64)
+    p, ca, cf = prof_ps(pos, cnt)
+    assert len(ca) == len(pos) + 1
+    assert len(cf) == 3
+
+    starts = np.array([100, 102], dtype=np.int64)
+    ends   = np.array([103, 106], dtype=np.int64)
+    tot, fr, cov = prof_rs(p, ca, cf, starts, ends)
+    assert tot[0] == pytest.approx(10.0 + 5.0 + 3.0)
+    assert fr.shape == (2, 3)
+    assert cov[0] == 3
+
+
+import pytest  # noqa: E402 — needed for approx above
+
+
+# ---------------------------------------------------------------------------
 # Golden creation  (python3 tests/test_golden.py)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":

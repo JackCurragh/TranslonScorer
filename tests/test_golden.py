@@ -603,6 +603,45 @@ def test_provider_protocol_compliance():
 
 
 # ---------------------------------------------------------------------------
+# T12 smoke tests — coverage/bam.py + coverage/bigwig.py protocols
+# ---------------------------------------------------------------------------
+
+def test_bam_provider_importable_and_protocols():
+    """BamSetProvider satisfies all four capability protocols."""
+    from TranslonScorer.coverage.bam import BamSetProvider
+    from TranslonScorer.coverage.base import (
+        CoverageProvider, SupportsSites, SupportsJunctions, SupportsMappability,
+    )
+    provider = BamSetProvider([])
+    assert isinstance(provider, CoverageProvider)
+    assert isinstance(provider, SupportsSites)
+    assert isinstance(provider, SupportsJunctions)
+    assert isinstance(provider, SupportsMappability)
+
+
+def test_bigwig_provider_importable_and_protocol():
+    """BigwigSetProvider satisfies CoverageProvider; junction/mappability raise."""
+    from TranslonScorer.coverage.bigwig import BigwigSetProvider
+    from TranslonScorer.coverage.base import CoverageProvider
+    provider = BigwigSetProvider([])
+    assert isinstance(provider, CoverageProvider)
+    with pytest.raises(NotImplementedError):
+        provider.junction_support([])
+    with pytest.raises(NotImplementedError):
+        provider.mappability_ledger(pl.DataFrame())
+
+
+def test_bam_provider_offset_calibration_is_cached():
+    """BamSetProvider._calibrate_offsets is idempotent (caches offset table)."""
+    from TranslonScorer.coverage.bam import BamSetProvider
+    from TranslonScorer.model import OffsetParams
+    p = BamSetProvider([], offsets=OffsetParams(method="global", global_offset=12))
+    t1 = p._calibrate_offsets()
+    t2 = p._calibrate_offsets()
+    assert t1 is t2
+
+
+# ---------------------------------------------------------------------------
 # Golden creation  (python3 tests/test_golden.py)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":

@@ -11,6 +11,17 @@ from .utils.logging import setup_logging, log_info
 from .file_handlers import bam as bam_handlers
 
 
+def _warn_deprecated(name: str, replacement: str) -> None:
+    """Emit a deprecation notice for legacy ORF-composite era commands."""
+    click.echo(
+        click.style(
+            f"WARNING: '{name}' is deprecated and will be removed; use {replacement} instead.",
+            fg="yellow",
+        ),
+        err=True,
+    )
+
+
 def common_options(func):
     """Apply common options to command functions."""
     # Input files
@@ -447,8 +458,12 @@ def profiles(**kwargs):
 @click.option('--frame-weighted-scoring', is_flag=True, default=False, help='Weight coverage by frame posterior p0 if frame support is provided.')
 @click.option('--frame-support', 'frame_support_path', help='Path to frame_support.parquet (from profiles step).')
 def score_orfs(orfs: str, exons: str, bigwig: str, output: str, scoring_method: str, sru_range: int, frame_weighted_scoring: bool, frame_support_path: Optional[str]):
-    """Score ORFs and write results + report."""
+    """[DEPRECATED] Score ORFs and write results + report.
+
+    Superseded by the event-scoring workflow: extract-events → score-bams/score-matrix.
+    """
     setup_logging()
+    _warn_deprecated("score-orfs", "extract-events + score-bams/score-matrix")
     config = Config(sequence='placeholder.fa', annotation='placeholder.gtf', bigwig=bigwig, output=output, scoring_method=scoring_method, sru_range=sru_range,
                     frame_weighted_scoring=frame_weighted_scoring, frame_support_out=frame_support_path)
     # load inputs
@@ -888,8 +903,12 @@ def features(annotation: str, out_dir: str = None, output_prefix: str = None, pr
 @click.option('--frame-support', 'frame_support_parquet', required=False, help='Optional frame support Parquet to use for frame-aware metrics.')
 @click.option('--progress/--no-progress', default=True, help='Show progress bars (default: on).')
 def feature_metrics_cmd(profiles: str, features: str, feature_map: str, splits_csv: Optional[str], out_parquet: str, frame_support_parquet: Optional[str], progress: bool):
-    """Compute per-feature metrics including junction LLR scores and SRU for TIS/TTS."""
+    """[DEPRECATED] Compute per-feature metrics including junction LLR scores and SRU for TIS/TTS.
+
+    Superseded by the event-scoring workflow: extract-events → score-bams/score-matrix.
+    """
     setup_logging()
+    _warn_deprecated("feature-metrics", "extract-events + score-bams/score-matrix")
     from .pipeline.feature_metrics import feature_metrics
     splits_df = None
     if splits_csv:
@@ -925,8 +944,12 @@ def assemble_cmd(orfs_parquet: str, out_parquet: str, solver: str, timeout_sec: 
 @click.option('--feature-map', 'feature_map', required=True, help='Transcript→feature map Parquet.')
 @click.option('--out', 'out_parquet', required=True, help='Output ORFs with composite scores (Parquet).')
 def orf_composite_cmd(orfs: str, feature_metrics: str, feature_map: str, out_parquet: str):
-    """Aggregate per-feature metrics into composite ORF scores."""
+    """[DEPRECATED] Aggregate per-feature metrics into composite ORF scores.
+
+    Superseded by the event-scoring workflow: extract-events → score-bams/score-matrix.
+    """
     setup_logging()
+    _warn_deprecated("orf-composite", "extract-events + score-bams/score-matrix")
     from .pipeline.orf_composite import orf_composite
     orf_composite(orfs, feature_metrics, feature_map, out_parquet)
     log_info("Composite ORF scores written")
@@ -956,6 +979,94 @@ def inspect_cmd(parquet_path: str, limit: int, expand: bool, out_csv: Optional[s
     setup_logging()
     from .pipeline.inspect import inspect_parquet
     inspect_parquet(parquet_path, limit=limit, expand=expand, out_csv=out_csv)
+
+
+# ===========================================================================
+# Event-scoring workflows (functional-core/imperative-shell architecture).
+# These wrap TranslonScorer.workflows and supersede the ORF-composite commands.
+# ===========================================================================
+
+@cli.command("extract-events")
+@click.option('--sqlite', 'sqlite_path', required=True, help='Annotation sqlite database with translons + translon_blocks tables.')
+@click.option('--out-dir', required=True, help='Output directory for events/, feature_event/, event_overlap/ Parquet trees.')
+@click.option('--annotation-version', default='', help='Annotation version string stamped into event records (for reproducible event_ids).')
+def extract_events_cmd(sqlite_path: str, out_dir: str, annotation_version: str):
+    """Extract deduplicated genomic events from an annotation database."""
+    setup_logging()
+    from .workflows import extract_events_workflow
+    summary = extract_events_workflow(sqlite_path, out_dir, annotation_version=annotation_version)
+    log_info(
+        f"Extracted events: {summary['events']} events, "
+        f"{summary['feature_event']} feature links, "
+        f"{summary['event_overlap']} overlaps across {summary['chroms']} chromosomes"
+    )
+    for t, n in sorted(summary.get('by_type', {}).items()):
+        log_info(f"  {t}: {n}")
+
+
+@cli.command("score-matrix")
+@click.option('--events-dir', required=True, help='Events directory produced by extract-events.')
+@click.option('--partitions', required=True, multiple=True, help='Matrix partition directory (repeatable).')
+@click.option('--store-dir', required=True, help='Output fact_event_score store directory.')
+@click.option('--data-version', required=True, help='Data version label for the append-only score partition.')
+@click.option('--annotation-version', default='', help='Annotation version stamped into the store.')
+@click.option('--ref-offset', type=int, default=15, show_default=True, help='P-site offset used when the matrix was built.')
+@click.option('--sample', 'sample_names', multiple=True, help='Restrict to these sample name(s) (default: all).')
+@click.option('--site', type=click.Choice(['A', 'P']), default='A', show_default=True, help='Coverage site to query.')
+@click.option('--n-workers', type=int, default=None, help='Worker processes for partition scanning.')
+def score_matrix_cmd(events_dir, partitions, store_dir, data_version, annotation_version, ref_offset, sample_names, site, n_workers):
+    """Score extracted events against the sparse annotation-scale matrix."""
+    setup_logging()
+    from .workflows import score_matrix_workflow
+    written = score_matrix_workflow(
+        events_dir, list(partitions), store_dir,
+        data_version=data_version, annotation_version=annotation_version,
+        ref_offset=ref_offset, sample_names=list(sample_names) or None,
+        n_workers=n_workers, site=site,
+    )
+    log_info(f"Scores written: {written or '(no events scored)'}")
+
+
+@cli.command("score-bams")
+@click.option('--events-dir', required=True, help='Events directory produced by extract-events.')
+@click.option('--bam', 'bams', required=True, multiple=True, help='Genome-aligned BAM (repeatable, 1-20 samples).')
+@click.option('--store-dir', required=True, help='Output fact_event_score store directory.')
+@click.option('--data-version', required=True, help='Data version label for the append-only score partition.')
+@click.option('--annotation-version', default='', help='Annotation version stamped into the store.')
+@click.option('--sample', 'sample_names', multiple=True, help='Sample name(s) aligned with --bam order (default: BAM stems).')
+@click.option('--offset-method', type=click.Choice(['global', 'file', 'metagene']), default='global', show_default=True, help='P-site offset calibration method.')
+@click.option('--global-offset', type=int, default=12, show_default=True, help='Fixed P-site offset for --offset-method global.')
+@click.option('--offsets-file', help='CSV with read_length,offset for --offset-method file.')
+@click.option('--multimap', type=click.Choice(['unique']), default='unique', show_default=True, help='Multimapper policy (unique only for now).')
+@click.option('--site', type=click.Choice(['A', 'P']), default='A', show_default=True, help='Coverage site to query.')
+def score_bams_cmd(events_dir, bams, store_dir, data_version, annotation_version, sample_names, offset_method, global_offset, offsets_file, multimap, site):
+    """Score extracted events against 1-20 genome-aligned BAMs."""
+    setup_logging()
+    from .model import OffsetParams
+    from .workflows import score_bams_workflow
+    offsets = OffsetParams(method=offset_method, global_offset=global_offset, offsets_file=offsets_file)
+    written = score_bams_workflow(
+        events_dir, list(bams), store_dir,
+        data_version=data_version, annotation_version=annotation_version,
+        offsets=offsets, sample_names=list(sample_names) or None,
+        multimap=multimap, site=site,
+    )
+    log_info(f"Scores written: {written or '(no events scored)'}")
+
+
+@cli.command("consequential")
+@click.option('--report', 'report_path', required=True, help='Per-translon report Parquet/CSV to label.')
+@click.option('--out', 'out_path', required=True, help='Output Parquet with a boolean consequential column.')
+def consequential_cmd(report_path: str, out_path: str):
+    """Apply the consequentiality policy to a per-translon report."""
+    setup_logging()
+    from .model import ConsequentialityPolicy
+    from .workflows import consequential_workflow
+    report = pl.read_parquet(report_path) if report_path.endswith('.parquet') else pl.read_csv(report_path)
+    out = consequential_workflow(report, ConsequentialityPolicy())
+    out.write_parquet(out_path)
+    log_info(f"Consequentiality labels written: {out_path}")
+
 
 if __name__ == '__main__':
     cli()

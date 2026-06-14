@@ -117,7 +117,7 @@ Current violations to remove during the refactor:
 `=== PHASE 3 complete — report ===`
 
 ## Phase 4 — orchestration + cleanup
-- [ ] **T13** `workflows.py` + `cli.py`: subcommands (`extract-events`, `score-matrix`, `score-bams`, `consequential`); mark `orf-composite`/`score-orfs`/`feature-metrics` deprecated. CLI smoke test + gate green. STATUS:
-- [ ] **T14** Delete `pipeline/` shims; point all imports at the new tree. Final gate green. STATUS:
+- [x] **T13** `workflows.py` + `cli.py`: subcommands (`extract-events`, `score-matrix`, `score-bams`, `consequential`); marked `orf-composite`/`score-orfs`/`feature-metrics` deprecated (yellow stderr warning + `[DEPRECATED]` help). workflows.py wraps events.run_extract / MatrixProvider / BamSetProvider / score_events_vectorised / persist_scores / apply_policy; per-chrom coverage query so genomic positions never collide. Smoke test `tests/test_cli_workflows.py` (10 tests). STATUS: gate 41 passed; full 121 passed, 3 skipped — commit (pending)
+- [ ] **T14** Delete genuine Phase-1–3 re-export shims in `pipeline/` and repoint importers at the new tree. NOTE: `pipeline/` is NOT all shims — it still holds ~30 un-migrated real modules (matrix_*, read_assignment, frame_*, orf*, profiles, workflow). Only 5 files are Phase-1–3 shims: `event_extract`, `event_score`, `profile_clustering`, `matrix_qc` (pure re-exports), and `frame_support` (a live Config→Params *adapter*, not a pure shim). Scope T14 to the pure shims; keep/relocate the frame_support adapter. Final gate green. STATUS:
 
 `=== PHASE 4 complete — DONE ===`

@@ -146,8 +146,18 @@ def extract_events(
     return events, feature_event, overlap
 
 
-def run_extract(sqlite_path: str, out_dir: str, *, annotation_version: str = "") -> dict:
-    """Genome-wide driver: extract events per chromosome, write Parquet."""
+def run_extract(
+    sqlite_path: str,
+    out_dir: str,
+    *,
+    annotation_version: str = "",
+    chroms: Optional[List[str]] = None,
+) -> dict:
+    """Genome-wide driver: extract events per chromosome, write Parquet.
+
+    ``chroms`` restricts extraction to the given chromosome names (e.g.
+    ``["chr12"]``); None (default) processes every chromosome in the db.
+    """
     import sqlite3
     from pathlib import Path
 
@@ -157,8 +167,13 @@ def run_extract(sqlite_path: str, out_dir: str, *, annotation_version: str = "")
     (out / "event_overlap").mkdir(parents=True, exist_ok=True)
 
     con = sqlite3.connect(sqlite_path)
-    chroms = [r[0] for r in con.execute(
+    all_chroms = [r[0] for r in con.execute(
         "SELECT DISTINCT bed_chrom FROM translons WHERE bed_chrom IS NOT NULL").fetchall()]
+    if chroms:
+        wanted = set(chroms)
+        chroms = [c for c in all_chroms if c in wanted]
+    else:
+        chroms = all_chroms
 
     n_ev = n_fe = n_ov = 0
     by_type: dict = {}

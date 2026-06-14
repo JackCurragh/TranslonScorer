@@ -1054,16 +1054,51 @@ def score_bams_cmd(events_dir, bams, store_dir, data_version, annotation_version
     log_info(f"Scores written: {written or '(no events scored)'}")
 
 
+@cli.command("report")
+@click.option('--store-dir', required=True, help='fact_event_score store directory produced by score-matrix/score-bams.')
+@click.option('--events-dir', required=True, help='Events directory produced by extract-events (must contain feature_event/).')
+@click.option('--out', 'out_path', required=True, help='Output per-translon report Parquet (with consequentiality columns).')
+@click.option('--data-version', default=None, help='Restrict to this data_version partition (default: all).')
+@click.option('--tier', default=None, help='Restrict to this tier (default: all).')
+@click.option('--min-tier-confidence', type=float, default=0.0, show_default=True, help='Confidence floor for the consequential flag.')
+@click.option('--min-expression-percentile', type=float, default=0.0, show_default=True, help='Expression-percentile floor for the consequential flag.')
+@click.option('--context-weight', type=float, default=1.0, show_default=True, help='Scale applied to the composite consequentiality score.')
+def report_cmd(store_dir, events_dir, out_path, data_version, tier, min_tier_confidence, min_expression_percentile, context_weight):
+    """Compose a per-translon report from scored events and apply the policy."""
+    setup_logging()
+    from .model import ConsequentialityPolicy
+    from .workflows import report_workflow
+    policy = ConsequentialityPolicy(
+        min_tier_confidence=min_tier_confidence,
+        min_expression_percentile=min_expression_percentile,
+        context_weight=context_weight,
+    )
+    rep = report_workflow(
+        store_dir, events_dir, out_path,
+        data_version=data_version, tier=tier, policy=policy,
+    )
+    n_conseq = int(rep['consequential'].sum()) if 'consequential' in rep.columns and rep.height else 0
+    log_info(f"Report written: {out_path} ({rep.height} translons, {n_conseq} consequential)")
+
+
 @cli.command("consequential")
 @click.option('--report', 'report_path', required=True, help='Per-translon report Parquet/CSV to label.')
-@click.option('--out', 'out_path', required=True, help='Output Parquet with a boolean consequential column.')
-def consequential_cmd(report_path: str, out_path: str):
-    """Apply the consequentiality policy to a per-translon report."""
+@click.option('--out', 'out_path', required=True, help='Output Parquet with consequentiality columns.')
+@click.option('--min-tier-confidence', type=float, default=0.0, show_default=True, help='Confidence floor for the consequential flag.')
+@click.option('--min-expression-percentile', type=float, default=0.0, show_default=True, help='Expression-percentile floor for the consequential flag.')
+@click.option('--context-weight', type=float, default=1.0, show_default=True, help='Scale applied to the composite consequentiality score.')
+def consequential_cmd(report_path: str, out_path: str, min_tier_confidence, min_expression_percentile, context_weight):
+    """Apply the consequentiality policy to an existing per-translon report."""
     setup_logging()
     from .model import ConsequentialityPolicy
     from .workflows import consequential_workflow
+    policy = ConsequentialityPolicy(
+        min_tier_confidence=min_tier_confidence,
+        min_expression_percentile=min_expression_percentile,
+        context_weight=context_weight,
+    )
     report = pl.read_parquet(report_path) if report_path.endswith('.parquet') else pl.read_csv(report_path)
-    out = consequential_workflow(report, ConsequentialityPolicy())
+    out = consequential_workflow(report, policy)
     out.write_parquet(out_path)
     log_info(f"Consequentiality labels written: {out_path}")
 

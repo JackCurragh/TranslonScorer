@@ -19,6 +19,7 @@ across chromosomes.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import polars as pl
@@ -30,9 +31,15 @@ from TranslonScorer.model import (
     ScoreThresholds,
 )
 from TranslonScorer.events import run_extract
-from TranslonScorer.io.store import persist_scores, read_events
+from TranslonScorer.io.store import (
+    persist_scores,
+    read_events,
+    read_feature_event,
+    read_scores,
+)
 from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS, score_events_vectorised
 from TranslonScorer.consequential import apply_policy
+from TranslonScorer.report import compose_report
 
 
 # ---------------------------------------------------------------------------
@@ -192,3 +199,30 @@ def consequential_workflow(
     over ``consequential.apply_policy``; kept here so the CLI has one import
     surface for orchestration)."""
     return apply_policy(report, policy)
+
+
+# ---------------------------------------------------------------------------
+# report  (scores store + events → per-translon report [+ consequentiality])
+# ---------------------------------------------------------------------------
+
+def report_workflow(
+    store_dir: str,
+    events_dir: str,
+    out_path: str,
+    *,
+    data_version: Optional[str] = None,
+    tier: Optional[str] = None,
+    policy: Optional[ConsequentialityPolicy] = None,
+) -> pl.DataFrame:
+    """Compose a per-translon report from the score store and event membership.
+
+    Reads scores (optionally filtered by data_version/tier) and the
+    ``feature_event`` mapping, composes one row per translon, applies the
+    consequentiality policy, writes Parquet, and returns the report.
+    """
+    scores = read_scores(store_dir, data_version=data_version, tier=tier)
+    feature_event = read_feature_event(str(Path(events_dir) / "feature_event"))
+    report = compose_report(scores, feature_event)
+    report = apply_policy(report, policy or ConsequentialityPolicy())
+    report.write_parquet(out_path)
+    return report

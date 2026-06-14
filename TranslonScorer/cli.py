@@ -125,8 +125,12 @@ def find_orfs(**kwargs):
 )
 @click.option('--loci-bed', help='BED of loci to build genomic A-site profile matrices (Zarr).')
 @click.option('--offsets-file', help='CSV with columns length,offset to override defaults.')
-# Zarr + indexing helpers
+# Matrix + indexing helpers
 @click.option('--zarr-root', help='Root of Zarr counts matrix (samples x reads or reads x samples).')
+@click.option('--sparse-matrix-manifest', help='Sparse Parquet global matrix manifest or output directory.')
+@click.option('--matrix-scoring-mode', type=click.Choice(['aggregate','per_sample']), default='aggregate',
+              show_default=True, help='Scoring mode for sparse Parquet matrix: aggregate (all samples) or per_sample.')
+@click.option('--sample-offsets-path', help='CSV/Parquet with per-sample A-site offsets (sample_id, length, offset) for per_sample mode.')
 @click.option('--read-index-parquet', help='Parquet mapping read_id (Zarr row) to genomic alignment (chr,start,stop,strand,length).')
 @click.option('--splits-index-parquet', help='Optional Parquet of per-read junctions (read_id, chr, donor_pos, acceptor_pos, strand).')
 @click.option('--sample', 'samples', multiple=True, help='Sample name(s) to process from the Zarr matrix.')
@@ -139,9 +143,16 @@ def find_orfs(**kwargs):
 # Outputs & policy
 @click.option('--junctions-out', help='Path to write junction counts when available.')
 @click.option('--offsets-out', help='Path to write discovered offsets per sample/length.')
+@click.option('--gene-expression-out', help='Optional wide gene x sample expression matrix Parquet output.')
+@click.option('--gene-expression-long-out', help='Optional long gene expression Parquet output with gene_id,sample_id,count.')
 @click.option('--partitioned/--no-partitioned', default=False, help='Write profiles as a partitioned dataset by sample.')
 @click.option('--mapped-index', 'mapped_index_parquet', help='Optional path to a precomputed mapped index (read_id→tran_id/tran_start_bam). If provided and missing, it will be built.')
 @click.option('--offsets-mode', type=click.Choice(['auto','global','required']), default='auto', help='Offsets selection policy.')
+# Frame assignment options (opt-in)
+@click.option('--frame-method', type=click.Choice(['none','linear','linear+hmm','deblur+linear+hmm','latent']), default='none', help='Frame assignment method to run (default: none).')
+@click.option('--frame-by-length/--no-frame-by-length', default=True, help='Model frame per read length when available (default: on).')
+@click.option('--frame-support-out', help='Output Parquet for frame posteriors (default: derived from --profiles-out/-o).')
+@click.option('--profiles-with-length', is_flag=True, default=False, help='Retain read length in profiles (enables length-aware modeling).')
 def profiles(**kwargs):
     """Generate transcript-space A-site profiles from BAM (classic/collapsed), Zarr, or BigWig."""
     setup_logging()
@@ -176,10 +187,17 @@ def profiles(**kwargs):
         pass
     else:
         config._validate_file_exists(config.annotation, 'Annotation')
-    if not (config.bam or config.zarr_root or config.bigwig or (config.forward_bigwig and config.reverse_bigwig)):
-        raise click.BadParameter('Provide one of: --bam (classic/collapsed), --zarr-root with --read-index-parquet and --sample, or --bigwig/--forward-bigwig+--reverse-bigwig')
+    if not (config.bam or config.zarr_root or config.sparse_matrix_manifest or config.bigwig or (config.forward_bigwig and config.reverse_bigwig)):
+        raise click.BadParameter('Provide one of: --bam (classic/collapsed), --sparse-matrix-manifest with --bam, --zarr-root with --read-index-parquet and --sample, or --bigwig/--forward-bigwig+--reverse-bigwig')
+    if config.sparse_matrix_manifest and not config.bam:
+        raise click.BadParameter('Sparse Parquet matrix mode requires --bam pointing at the global unique-read BAM.')
 
     log_info("Starting profiles workflow…")
+    # Frame-related options (opt-in)
+    frame_method = kwargs.get('frame_method') or 'none'
+    frame_by_length = bool(kwargs.get('frame_by_length')) if 'frame_by_length' in kwargs else True
+    frame_support_out = kwargs.get('frame_support_out')
+    profiles_with_length = bool(kwargs.get('profiles_with_length')) if 'profiles_with_length' in kwargs else False
     # Load annotation: prefer bundle if provided
     exon_df = cds_df = None
     if config.annotation_dir:
@@ -188,14 +206,64 @@ def profiles(**kwargs):
     else:
         cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
 
-    from .pipeline.profiles import profiles_from_bam, profiles_from_zarr, profiles_from_bigwig, write_profiles_parquet
+    from .pipeline.profiles import (
+        gene_expression_matrix_from_profiles,
+        profiles_from_bam,
+        profiles_from_bigwig,
+        profiles_from_sparse_parquet_matrix,
+        profiles_from_zarr,
+        write_profiles_parquet,
+    )
+    from .pipeline.frame_support import build_frame_support
     from .pipeline.locus_profiles import build_locus_profiles_zarr
+    from .pipeline.transcript_coords import cds_to_transcript_space
 
     log_info("Inputs detected: " + (
-        "BAM" if config.bam else ("Zarr" if config.zarr_root else ("BigWig" if (config.bigwig or (config.forward_bigwig and config.reverse_bigwig)) else "Unknown"))
+        "Sparse Parquet" if config.sparse_matrix_manifest else ("BAM" if config.bam else ("Zarr" if config.zarr_root else ("BigWig" if (config.bigwig or (config.forward_bigwig and config.reverse_bigwig)) else "Unknown")))
     ))
+    # Sparse Parquet lane: global unique-read BAM + sparse per-run count matrix
+    if config.sparse_matrix_manifest:
+        prof, offsets, _genomic_counts = profiles_from_sparse_parquet_matrix(
+            bam_path=config.bam,
+            manifest_path=config.sparse_matrix_manifest,
+            exon_df=exon_df,
+            cds_df=cds_df,
+            samples=list(config.samples) if config.samples else None,
+            keep_length=(profiles_with_length or (frame_by_length and (frame_method != 'none'))),
+        )
+        log_info(f"Writing sample-resolved sparse matrix profiles to: {kwargs['profiles_out']}")
+        write_profiles_parquet(prof, kwargs['profiles_out'])
+        if config.offsets_out and offsets:
+            rows = [{"sample": "all", "length": int(length), "offset": int(offset)} for length, offset in sorted(offsets.items())]
+            pl.from_dicts(rows).write_csv(config.offsets_out)
+        if config.gene_expression_out or config.gene_expression_long_out:
+            long, wide = gene_expression_matrix_from_profiles(
+                prof,
+                exon_df=exon_df,
+                transcripts_df=tx_df if 'tx_df' in locals() else None,
+                feature_map_df=fmap_df if 'fmap_df' in locals() else None,
+            )
+            if config.gene_expression_out:
+                log_info(f"Writing wide gene expression matrix to: {config.gene_expression_out}")
+                wide.write_parquet(config.gene_expression_out)
+            if config.gene_expression_long_out:
+                log_info(f"Writing long gene expression matrix to: {config.gene_expression_long_out}")
+                long.write_parquet(config.gene_expression_long_out)
+        log_info("Sparse Parquet profiles written")
+        if frame_method and frame_method.lower() != 'none':
+            if not frame_support_out:
+                base = kwargs['profiles_out'].rsplit('.', 1)[0]
+                frame_support_out = f"{base.replace('_transcript_profiles','')}_frame_support.parquet"
+            cfg = Config.from_click_args(**kwargs)
+            cfg.frame_method = frame_method
+            cfg.frame_by_length = frame_by_length
+            cfg.frame_support_out = frame_support_out
+            cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
+            log_info(f"Building frame support with method={frame_method}...")
+            build_frame_support(prof, cds_tran_df, cfg)
+            log_info(f"Frame support written to: {cfg.frame_support_out}")
     # BAM lane
-    if config.bam and not config.zarr_root:
+    elif config.bam and not config.zarr_root:
         prof, offsets = profiles_from_bam(
             config.bam,
             exon_df,
@@ -204,6 +272,7 @@ def profiles(**kwargs):
             count_from=config.bam_count_from,
             count_pattern=config.bam_count_pattern,
             count_tag=config.bam_count_tag,
+            keep_length=(profiles_with_length or (frame_by_length and (frame_method != 'none'))),
         )
         log_info(f"Writing profiles to: {kwargs['profiles_out']}")
         write_profiles_parquet(prof, kwargs['profiles_out'])
@@ -222,6 +291,20 @@ def profiles(**kwargs):
                 write_parquet_safe(j, config.junctions_out)
                 log_info("Junction counts written from BAM")
         log_info("Profiles written")
+        # Optional frame support
+        if frame_method and frame_method.lower() != 'none':
+            # Derive default path if not provided
+            if not frame_support_out:
+                base = kwargs['profiles_out'].rsplit('.', 1)[0]
+                frame_support_out = f"{base.replace('_transcript_profiles','')}_frame_support.parquet"
+            cfg = Config.from_click_args(**kwargs)
+            cfg.frame_method = frame_method
+            cfg.frame_by_length = frame_by_length
+            cfg.frame_support_out = frame_support_out
+            cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
+            log_info(f"Building frame support with method={frame_method}…")
+            build_frame_support(prof, cds_tran_df, cfg)
+            log_info(f"Frame support written to: {cfg.frame_support_out}")
     # Zarr lane (with optional index build from BAM)
     elif config.zarr_root:
         # Ensure samples provided
@@ -340,6 +423,19 @@ def profiles(**kwargs):
         log_info(f"Writing profiles to: {kwargs['profiles_out']}")
         write_profiles_parquet(prof, kwargs['profiles_out'])
         log_info("Profiles written from BigWig")
+        # Optional frame support from BigWig-derived profiles
+        if frame_method and frame_method.lower() != 'none':
+            if not frame_support_out:
+                base = kwargs['profiles_out'].rsplit('.', 1)[0]
+                frame_support_out = f"{base.replace('_transcript_profiles','')}_frame_support.parquet"
+            cfg = Config.from_click_args(**kwargs)
+            cfg.frame_method = frame_method
+            cfg.frame_by_length = frame_by_length
+            cfg.frame_support_out = frame_support_out
+            cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
+            log_info(f"Building frame support with method={frame_method} (BigWig lane)…")
+            build_frame_support(prof, cds_tran_df, cfg)
+            log_info(f"Frame support written to: {cfg.frame_support_out}")
 
 @cli.command("score-orfs")
 @click.option('--orfs', '-f', required=True, help='CSV file containing ORFs to score')
@@ -348,10 +444,13 @@ def profiles(**kwargs):
 @click.option('--output', '-o', required=True, help='Base name for output files')
 @click.option('--scoring-method', type=click.Choice(['classic', 'modern']), default='modern')
 @click.option('--sru-range', type=int, default=15)
-def score_orfs(orfs: str, exons: str, bigwig: str, output: str, scoring_method: str, sru_range: int):
+@click.option('--frame-weighted-scoring', is_flag=True, default=False, help='Weight coverage by frame posterior p0 if frame support is provided.')
+@click.option('--frame-support', 'frame_support_path', help='Path to frame_support.parquet (from profiles step).')
+def score_orfs(orfs: str, exons: str, bigwig: str, output: str, scoring_method: str, sru_range: int, frame_weighted_scoring: bool, frame_support_path: Optional[str]):
     """Score ORFs and write results + report."""
     setup_logging()
-    config = Config(sequence='placeholder.fa', annotation='placeholder.gtf', bigwig=bigwig, output=output, scoring_method=scoring_method, sru_range=sru_range)
+    config = Config(sequence='placeholder.fa', annotation='placeholder.gtf', bigwig=bigwig, output=output, scoring_method=scoring_method, sru_range=sru_range,
+                    frame_weighted_scoring=frame_weighted_scoring, frame_support_out=frame_support_path)
     # load inputs
     orf_df = pl.read_csv(orfs)
     exon_df = pl.read_csv(exons)
@@ -362,6 +461,332 @@ def score_orfs(orfs: str, exons: str, bigwig: str, output: str, scoring_method: 
     from .visualization import plots
     plots.plottop10(scored_path, bigwig, exons, 30, output)
     log_info("ORF scoring complete!")
+
+
+@cli.command("score-compare-frame")
+@click.option('--orfs', required=True, help='ORFs to score (CSV/TSV/Parquet).')
+@click.option('--exons', required=True, help='Transcript exon table (CSV/TSV/Parquet).')
+@click.option('--bigwig', required=True, help='BigWig coverage track.')
+@click.option('--frame-support', 'frame_support', required=True, help='Frame support Parquet from the profiles command.')
+@click.option('--out-prefix', required=True, help='Output prefix for raw/frame/comparison tables.')
+@click.option('--profiles', 'profiles_path', help='Optional transcript profiles Parquet for frame-weighted-count summaries.')
+@click.option('--panel-manifest', help='Optional frozen panel manifest to merge onto ORFs before scoring.')
+@click.option('--scoring-method', type=click.Choice(['classic', 'modern']), default='modern')
+@click.option('--sru-range', type=int, default=15)
+@click.option('--label-column', help='Optional truth/category column for score-gap summaries.')
+@click.option('--max-workers', type=int, default=None)
+def score_compare_frame_cmd(
+    orfs: str,
+    exons: str,
+    bigwig: str,
+    frame_support: str,
+    out_prefix: str,
+    profiles_path: Optional[str],
+    panel_manifest: Optional[str],
+    scoring_method: str,
+    sru_range: int,
+    label_column: Optional[str],
+    max_workers: Optional[int],
+):
+    """Gate 1: compare raw ORF scores with frame-weighted scores."""
+    setup_logging()
+    from .pipeline.score_gates import compare_raw_frame_scoring
+    paths = compare_raw_frame_scoring(
+        orfs_path=orfs,
+        exons_path=exons,
+        bigwig_path=bigwig,
+        frame_support_path=frame_support,
+        out_prefix=out_prefix,
+        scoring_method=scoring_method,
+        sru_range=sru_range,
+        profiles_path=profiles_path,
+        panel_manifest_path=panel_manifest,
+        label_column=label_column,
+        max_workers=max_workers,
+    )
+    for label, path in paths.items():
+        log_info(f"{label}: {path}")
+
+
+@cli.command("validate-panel")
+@click.option('--panel-manifest', required=True, help='Panel manifest to validate/freeze (CSV/TSV/Parquet).')
+@click.option('--out', 'out_csv', help='Optional CSV path for the validation/freeze report.')
+def validate_panel_cmd(panel_manifest: str, out_csv: Optional[str]):
+    """Validate a frozen score panel manifest and report its SHA256."""
+    setup_logging()
+    from .pipeline.panel_manifest import panel_freeze_report
+    report = panel_freeze_report(panel_manifest)
+    if out_csv:
+        from .utils.io import write_csv_safe
+        write_csv_safe(report, out_csv)
+        log_info(f"panel report: {out_csv}")
+    else:
+        click.echo(report)
+
+
+@cli.command("score-compare-existing")
+@click.option('--raw-scores', required=True, help='Existing raw score table (CSV/TSV/Parquet).')
+@click.option('--frame-scores', required=True, help='Existing frame-weighted score table (CSV/TSV/Parquet).')
+@click.option('--out-prefix', required=True, help='Output prefix for comparison tables.')
+@click.option('--label-column', help='Optional truth/category column for score-gap summaries.')
+def score_compare_existing_cmd(raw_scores: str, frame_scores: str, out_prefix: str, label_column: Optional[str]):
+    """Compare already generated raw and frame-weighted score tables."""
+    setup_logging()
+    from .pipeline.score_gates import summarize_existing_score_pair
+    paths = summarize_existing_score_pair(
+        raw_scores_path=raw_scores,
+        frame_scores_path=frame_scores,
+        out_prefix=out_prefix,
+        label_column=label_column,
+    )
+    for label, path in paths.items():
+        log_info(f"{label}: {path}")
+
+
+@cli.command("compare-profiles")
+@click.option('--profile-a', required=True, help='First transcript profile table.')
+@click.option('--profile-b', required=True, help='Second transcript profile table.')
+@click.option('--out-prefix', required=True, help='Output prefix for profile comparison.')
+@click.option('--label-a', default='bigwig', help='Label for first profile table.')
+@click.option('--label-b', default='bam', help='Label for second profile table.')
+@click.option('--write-deltas/--no-write-deltas', default=False, help='Write per-position delta table.')
+def compare_profiles_cmd(profile_a: str, profile_b: str, out_prefix: str, label_a: str, label_b: str, write_deltas: bool):
+    """Gate 2: compare two transcript-space profile tables."""
+    setup_logging()
+    from .pipeline.profile_compare import compare_profile_files
+    paths = compare_profile_files(
+        profile_a_path=profile_a,
+        profile_b_path=profile_b,
+        out_prefix=out_prefix,
+        label_a=label_a,
+        label_b=label_b,
+        write_deltas=write_deltas,
+    )
+    for label, path in paths.items():
+        log_info(f"{label}: {path}")
+
+
+@cli.command("compare-frame-methods")
+@click.option('--profiles', required=True, help='Transcript-space profile table with tran_id, pos, count[, length].')
+@click.option('--cds', 'cds_path', required=True, help='Transcript-space CDS table with tran_id,start,stop or tran_start,tran_stop.')
+@click.option('--out-prefix', required=True, help='Output prefix for frame-support and comparison tables.')
+@click.option('--methods', default='linear,latent', help='Comma-separated methods to compare; first is baseline.')
+@click.option('--frame-by-length/--no-frame-by-length', default=True, help='Model frame leakage per read length when available.')
+@click.option('--hmm-lambda', type=float, default=2.0, help='HMM smoothing strength for +hmm methods.')
+@click.option('--background', type=click.Choice(['flat', 'zero']), default='flat', help='Background model for latent EM.')
+@click.option('--trim-nt', type=int, default=30, help='Trim this many nucleotides from CDS ends for validation summaries.')
+@click.option('--write-validation-rows/--no-write-validation-rows', default=False, help='Write CDS-interior per-row validation tables.')
+def compare_frame_methods_cmd(
+    profiles: str,
+    cds_path: str,
+    out_prefix: str,
+    methods: str,
+    frame_by_length: bool,
+    hmm_lambda: float,
+    background: str,
+    trim_nt: int,
+    write_validation_rows: bool,
+):
+    """Compare frame-only correction methods, e.g. linear versus latent EM."""
+    setup_logging()
+    from .pipeline.frame_method_compare import compare_frame_methods
+    method_list = [m.strip().lower() for m in methods.split(',') if m.strip()]
+    paths = compare_frame_methods(
+        profiles_path=profiles,
+        cds_path=cds_path,
+        out_prefix=out_prefix,
+        methods=method_list,
+        frame_by_length=frame_by_length,
+        hmm_lambda=hmm_lambda,
+        background=background,
+        trim_nt=trim_nt,
+        write_validation_rows=write_validation_rows,
+    )
+    for label, path in paths.items():
+        log_info(f"{label}: {path}")
+
+
+@cli.command("export-rdg-flux")
+@click.option('--profiles', required=True, help='Transcript profile parquet/CSV with tran_id,pos,count[, sample/length].')
+@click.option('--out', 'out_path', required=True, help='Output Parquet path, or directory when --partition-by-sample is set.')
+@click.option('--frame-support', 'frame_support_path', help='Existing frame_support parquet/CSV. If omitted, build from --cds/--annotation/--annotation-dir.')
+@click.option('--sample-id', help='Sample/replicate id to add when profiles do not already contain sample_id/sample.')
+@click.option('--cds', 'cds_path', help='Transcript-space CDS table. Used only when --frame-support is omitted.')
+@click.option('--annotation', 'annotation_path', help='GTF annotation. Used only when --frame-support is omitted.')
+@click.option('--annotation-dir', help='Annotation bundle directory. Used only when --frame-support is omitted.')
+@click.option('--transcriptome-fasta', help='FASTA path recorded in RDG-Flux metadata.')
+@click.option('--psite-offset-model', default='unknown', help='P-site offset model/path recorded in metadata.')
+@click.option('--annotation-source', help='Annotation source string/path recorded in metadata.')
+@click.option('--normalization', default='raw_psite_counts', help='Normalization label recorded in metadata.')
+@click.option('--model-stage', default='stage1_frame_posterior', help='Model stage recorded in metadata.')
+@click.option('--frame-method', type=click.Choice(['linear','linear+hmm','deblur+linear+hmm','latent']), default='linear+hmm', help='Frame method to build when --frame-support is omitted.')
+@click.option('--frame-by-length/--no-frame-by-length', default=True, help='Use read-length-specific frame evidence when length is available.')
+@click.option('--background-probability', type=float, default=0.0, help='Constant background posterior mass for v1 exports without a learned background model.')
+@click.option('--background-model', default='none', help='Background model label recorded in metadata.')
+@click.option('--preserve-read-length', is_flag=True, default=False, help='Emit read_length_bin and keep length-specific rows when profiles/frame support contain length.')
+@click.option('--partition-by-sample/--single-file', default=False, help='Write Hive-style sample_id=<id>/part.parquet directories.')
+@click.option('--metadata-out', 'metadata_path', help='Sidecar metadata JSON path. Defaults next to output.')
+def export_rdg_flux_cmd(
+    profiles: str,
+    out_path: str,
+    frame_support_path: Optional[str],
+    sample_id: Optional[str],
+    cds_path: Optional[str],
+    annotation_path: Optional[str],
+    annotation_dir: Optional[str],
+    transcriptome_fasta: Optional[str],
+    psite_offset_model: str,
+    annotation_source: Optional[str],
+    normalization: str,
+    model_stage: str,
+    frame_method: str,
+    frame_by_length: bool,
+    background_probability: float,
+    background_model: str,
+    preserve_read_length: bool,
+    partition_by_sample: bool,
+    metadata_path: Optional[str],
+):
+    """Export RDG-Flux v1 per-position frame posterior substrate."""
+    setup_logging()
+    from .pipeline.rdg_flux_export import export_rdg_flux_v1
+    paths = export_rdg_flux_v1(
+        profiles_path=profiles,
+        out_path=out_path,
+        frame_support_path=frame_support_path,
+        sample_id=sample_id,
+        annotation_path=annotation_path,
+        annotation_dir=annotation_dir,
+        cds_path=cds_path,
+        transcriptome_fasta=transcriptome_fasta,
+        psite_offset_model=psite_offset_model,
+        annotation_source=annotation_source,
+        normalization=normalization,
+        model_stage=model_stage,
+        frame_method=frame_method,
+        frame_by_length=frame_by_length,
+        background_probability=background_probability,
+        background_model=background_model,
+        preserve_read_length=preserve_read_length,
+        partition_by_sample=partition_by_sample,
+        metadata_path=metadata_path,
+    )
+    for label, path in paths.items():
+        log_info(f"{label}: {path}")
+
+
+@cli.command("frame-disambiguation")
+@click.option('--bam', help='BAM to project onto transcript candidates.')
+@click.option('--annotation', '-a', help='GTF annotation used for transcript models.')
+@click.option('--candidates', help='Precomputed candidate table with read_key, tran_id, and transcript position.')
+@click.option('--cds', 'cds_path', help='Transcript-space CDS table for --candidates mode.')
+@click.option('--out-prefix', required=True, help='Output prefix for disambiguation tables.')
+@click.option('--bam-collapsed', is_flag=True, default=False)
+@click.option('--bam-count-from', type=click.Choice(['name','tag']))
+@click.option('--bam-count-pattern')
+@click.option('--bam-count-tag')
+def frame_disambiguation_cmd(
+    bam: Optional[str],
+    annotation: Optional[str],
+    candidates: Optional[str],
+    cds_path: Optional[str],
+    out_prefix: str,
+    bam_collapsed: bool,
+    bam_count_from: Optional[str],
+    bam_count_pattern: Optional[str],
+    bam_count_tag: Optional[str],
+):
+    """Gate 3: quantify frame-discordant ambiguous read assignments."""
+    setup_logging()
+    from .pipeline.frame_disambiguation import (
+        frame_disambiguation_from_bam,
+        frame_disambiguation_from_candidates,
+    )
+    if candidates:
+        if not cds_path:
+            raise click.BadParameter('--cds is required with --candidates')
+        paths = frame_disambiguation_from_candidates(
+            candidates_path=candidates,
+            cds_path=cds_path,
+            out_prefix=out_prefix,
+        )
+    else:
+        if not bam or not annotation:
+            raise click.BadParameter('Provide either --candidates + --cds or --bam + --annotation')
+        paths = frame_disambiguation_from_bam(
+            bam_path=bam,
+            annotation_path=annotation,
+            out_prefix=out_prefix,
+            collapsed=bam_collapsed,
+            count_from=bam_count_from,
+            count_pattern=bam_count_pattern,
+            count_tag=bam_count_tag,
+        )
+    for label, path in paths.items():
+        log_info(f"{label}: {path}")
+
+
+@cli.command("compare-read-assignment")
+@click.option('--candidates', required=True, help='Candidate table with read_key/read_id, tran_id, transcript position, and optional truth columns.')
+@click.option('--out-prefix', required=True, help='Output prefix for assignment comparison tables.')
+@click.option('--frame-support', 'frame_support_path', help='Optional frame_support table with tran_id,codon,p0,p1,p2.')
+@click.option('--cds', 'cds_path', help='Optional transcript-space CDS table. Used for diagnostics only.')
+@click.option('--methods', default='unique,fractional,em,frame_em', help='Comma-separated methods: unique,fractional,frame_fractional,em,frame_em,rdg_local_frame_em,rdg_gated_frame_em.')
+@click.option('--abundance-key', default='tran_id', help='Column whose abundance is estimated, e.g. tran_id for isoforms or locus_id for genomic origin.')
+@click.option('--truth-column', default='is_true', help='Optional boolean truth column for synthetic/benchmark summaries.')
+@click.option('--write-assignments/--no-write-assignments', default=False, help='Write per-candidate posterior assignment Parquets.')
+@click.option('--max-iter', type=int, default=100, help='Maximum EM iterations for em/frame_em.')
+@click.option('--tol', type=float, default=1e-7, help='EM convergence tolerance on target abundance L1 delta.')
+@click.option('--abundance-prior', type=float, default=1e-3, help='Small symmetric abundance prior for EM targets.')
+@click.option('--min-frame-support-count', type=float, default=0.0, help='Minimum frame-support total_count required before frame likelihood can affect assignment.')
+@click.option('--min-frame-support-evidence', type=float, default=0.0, help='Minimum support_evidence required before frame likelihood can affect assignment.')
+@click.option('--require-complete-frame-support/--allow-partial-frame-support', default=False, help='Only use frame likelihood for a read when every assignment target has gated frame support.')
+@click.option('--frame-gate-min-likelihood-range', type=float, default=0.25, help='Minimum read-local frame likelihood range for rdg_*_frame_em gate.')
+@click.option('--frame-gate-min-read-fraction', type=float, default=0.25, help='Minimum read-weighted local gate fraction for rdg_gated_frame_em consensus.')
+def compare_read_assignment_cmd(
+    candidates: str,
+    out_prefix: str,
+    frame_support_path: Optional[str],
+    cds_path: Optional[str],
+    methods: str,
+    abundance_key: str,
+    truth_column: str,
+    write_assignments: bool,
+    max_iter: int,
+    tol: float,
+    abundance_prior: float,
+    min_frame_support_count: float,
+    min_frame_support_evidence: float,
+    require_complete_frame_support: bool,
+    frame_gate_min_likelihood_range: float,
+    frame_gate_min_read_fraction: float,
+):
+    """Compare unique, fractional, EM, and frame-aware read assignment."""
+    setup_logging()
+    from .pipeline.read_assignment import compare_read_assignment_methods
+
+    method_list = [m.strip().lower() for m in methods.split(',') if m.strip()]
+    paths = compare_read_assignment_methods(
+        candidates_path=candidates,
+        out_prefix=out_prefix,
+        frame_support_path=frame_support_path,
+        cds_path=cds_path,
+        methods=method_list,
+        abundance_key=abundance_key,
+        truth_column=truth_column,
+        write_assignments=write_assignments,
+        max_iter=max_iter,
+        tol=tol,
+        abundance_prior=abundance_prior,
+        min_frame_support_count=min_frame_support_count,
+        min_frame_support_evidence=min_frame_support_evidence,
+        require_complete_frame_support=require_complete_frame_support,
+        frame_gate_min_likelihood_range=frame_gate_min_likelihood_range,
+        frame_gate_min_read_fraction=frame_gate_min_read_fraction,
+    )
+    for label, path in paths.items():
+        log_info(f"{label}: {path}")
+
 
 @cli.command("plot")
 @click.option('--scored-orfs', '-s', required=True, help='CSV file of scored ORFs')
@@ -460,8 +885,9 @@ def features(annotation: str, out_dir: str = None, output_prefix: str = None, pr
 @click.option('--feature-map', 'feature_map', required=True, help='Transcript→feature map Parquet.')
 @click.option('--splits-csv', help='Optional CSV of split junction counts with columns chr,donor_pos,acceptor_pos,strand,count')
 @click.option('--out', 'out_parquet', required=True, help='Output feature metrics Parquet path.')
+@click.option('--frame-support', 'frame_support_parquet', required=False, help='Optional frame support Parquet to use for frame-aware metrics.')
 @click.option('--progress/--no-progress', default=True, help='Show progress bars (default: on).')
-def feature_metrics_cmd(profiles: str, features: str, feature_map: str, splits_csv: Optional[str], out_parquet: str, progress: bool):
+def feature_metrics_cmd(profiles: str, features: str, feature_map: str, splits_csv: Optional[str], out_parquet: str, frame_support_parquet: Optional[str], progress: bool):
     """Compute per-feature metrics including junction LLR scores and SRU for TIS/TTS."""
     setup_logging()
     from .pipeline.feature_metrics import feature_metrics
@@ -475,6 +901,7 @@ def feature_metrics_cmd(profiles: str, features: str, feature_map: str, splits_c
         feature_map_parquet=feature_map,
         genome_bam_splits=splits_df,
         out_parquet=out_parquet,
+        frame_support_parquet=frame_support_parquet,
     )
     log_info("Feature metrics computed")
 

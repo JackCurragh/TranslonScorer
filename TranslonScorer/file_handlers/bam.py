@@ -1,8 +1,8 @@
 """
 BAM file handling functionality for TranslonScorer.
 
-This module contains functions for processing BAM files and converting
-them to other formats, including coordinate transformations.
+readbam() has moved to io/bam.py; re-exported here for backward compatibility.
+All other helpers remain here until the full pipeline/ cleanup (T14).
 """
 
 import pysam
@@ -12,6 +12,7 @@ try:
 except Exception:
     ox = None
 from ..utils.logging import log_info, log_error, log_warning
+from ..io.bam import readbam  # noqa: F401 — re-export
 from typing import Optional
 import os
 import sys
@@ -25,165 +26,6 @@ else:
         def wrapper(func):
             return func
         return wrapper
-
-
-def readbam(
-    bampath,
-    *,
-    collapsed: bool = False,
-    count_from: Optional[str] = None,
-    count_pattern: Optional[str] = None,
-    count_tag: Optional[str] = None,
-    unique: bool = False,
-    include_qname: bool = False,
-):
-    """
-    Read a BAM file into a normalized table.
-
-    Args:
-        bampath: Path to BAM file.
-        collapsed: Treat BAM as collapsed (counts per read encoded in name or tag).
-        count_from: One of {None, 'name', 'tag'}. If collapsed, where to parse count.
-        count_pattern: Regex with named group 'count' when count_from='name', e.g. r'.*_x(?P<count>\\d+)$'.
-        count_tag: SAM tag name when count_from='tag', e.g. 'RC'.
-        unique: If True, do not group/aggregate; return one row per alignment.
-        include_qname: If True, include 'qname' column (useful for Zarr linking).
-
-    Returns:
-        Polars DataFrame with columns: chr, start, stop, length, strand, count[, qname]
-    """
-    # Check if index exists
-    if not (os.path.exists(f"{bampath}.bai") or os.path.exists(bampath.replace(".bam", ".bai"))):
-        log_info("BAM index not found, creating index...")
-        pysam.index(bampath)
-        log_info("BAM file indexed successfully")
-    else:
-        log_info("Using existing BAM index")
-    
-    # Read BAM
-    if ox is not None:
-        bamfile = ox.read_bam(bampath)
-        log_info("BAM file read via oxbow")
-        df = pl.read_ipc(bamfile)
-        log_info(f"Available columns: {df.columns}")
-    else:
-        log_info("oxbow not available; falling back to pysam (slower)")
-        rows = []
-        with pysam.AlignmentFile(bampath, 'rb') as bam:
-            for aln in bam.fetch(until_eof=True):
-                if aln.is_unmapped:
-                    continue
-                rows.append({
-                    'rname': bam.get_reference_name(aln.reference_id),
-                    'pos': int(aln.reference_start),
-                    'end': int(aln.reference_end),
-                    'seq': aln.query_sequence or '',
-                    'flag': int(aln.flag),
-                    'qname': aln.query_name,
-                })
-        if not rows:
-            return pl.DataFrame({
-                'chr': [], 'start': [], 'stop': [], 'length': [], 'strand': [], 'count': []
-            })
-        df = pl.from_dicts(rows)
-    
-    # Map oxbow column names to our expected names
-    column_mapping = {
-        'rname': 'chr',
-        'pos': 'start',
-        'end': 'stop'
-    }
-    
-    # Rename columns that exist
-    for old_name, new_name in column_mapping.items():
-        if old_name in df.columns:
-            df = df.rename({old_name: new_name})
-    
-    # Calculate read length robustly across Polars versions and backends
-    # Prefer string length when sequence is present; otherwise fall back to stop-start
-    if 'length' not in df.columns:
-        if 'seq' in df.columns:
-            # Polars 1.36+: use str.len_chars() (str.lengths() was removed)
-            df = df.with_columns(
-                pl.when(pl.col('seq').is_not_null())
-                .then(pl.col('seq').cast(pl.Utf8).str.len_chars())
-                .otherwise(0)
-                .alias('length')
-            )
-        elif {'start', 'stop'}.issubset(set(df.columns)):
-            df = df.with_columns((pl.col('stop') - pl.col('start')).cast(pl.Int64).alias('length'))
-        elif 'rlen' in df.columns:
-            df = df.with_columns(pl.col('rlen').cast(pl.Int64).alias('length'))
-        elif 'read_len' in df.columns:
-            df = df.with_columns(pl.col('read_len').cast(pl.Int64).alias('length'))
-    
-    # Add strand based on SAM flag (0x10 is the reverse strand bit)
-    df = df.with_columns(
-        pl.when(pl.col('flag') & 0x10 > 0)
-        .then(pl.lit('-'))
-        .otherwise(pl.lit('+'))
-        .alias('strand')
-    ).drop('flag')
-    
-    # Keep only needed columns; optionally keep qname
-    keep_cols = ['chr', 'start', 'stop', 'length', 'strand']
-    if include_qname and 'qname' in df.columns:
-        keep_cols.append('qname')
-    df = df.select(keep_cols)
-
-    # Add count column
-    if collapsed:
-        if count_from == 'name':
-            import re
-            pattern = re.compile(count_pattern or r'.*_x(?P<count>\d+)$')
-            if 'qname' not in df.columns:
-                log_warning("Collapsed BAM count_from=name requested but qname not available; defaulting counts to 1")
-                df = df.with_columns(count=pl.lit(1))
-            else:
-                df = df.with_columns(
-                    pl.col('qname')
-                    .map_elements(lambda s: int(pattern.match(s).group('count')) if pattern.match(s) else 1)
-                    .alias('count')
-                )
-        elif count_from == 'tag':
-            # Fallback to pysam one-pass to fetch tag efficiently if oxbow didn't include it
-            if not count_tag:
-                log_warning("Collapsed BAM count_from=tag requested but count_tag not provided; defaulting counts to 1")
-                df = df.with_columns(count=pl.lit(1))
-            else:
-                # Build qname -> count map using pysam
-                try:
-                    import pysam as _pysam
-                    q2c = {}
-                    with _pysam.AlignmentFile(bampath, 'rb') as bam:
-                        for aln in bam.fetch(until_eof=True):
-                            try:
-                                q2c[aln.query_name] = int(aln.get_tag(count_tag))
-                            except Exception:
-                                q2c[aln.query_name] = 1
-                    if 'qname' in df.columns:
-                        df = df.with_columns(
-                            pl.col('qname').map_elements(lambda s: q2c.get(s, 1)).alias('count')
-                        )
-                    else:
-                        log_warning("qname not present; cannot apply tag-derived counts. Using count=1")
-                        df = df.with_columns(count=pl.lit(1))
-                except Exception as e:
-                    log_warning(f"Failed to parse tag-derived counts: {e}; using count=1")
-                    df = df.with_columns(count=pl.lit(1))
-        else:
-            df = df.with_columns(count=pl.lit(1))
-    else:
-        df = df.with_columns(count=pl.lit(1))
-        
-    # Aggregate unless unique requested
-    if not unique:
-        df = df.group_by(['chr', 'start', 'stop', 'length', 'strand']).agg(
-            pl.col('count').sum()
-        ).sort(['chr', 'start'])
-
-    log_info(f"Processed {len(df)} unique read positions")
-    return df
 
 
 def getexons_and_cds(annotation_file, tran=[]):
@@ -204,9 +46,9 @@ def getexons_and_cds(annotation_file, tran=[]):
         annotation_file,
         has_header=False,
         separator="\t",
-        # Polars 1.36 uses comment_prefix instead of comment_char
         comment_prefix="#",
         columns=["column_1", "column_3", "column_4", "column_5", "column_7", "column_9"],
+        schema_overrides={"column_1": pl.Utf8},
     ).rename({
         "column_1": "chr",
         "column_3": "type",
@@ -244,9 +86,9 @@ def getexons_and_cds(annotation_file, tran=[]):
         cds_df.group_by("tran_id")
         .agg([
             pl.col("chr").first(),
-            # Take first start position (5' most for + strand, 3' most for - strand)
-            pl.col("start").sort().first().alias("start"),
-            pl.col("stop").sort().first().alias("stop"),
+            # min start = 5'-most CDS start (genomic); max stop = 3'-most CDS stop
+            pl.col("start").min().alias("start"),
+            pl.col("stop").max().alias("stop"),
             pl.col("strand").first(),
         ])
     )
@@ -255,14 +97,27 @@ def getexons_and_cds(annotation_file, tran=[]):
         exon_df.group_by("tran_id")
         .agg([
             pl.col("chr").first(),
-            pl.col("start").sort(),
+            pl.col("start").sort(),    # ascending genomic order
             pl.col("stop").sort(),
             pl.col("strand").first(),
         ])
     )
 
+    # For – strand transcripts the 5′ end is at the highest genomic coordinate.
+    # Reverse start/stop lists so index 0 always corresponds to the 5′-most exon.
+    exon_df = exon_df.with_columns([
+        pl.when(pl.col("strand") == "-")
+          .then(pl.col("start").list.reverse())
+          .otherwise(pl.col("start"))
+          .alias("start"),
+        pl.when(pl.col("strand") == "-")
+          .then(pl.col("stop").list.reverse())
+          .otherwise(pl.col("stop"))
+          .alias("stop"),
+    ])
+
     # Calculate transcript-space exon offsets using typed UDFs (Polars 1.36 requires return_dtype)
-    # lens = stop - start (per-exon list)
+    # lens = stop - start (per-exon list, now always in 5′-to-3′ order)
     exon_df = exon_df.with_columns([
         pl.struct(["start", "stop"]).map_elements(
             lambda s: [int(b) - int(a) for a, b in zip(s["start"], s["stop"])],
@@ -371,8 +226,13 @@ def get_bam_tran(bam_df, exon_df):
         return pl.DataFrame()
     
     # Concatenate results
+    dedupe_subset = ['chr', 'start', 'stop', 'length', 'strand', 'count', 'tran_id']
+    for optional_key in ('qname', 'read_row_id', 'read_id'):
+        if optional_key in results[0].columns:
+            dedupe_subset.append(optional_key)
+
     return pl.concat(results).unique(
-        subset=['chr', 'start', 'stop', 'length', 'strand', 'count', 'tran_id'],
+        subset=dedupe_subset,
         maintain_order=True
     )
 

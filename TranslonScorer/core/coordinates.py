@@ -119,6 +119,8 @@ def classify_orf(row):
         return "CDS"
     elif start > tran_stop:
         return "dORF"
+    elif start < tran_start and stop == tran_stop:
+        return "extORF"
     elif start < tran_start and stop >= tran_start and stop <= tran_stop:
         return "uoORF"
     elif start >= tran_start and start <= tran_stop and stop > tran_stop:
@@ -127,8 +129,6 @@ def classify_orf(row):
         return "iORF"
     elif start < tran_start and stop > tran_stop:
         return "eoORF"
-    elif start < tran_start and stop == tran_stop:
-        return "extORF"
     else:
         log_warning(
             f"Unexpected ORF coordinates: start={start}, stop={stop}, "

@@ -38,6 +38,7 @@ def compute_exon_chunk_metrics(
     profiles: pl.DataFrame,
     feature_row: dict,
     fmap: pl.DataFrame,
+    frame_support: pl.DataFrame | None = None,
 ) -> dict:
     """Compute metrics for an exon_chunk by aggregating over transcripts that use it.
 
@@ -63,9 +64,29 @@ def compute_exon_chunk_metrics(
         seg = tx_df.filter((pl.col('tran_start') >= ts) & (pl.col('tran_start') < te))
         if seg.is_empty():
             continue
-        fcounts = _frame_counts(seg)
-        cov_total += float(seg['counts'].sum())
-        cov_f0 += float(fcounts[0, 0])
+        if frame_support is not None and not frame_support.is_empty():
+            # Use p0 within codon range to estimate in/out of frame mass
+            try:
+                cod_lo = int(ts // 3)
+                cod_hi = int((te - 1) // 3) + 1
+                fs_tx = frame_support.filter((pl.col('tran_id') == tx) & (pl.col('codon') >= cod_lo) & (pl.col('codon') < cod_hi))
+                if not fs_tx.is_empty():
+                    p0_sum = float(fs_tx['p0'].sum())
+                    p12_sum = float((fs_tx['p1'] + fs_tx['p2']).sum()) if 'p1' in fs_tx.columns else 0.0
+                    cov_f0 += p0_sum
+                    cov_total += (p0_sum + p12_sum)
+                else:
+                    fcounts = _frame_counts(seg)
+                    cov_total += float(seg['counts'].sum())
+                    cov_f0 += float(fcounts[0, 0])
+            except Exception:
+                fcounts = _frame_counts(seg)
+                cov_total += float(seg['counts'].sum())
+                cov_f0 += float(fcounts[0, 0])
+        else:
+            fcounts = _frame_counts(seg)
+            cov_total += float(seg['counts'].sum())
+            cov_f0 += float(fcounts[0, 0])
         # NZC: fraction codons with nonzero in any frame within this segment (approx by positions/3)
         npos = te - ts
         n_cod = max(1, npos // 3)
@@ -151,6 +172,7 @@ def feature_metrics(
     genome_bam_splits: Optional[pl.DataFrame] = None,
     out_parquet: str = 'feature_metrics.parquet',
     sru_range: int = 15,
+    frame_support_parquet: Optional[str] = None,
 ) -> str:
     """Compute per-feature metrics and write to Parquet.
 
@@ -160,6 +182,14 @@ def feature_metrics(
     profiles = pl.read_parquet(profiles_parquet)
     feats = pl.read_parquet(feature_parquet)
     fmap = pl.read_parquet(feature_map_parquet)
+
+    # Load frame support if provided
+    frame_support = None
+    if frame_support_parquet:
+        try:
+            frame_support = pl.read_parquet(frame_support_parquet)
+        except Exception:
+            frame_support = None
 
     # Crosstalk correction stub: left as a no-op here; can be extended to per-length
     # Expectation model stub
@@ -177,7 +207,7 @@ def feature_metrics(
     with click.progressbar(length=chunks.height, label="Chunk metrics") as bar:
         for r in rows_iter:
             bar.update(1)
-            m = compute_exon_chunk_metrics(profiles, r, fmap)
+            m = compute_exon_chunk_metrics(profiles, r, fmap, frame_support=frame_support)
             rows.append({**r, **m})
 
     # TIS/TTS

@@ -84,6 +84,26 @@ def test_bam_set_provider_coverage_empty():
     assert result.is_empty()
 
 
+def test_site_position_strand_aware():
+    """P/A-site placement is strand-aware: + uses 5'=ref_start, - uses 5'=ref_end-1."""
+    from TranslonScorer.coverage.profile import site_position
+    # + strand read [1000, 1029): 5'=1000; P=1000+12=1012; A=1015
+    assert site_position(1000, 1029, False, 12, "P") == (1, 1012)
+    assert site_position(1000, 1029, False, 12, "A") == (1, 1015)
+    # - strand read [1000, 1029): 5'=1028; P=1028-12=1016; A=1013
+    assert site_position(1000, 1029, True, 12, "P") == (-1, 1016)
+    assert site_position(1000, 1029, True, 12, "A") == (-1, 1013)
+
+
+def test_bam_coverage_emits_strand():
+    """coverage() output carries a strand column (protocol contract)."""
+    from TranslonScorer.coverage.bam import BamSetProvider
+    from TranslonScorer.model import Region, OffsetParams
+    provider = BamSetProvider([], offsets=OffsetParams(method="global"))
+    result = provider.coverage([Region("chr12", 1000, 2000)])
+    assert "strand" in result.columns and "pos" in result.columns and "count" in result.columns
+
+
 def test_bam_set_provider_size_factors():
     """BamSetProvider.size_factors() returns 1.0 per sample."""
     from TranslonScorer.coverage.bam import BamSetProvider
@@ -158,7 +178,7 @@ def test_srr_gapdh_score_sane():
         offsets=OffsetParams(method="global", global_offset=12),
     )
     region = Region("chr12", 6534512, 6538371)
-    cov_df = provider.coverage([region], site="A")
+    cov_df = provider.coverage([region], site="A").filter(pl.col("strand") == 1)  # GAPDH +
     cov_dict: Dict[int, float] = dict(zip(
         cov_df["pos"].to_list(),
         cov_df["count"].to_list(),

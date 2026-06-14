@@ -384,7 +384,7 @@ def score_locus_matrix_levels(
 ) -> Tuple[Dict[str, pl.DataFrame], pl.DataFrame, pl.DataFrame]:
     """Normalise once, then score sample, cluster, and whole aggregate levels."""
     from .matrix_normalisation import normalise_locus_matrices
-    from .profile_clustering import (
+    from ..clustering import (
         aggregate_score_profiles_by_cluster,
         cluster_locus_profiles,
     )

@@ -20,8 +20,8 @@ from pathlib import Path
 import polars as pl
 
 from TranslonScorer.events import extract_events
-from TranslonScorer.pipeline.event_score import (
-    ScoreThresholds,
+from TranslonScorer.model import ScoreThresholds
+from TranslonScorer.scoring.run import (
     score_events,
     score_events_vectorised,
 )
@@ -440,7 +440,7 @@ def test_pipeline_shim_frame_support_importable():
 
 def test_pipeline_shim_clustering_importable():
     """pipeline/profile_clustering.py shim: public API importable from old path."""
-    from TranslonScorer.pipeline.profile_clustering import (
+    from TranslonScorer.clustering import (
         normalise_profiles,
         cluster_profiles,
         cluster_locus_profiles,

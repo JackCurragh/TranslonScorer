@@ -162,3 +162,13 @@ cython_debug/
 data
 *.dat
 test_output/
+# --- analysis artifacts: keep source, ignore generated data ---
+notebooks/
+/outputs/*
+!/outputs/reference_scores_gapdh.parquet
+*.bam
+*.bai
+*.bw
+*.bigWig
+*.fa
+*.fasta

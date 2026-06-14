@@ -26,7 +26,7 @@ clean-test:
 	rm -fr .pytest_cache .mypy_cache coverage.xml htmlcov/
 
 gate:
-	python3 -m pytest tests/test_golden.py -q
+	python3 -m pytest tests/test_golden.py tests/test_bam_provider.py -q
 
 lint:
 	mypy --config-file mypy.ini TranslonScorer

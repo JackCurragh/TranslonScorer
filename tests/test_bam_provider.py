@@ -19,8 +19,13 @@ import pytest
 import polars as pl
 
 REPO_ROOT = Path(__file__).parent.parent
-SRR_BAM = REPO_ROOT / "data" / "SRR11005875.bam"
-HAS_SRR = SRR_BAM.exists()
+# Real-data fixture: genome-aligned GAPDH-region reads merged from the matrix
+# unique_reads partitions (chr12, + strand). Built locally (data/ is gitignored),
+# so these tests run locally and skip in CI. Build:
+#   samtools merge -R chr12:6533000-6539500 data/gapdh_cohort_genome.bam \
+#       data/global_partitioned/*/unique_reads.*.bam && samtools index <out>
+GENOME_BAM = REPO_ROOT / "data" / "gapdh_cohort_genome.bam"
+HAS_BAM = GENOME_BAM.exists()
 
 # ---------------------------------------------------------------------------
 # Protocol compliance (no real data needed)
@@ -83,7 +88,7 @@ def test_bam_set_provider_size_factors():
     """BamSetProvider.size_factors() returns 1.0 per sample."""
     from TranslonScorer.coverage.bam import BamSetProvider
 
-    provider = BamSetProvider([], sample_names=["s1", "s2"])
+    provider = BamSetProvider(["s1.bam", "s2.bam"], sample_names=["s1", "s2"])
     sf = provider.size_factors()
     assert sf == {"s1": 1.0, "s2": 1.0}
 
@@ -114,14 +119,14 @@ def test_bam_set_provider_mappability_ledger_empty():
 # Real-data tests (skipped unless SRR11005875.bam is present)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skipif(not HAS_SRR, reason="SRR11005875.bam not in data/")
+@pytest.mark.skipif(not HAS_BAM, reason="genome GAPDH fixture not in data/")
 def test_srr_bam_offsets_calibrated_once():
     """Offsets are calibrated once per BAM/length and cached across coverage() calls."""
     from TranslonScorer.coverage.bam import BamSetProvider
     from TranslonScorer.model import OffsetParams, Region
 
     provider = BamSetProvider(
-        [str(SRR_BAM)],
+        [str(GENOME_BAM)],
         offsets=OffsetParams(method="global", global_offset=12),
     )
     # Coverage call triggers offset calibration
@@ -134,7 +139,7 @@ def test_srr_bam_offsets_calibrated_once():
     assert provider._offset_tables is tables_after_first, "offset table must be the same object"
 
 
-@pytest.mark.skipif(not HAS_SRR, reason="SRR11005875.bam not in data/")
+@pytest.mark.skipif(not HAS_BAM, reason="genome GAPDH fixture not in data/")
 def test_srr_gapdh_score_sane():
     """Score GAPDH locus from SRR11005875 BAM; assert sane init/elong/term calls."""
     from TranslonScorer.coverage.bam import BamSetProvider
@@ -149,7 +154,7 @@ def test_srr_gapdh_score_sane():
     from tests.test_golden import _gapdh_events
 
     provider = BamSetProvider(
-        [str(SRR_BAM)],
+        [str(GENOME_BAM)],
         offsets=OffsetParams(method="global", global_offset=12),
     )
     region = Region("chr12", 6534512, 6538371)

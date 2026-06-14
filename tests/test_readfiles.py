@@ -1,6 +1,19 @@
-import pysam
+import os
+
+import pytest
+
+pysam = pytest.importorskip("pysam")
+ox = pytest.importorskip("oxbow")
 import polars as pl
-import oxbow as ox
+
+# Legacy test built around a local BAM fixture that is not shipped (data/ is
+# gitignored). Skip the whole module when the fixture is absent rather than
+# invoking readbam() at import time and erroring during collection.
+if not os.path.exists("data/SRR11005879.bam"):
+    pytest.skip(
+        "data/SRR11005879.bam fixture not present", allow_module_level=True
+    )
+
 
 def readbam(bampath):
     """

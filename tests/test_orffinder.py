@@ -1,4 +1,12 @@
-import orfipy_core as orf
+import pytest
+
+# Legacy ORF-finder test depends on optional third-party packages that are not
+# part of the core install. Skip the whole module when any are absent rather
+# than erroring at collection time.
+orf = pytest.importorskip("orfipy_core")
+pytest.importorskip("ahocorasick")
+pytest.importorskip("Bio")
+
 import re
 import time
 import ahocorasick

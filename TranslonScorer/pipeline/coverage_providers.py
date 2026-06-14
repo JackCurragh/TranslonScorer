@@ -21,35 +21,15 @@ from typing import Dict, List, Optional, Tuple
 import polars as pl
 
 from TranslonScorer.model import OffsetParams, Region  # noqa: F401 — re-exported
-
-
-def plausible_offset_range(read_length: int, p: OffsetParams) -> Tuple[int, int]:
-    """Physically/empirically plausible P-site offset window for a read length.
-    A 25 nt read cannot have an 18 nt offset: hi = min(offset_max, ⌊L·frac⌋)."""
-    hi = min(p.offset_max, int(read_length * p.max_frac))
-    return p.offset_min, hi
-
-
-def usable_read_length(read_length: int, p: OffsetParams) -> bool:
-    return p.min_read_len <= read_length <= p.max_read_len
-
-
-def metagene_offsets(
-    five_prime_by_length: pl.DataFrame,   # cols: read_length, rel_pos (5' end vs start codon), count
-    p: OffsetParams,
-) -> Dict[int, int]:
-    """CANONICAL offset method (skeleton). For each usable read length, build the
-    metagene of UNIQUE-read 5′ ends around annotated start codons and pick the
-    P-site offset = distance from 5′ end to the start codon, restricted to
-    `plausible_offset_range`. Returns {read_length: p_site_offset}.
-
-    (Implementation: argmax / changepoint of the 5′ pile-up at the start within
-    the plausible window; A-site offset = P-site + 3 downstream.)"""
-    raise NotImplementedError
-
-
-def psite_to_asite(offset_p: int) -> int:
-    return offset_p + 3      # A-site is the next codon (3 nt) 3′ of the P-site
+from TranslonScorer.offsets import (  # noqa: F401 — re-exported
+    metagene_offsets,
+    file_offsets,
+    global_offsets,
+    make_offset_table,
+    plausible_offset_range,
+    psite_to_asite,
+    usable_read_length,
+)
 
 
 # ---------------------------------------------------------------------------

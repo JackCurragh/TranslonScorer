@@ -61,29 +61,50 @@ def psite_to_asite(offset_p: int) -> int:
 def metagene_offsets(
     five_prime_by_length: pl.DataFrame,
     p: OffsetParams,
+    *,
+    min_count: float = 0.0,
 ) -> Dict[int, int]:
-    """P-site offsets from a whole-sample 5′-end metagene (stub — pending T12).
+    """P-site offsets from a whole-sample 5′-end metagene.
 
     Parameters
     ----------
     five_prime_by_length:
-        DataFrame with columns read_length (int), rel_pos (5′ end position
-        relative to annotated start codon), count (float).  Must be built
-        from UNIQUE reads across the whole BAM, NOT from a single locus,
-        transcript, or profile matrix.
+        DataFrame with columns read_length (int), rel_pos (int), count (float).
+        ``rel_pos`` is the **candidate P-site offset** for each read: the signed
+        5′→3′ distance from the read's 5′ end to the annotated start codon's
+        first nt (so a read whose 5′ end is `o` nt upstream of the start has
+        rel_pos = o). Must be built from UNIQUE reads across the whole BAM, not
+        a single locus/transcript/profile.
     p:
         Offset parameters controlling the plausible window.
+    min_count:
+        Drop (length) where the winning bin has fewer reads than this.
 
     Returns
     -------
-    {read_length: p_site_offset} restricted to usable lengths and the
-    plausible window for each length.
+    {read_length: p_site_offset} — per length, the rel_pos with the most reads
+    within that length's plausible window. Restricted to usable lengths.
     """
-    raise NotImplementedError(
-        "metagene_offsets: real implementation pending BamSetProvider (T12). "
-        "Build the per-BAM per-length 5′-end histogram from the whole BAM "
-        "before calling this function."
-    )
+    result: Dict[int, int] = {}
+    if five_prime_by_length.is_empty():
+        return result
+    for key, grp in five_prime_by_length.group_by(["read_length"]):
+        length = int(key[0] if isinstance(key, tuple) else key)
+        if not usable_read_length(length, p):
+            continue
+        lo, hi = plausible_offset_range(length, p)
+        cand = (
+            grp.filter((pl.col("rel_pos") >= lo) & (pl.col("rel_pos") <= hi))
+            .group_by("rel_pos").agg(pl.col("count").sum().alias("count"))
+            .sort(["count", "rel_pos"], descending=[True, False])
+        )
+        if cand.is_empty():
+            continue
+        top = cand.row(0, named=True)
+        if float(top["count"]) <= min_count:
+            continue
+        result[length] = int(top["rel_pos"])
+    return result
 
 
 def file_offsets(path: str, p: OffsetParams) -> Dict[int, int]:

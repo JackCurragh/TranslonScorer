@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import polars as pl
 
 from TranslonScorer.model import OffsetParams, Region
-from TranslonScorer.offsets import make_offset_table
+from TranslonScorer.offsets import make_offset_table, metagene_offsets, global_offsets
 from TranslonScorer.coverage.base import MAPPABILITY_LEDGER_SCHEMA
 from TranslonScorer.coverage.profile import apply_offsets, site_position
 
@@ -65,12 +65,17 @@ class BamSetProvider:
         multimap: str = "unique",
         transcriptome: bool = False,
         sample_names: Optional[List[str]] = None,
+        start_codons: Optional[List[Tuple[str, int, int]]] = None,
     ) -> None:
         self._bams = [Path(b) for b in bams]
         self._exon_df = exon_df
         self._offset_params = offsets
         self._multimap = multimap
         self._transcriptome = transcriptome
+        # (chrom, first-nt genomic pos, strand∈{1,-1}) of annotated start codons,
+        # whole-sample evidence for metagene offset calibration. Required only
+        # when offsets.method == "metagene".
+        self._start_codons = start_codons or []
         self._sample_names = sample_names or [
             Path(b).stem for b in bams
         ]
@@ -106,27 +111,62 @@ class BamSetProvider:
                 table = make_offset_table(self._offset_params)
             elif self._offset_params.method == "global":
                 table = make_offset_table(self._offset_params)
-            else:
-                # metagene: require whole-BAM read-length distribution
-                # Currently the metagene stub is not implemented; fall back
-                # to global offsets with a warning so the class is usable.
-                try:
-                    table = make_offset_table(self._offset_params)
-                except NotImplementedError:
+            else:  # metagene
+                if not self._start_codons:
                     from TranslonScorer.utils.logging import log_warning
                     log_warning(
-                        f"metagene offsets not yet implemented; "
-                        f"falling back to global offset={self._offset_params.global_offset} "
-                        f"for {bam_path.name}"
+                        f"metagene offsets need start_codons; falling back to "
+                        f"global offset={self._offset_params.global_offset} for {bam_path.name}"
                     )
-                    fallback_params = OffsetParams(
-                        **{**self._offset_params.__dict__, "method": "global"}
-                    )
-                    table = make_offset_table(fallback_params)
+                    table = global_offsets(self._offset_params)
+                else:
+                    hist = self._build_metagene_histogram(bam_path)
+                    # global base over usable lengths; metagene overrides where it
+                    # has evidence (avoids missing-length gaps).
+                    table = {**global_offsets(self._offset_params),
+                             **metagene_offsets(hist, self._offset_params)}
             tables[bam_path] = table
 
         self._offset_tables = tables
         return self._offset_tables
+
+    def _build_metagene_histogram(self, bam_path: Path) -> pl.DataFrame:
+        """Whole-BAM 5′-end metagene around annotated start codons.
+
+        For each start codon, unique reads in a window contribute one count at
+        (read_length, rel_pos) where rel_pos = candidate P-site offset = signed
+        5′→3′ distance from the read's 5′ end to the start codon's first nt.
+        Returns (read_length, rel_pos, count) — input to `metagene_offsets`.
+        """
+        import pysam
+
+        counts: Dict[Tuple[int, int], float] = {}
+        win = self._offset_params.offset_max + self._offset_params.max_read_len
+        with pysam.AlignmentFile(str(bam_path), "rb") as bam:
+            refs = set(bam.references)
+            for chrom, spos, strand in self._start_codons:
+                fc = _resolve_chrom(chrom, refs)
+                if fc is None:
+                    continue
+                for rec in bam.fetch(fc, max(0, spos - win), spos + win):
+                    if rec.is_unmapped or rec.is_secondary or rec.is_supplementary:
+                        continue
+                    if self._multimap == "unique" and not _is_unique(rec):
+                        continue
+                    length = rec.query_length or 0
+                    if length == 0:
+                        continue
+                    if strand > 0:
+                        rel = spos - rec.reference_start          # 5′=ref_start
+                    else:
+                        rel = (rec.reference_end - 1) - spos      # 5′=ref_end-1
+                    counts[(length, rel)] = counts.get((length, rel), 0.0) + 1.0
+        if not counts:
+            return pl.DataFrame(schema={"read_length": pl.Int64, "rel_pos": pl.Int64, "count": pl.Float64})
+        return pl.DataFrame(
+            [{"read_length": L, "rel_pos": r, "count": c} for (L, r), c in counts.items()],
+            schema={"read_length": pl.Int64, "rel_pos": pl.Int64, "count": pl.Float64},
+        )
 
     # ------------------------------------------------------------------
     # CoverageProvider / SupportsSites

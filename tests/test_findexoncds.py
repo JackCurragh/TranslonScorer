@@ -1,5 +1,16 @@
+import os
+
+import pytest
 import polars as pl
 import polars.testing as plt
+
+# Legacy test built around a local GTF fixture that is not shipped (data/ is
+# gitignored). Skip the whole module when the fixture is absent rather than
+# erroring at collection time.
+if not os.path.exists("data/annotationsubset.gtf"):
+    pytest.skip(
+        "data/annotationsubset.gtf fixture not present", allow_module_level=True
+    )
 
 #########################################################################################################################################
 #function to test

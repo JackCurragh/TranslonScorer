@@ -35,6 +35,8 @@ M5  fast_qc() logic (unit-tested via matrix_qc internals)
       - normalisation yields correct RPM for a known profile
 """
 
+import importlib.util
+
 import numpy as np
 import polars as pl
 import pytest
@@ -404,6 +406,10 @@ class TestM3ProfileMatrix:
 # M4 — cluster_profiles / aggregate_cluster_profiles
 # ===========================================================================
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("scipy") is None,
+    reason="scipy not installed (optional dependency for hierarchical clustering)",
+)
 class TestM4Clustering:
     """
     Expectations:

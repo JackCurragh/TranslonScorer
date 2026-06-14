@@ -38,30 +38,12 @@ DEFAULT_THRESHOLDS = ScoreThresholds()
 
 
 # ---------------------------------------------------------------------------
-# Prefix-sum helpers (vectorised coverage range queries)
+# Prefix-sum helpers — canonical implementation in coverage/profile.py
 # ---------------------------------------------------------------------------
-
-def _prefix_sums(cov_pos: "_np.ndarray", cov_cnt: "_np.ndarray"):
-    order = _np.argsort(cov_pos, kind="stable")
-    p = cov_pos[order].astype(_np.int64)
-    c = cov_cnt[order].astype(_np.float64)
-    fr = _np.mod(p, 3)
-    cum_all = _np.concatenate([[0.0], _np.cumsum(c)])
-    cum_f = [
-        _np.concatenate([[0.0], _np.cumsum(_np.where(fr == f, c, 0.0))])
-        for f in range(3)
-    ]
-    return p, cum_all, cum_f
-
-
-def _range_sums(p, cum_all, cum_f, starts, ends):
-    lo = _np.searchsorted(p, starts, "left")
-    hi = _np.searchsorted(p, ends, "left")
-    total = cum_all[hi] - cum_all[lo]
-    frames = _np.stack(
-        [cum_f[f][hi] - cum_f[f][lo] for f in range(3)], axis=-1
-    )   # shape [n, 3]
-    return total, frames, (hi - lo)
+from TranslonScorer.coverage.profile import (  # noqa: E402, F401
+    _prefix_sums,
+    _range_sums,
+)
 
 
 # ---------------------------------------------------------------------------

@@ -44,7 +44,7 @@ import numpy as np
 import polars as pl
 import pysam
 
-from ..utils.logging import log_info, log_warning
+from .utils.logging import log_info, log_warning
 
 
 # ---------------------------------------------------------------------------

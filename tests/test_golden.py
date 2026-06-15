@@ -416,9 +416,9 @@ def test_consequential_apply_policy():
     assert out.height == 2
 
 
-def test_pipeline_shim_qc_importable():
-    """pipeline/matrix_qc.py shim: moved functions importable from old path."""
-    from TranslonScorer.pipeline.matrix_qc import (
+def test_matrix_qc_public_surface_importable():
+    """TranslonScorer.matrix_qc re-exports the periodicity/frame helpers."""
+    from TranslonScorer.matrix_qc import (
         _compute_periodicity_from_frames,
         _ribometric_frame_scores,
         _nudge_to_frame0,

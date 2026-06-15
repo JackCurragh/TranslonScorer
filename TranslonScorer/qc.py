@@ -2,8 +2,7 @@
 
 These functions operate on pre-computed frame distributions (dicts/DataFrames)
 and do not perform I/O, BAM scanning, or offset inference.  The BAM-scanning
-and per-partition accumulation lives in pipeline/matrix_qc.py (I/O shell) and
-will migrate to coverage/bam.py (T12).
+and per-partition accumulation lives in TranslonScorer/matrix_qc.py (I/O shell).
 
 Public API
 ----------

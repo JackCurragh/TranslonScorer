@@ -9,7 +9,9 @@ Public API
 extract_events_workflow  — annotation sqlite → genomic event Parquet store
 score_matrix_workflow    — events + sparse matrix partitions → score store
 score_bams_workflow      — events + genome BAMs → score store
+report_workflow          — score store + events → per-translon report + policy
 consequential_workflow   — per-translon report → consequentiality labels
+pipeline_workflow        — one-shot extract → score → report (matrix or BAMs)
 
 Scoring contract (shared by score_matrix/score_bams, mirrors the golden gate):
 a single per-position A-site coverage table per chromosome is fed to
@@ -237,3 +239,64 @@ def report_workflow(
     report = apply_policy(report, policy or ConsequentialityPolicy())
     report.write_parquet(out_path)
     return report
+
+
+# ---------------------------------------------------------------------------
+# pipeline  (one-shot: extract-events -> score -> report)
+# ---------------------------------------------------------------------------
+
+def pipeline_workflow(
+    sqlite_path: str,
+    out_dir: str,
+    *,
+    partition_dirs: Optional[Sequence[Union[str, Path]]] = None,
+    bams: Optional[Sequence[Union[str, Path]]] = None,
+    data_version: str = "run",
+    chroms: Optional[List[str]] = None,
+    annotation_version: str = "",
+    offsets: OffsetParams = OffsetParams(),
+    sample_names: Optional[List[str]] = None,
+    multimap: str = "unique",
+    site: str = "A",
+    transcriptome: bool = False,
+    exon_df: Optional[pl.DataFrame] = None,
+    policy: Optional[ConsequentialityPolicy] = None,
+) -> Dict[str, str]:
+    """Run the whole event-scoring path in one call.
+
+    extract-events → score (matrix *or* BAMs) → report. Writes
+    ``out_dir/{events,scores}`` and ``out_dir/report.parquet``; returns the
+    paths produced. Exactly one of ``partition_dirs`` (matrix) or ``bams`` must
+    be given.
+    """
+    if bool(partition_dirs) == bool(bams):
+        raise ValueError("provide exactly one of partition_dirs (matrix) or bams")
+
+    out = Path(out_dir)
+    events_dir = str(out / "events")
+    store_dir = str(out / "scores")
+    report_path = str(out / "report.parquet")
+
+    extract_events_workflow(
+        sqlite_path, events_dir,
+        annotation_version=annotation_version, chroms=chroms,
+    )
+    if partition_dirs:
+        score_matrix_workflow(
+            events_dir, list(partition_dirs), store_dir,
+            data_version=data_version, sample_names=sample_names,
+            site=site, annotation_version=annotation_version,
+        )
+    else:
+        score_bams_workflow(
+            events_dir, list(bams or []), store_dir,
+            data_version=data_version, offsets=offsets,
+            sample_names=sample_names, multimap=multimap, site=site,
+            annotation_version=annotation_version,
+            transcriptome=transcriptome, exon_df=exon_df,
+        )
+    report_workflow(
+        store_dir, events_dir, report_path,
+        data_version=data_version, policy=policy,
+    )
+    return {"events": events_dir, "scores": store_dir, "report": report_path}

@@ -20,7 +20,16 @@ from TranslonScorer.cli import cli
 # Command registration + help
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("name", ["extract-events", "score-matrix", "score-bams", "report", "consequential"])
+def test_pipeline_workflow_requires_exactly_one_mode(tmp_path: Path):
+    from TranslonScorer.workflows import pipeline_workflow
+    with pytest.raises(ValueError):
+        pipeline_workflow(str(tmp_path / "x.sqlite"), str(tmp_path / "out"))  # neither
+    with pytest.raises(ValueError):
+        pipeline_workflow(str(tmp_path / "x.sqlite"), str(tmp_path / "out"),
+                          partition_dirs=["p"], bams=["b"])  # both
+
+
+@pytest.mark.parametrize("name", ["extract-events", "score-matrix", "score-bams", "report", "consequential", "pipeline"])
 def test_new_subcommands_registered(name):
     runner = CliRunner()
     result = runner.invoke(cli, [name, "--help"])
@@ -28,12 +37,10 @@ def test_new_subcommands_registered(name):
     assert name in cli.commands
 
 
-@pytest.mark.parametrize("name", ["score-orfs", "feature-metrics", "orf-composite"])
-def test_legacy_commands_marked_deprecated(name):
-    runner = CliRunner()
-    result = runner.invoke(cli, [name, "--help"])
-    assert result.exit_code == 0, result.output
-    assert "DEPRECATED" in result.output
+@pytest.mark.parametrize("name", ["score-orfs", "feature-metrics", "orf-composite", "all", "find-orfs"])
+def test_deprecated_commands_removed(name):
+    """The deprecated ORF-composite/legacy-pipeline commands are gone."""
+    assert name not in cli.commands
 
 
 # ---------------------------------------------------------------------------

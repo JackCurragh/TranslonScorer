@@ -6,7 +6,6 @@ import click
 from typing import Optional
 import polars as pl
 from .config import Config
-from .config import validate_config
 from .utils.logging import setup_logging, log_info
 from .file_handlers import bam as bam_handlers
 
@@ -27,17 +26,6 @@ def _build_and_write_frame_support(profiles, cds_df, cfg):
     if out_path and not out.is_empty():
         out.write_parquet(out_path)
     return out
-
-
-def _warn_deprecated(name: str, replacement: str) -> None:
-    """Emit a deprecation notice for legacy ORF-composite era commands."""
-    click.echo(
-        click.style(
-            f"WARNING: '{name}' is deprecated and will be removed; use {replacement} instead.",
-            fg="yellow",
-        ),
-        err=True,
-    )
 
 
 def common_options(func):
@@ -77,41 +65,22 @@ def common_options(func):
     
     return func
 
-@click.group(invoke_without_command=True)
-@click.pass_context
-def cli(ctx, **kwargs):
-    """TranslonScorer: A tool for identifying and scoring translational events from Ribo-seq data.
-    
-    This tool provides several workflows:
-    
-    1. all: Run the complete pipeline end-to-end
-    2. process-bam: Process Ribo-seq BAM files to generate coverage tracks
-    3. find-orfs: Identify and score potential ORFs from sequence data
-    4. score-orfs: Score existing ORFs using coverage data
-    5. plot: Generate visualization reports from scored ORFs
-    
-    If no command is specified, the complete pipeline will be run.
-    For detailed instructions, use --help with any command:
-    translonscorer --help
-    translonscorer process-bam --help
+@click.group()
+def cli():
+    """TranslonScorer: identify and score translational events from Ribo-seq data.
+
+    Event-scoring workflow (recommended):
+      pipeline        one-shot: extract-events → score → report
+      extract-events  annotation sqlite → genomic event store
+      score-matrix    score events against the sparse annotation-scale matrix
+      score-bams      score events against 1-20 genome/transcriptome BAMs
+      report          compose per-translon report + consequentiality
+      consequential   re-gate an existing report under a policy
+
+    Run `translonscorer <command> --help` for details.
     """
-    # If no subcommand is provided, run the 'all' logic
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(all, **kwargs)
 
 
-@cli.command()
-@common_options
-def all(**kwargs):
-    """Run the complete pipeline end-to-end based on provided inputs."""
-    setup_logging()
-    config = Config.from_click_args(**kwargs)
-    validate_config(config)
-    from .legacy_workflow import all_workflow
-    all_workflow(config)
-    log_info("Pipeline completed successfully!")
-
-    
 @cli.command("process-bam")
 @click.option('--bam', '-b', required=True, help='Input BAM file (genomic or transcriptomic).')
 @click.option('--chromsizes', '-c', required=True, help='Chromosome sizes file (required for bigWig conversion).')
@@ -129,21 +98,6 @@ def process_bam(bam: str, chromsizes: str, annotation: str, output: str, strande
     from .legacy_workflow import process_bam_workflow
     process_bam_workflow(config)
     log_info("BAM processing complete!")
-
-@cli.command("find-orfs")
-@common_options
-def find_orfs(**kwargs):
-    """Find ORFs and classify relative to CDS (no scoring)."""
-    setup_logging()
-    config = Config.from_click_args(**kwargs)
-    # minimal validation of inputs for this step
-    config._validate_file_exists(config.sequence, 'Sequence')
-    config._validate_file_exists(config.annotation, 'Annotation')
-    from .legacy_workflow import find_orfs_workflow
-    orf_df, _ = find_orfs_workflow(config)
-    orf_df.write_csv(f"{config.output}_orfs.csv")
-    log_info("ORF finding complete!")
-
 
 @cli.command("profiles")
 @common_options
@@ -464,36 +418,6 @@ def profiles(**kwargs):
             log_info(f"Building frame support with method={frame_method} (BigWig lane)…")
             _build_and_write_frame_support(prof, cds_tran_df, cfg)
             log_info(f"Frame support written to: {cfg.frame_support_out}")
-
-@cli.command("score-orfs")
-@click.option('--orfs', '-f', required=True, help='CSV file containing ORFs to score')
-@click.option('--exons', '-e', required=True, help='CSV file containing exon positions')
-@click.option('--bigwig', '-w', required=True, help='BigWig file containing Ribo-seq coverage')
-@click.option('--output', '-o', required=True, help='Base name for output files')
-@click.option('--scoring-method', type=click.Choice(['classic', 'modern']), default='modern')
-@click.option('--sru-range', type=int, default=15)
-@click.option('--frame-weighted-scoring', is_flag=True, default=False, help='Weight coverage by frame posterior p0 if frame support is provided.')
-@click.option('--frame-support', 'frame_support_path', help='Path to frame_support.parquet (from profiles step).')
-def score_orfs(orfs: str, exons: str, bigwig: str, output: str, scoring_method: str, sru_range: int, frame_weighted_scoring: bool, frame_support_path: Optional[str]):
-    """[DEPRECATED] Score ORFs and write results + report.
-
-    Superseded by the event-scoring workflow: extract-events → score-bams/score-matrix.
-    """
-    setup_logging()
-    _warn_deprecated("score-orfs", "extract-events + score-bams/score-matrix")
-    config = Config(sequence='placeholder.fa', annotation='placeholder.gtf', bigwig=bigwig, output=output, scoring_method=scoring_method, sru_range=sru_range,
-                    frame_weighted_scoring=frame_weighted_scoring, frame_support_out=frame_support_path)
-    # load inputs
-    orf_df = pl.read_csv(orfs)
-    exon_df = pl.read_csv(exons)
-    from .legacy_workflow import score_orfs_workflow
-    scored = score_orfs_workflow(config, bigwig, exon_df, orf_df)
-    scored_path = f"{output}_orfs_scored.csv"
-    scored.write_csv(scored_path)
-    from .visualization import plots
-    plots.plottop10(scored_path, bigwig, exons, 30, output)
-    log_info("ORF scoring complete!")
-
 
 @cli.command("score-compare-frame")
 @click.option('--orfs', required=True, help='ORFs to score (CSV/TSV/Parquet).')
@@ -911,37 +835,6 @@ def features(annotation: str, out_dir: str = None, output_prefix: str = None, pr
         log_info("Legacy feature tables written")
 
 
-@cli.command("feature-metrics")
-@click.option('--profiles', required=True, help='Transcript profiles Parquet (canonical).')
-@click.option('--features', required=True, help='Locus feature table Parquet.')
-@click.option('--feature-map', 'feature_map', required=True, help='Transcript→feature map Parquet.')
-@click.option('--splits-csv', help='Optional CSV of split junction counts with columns chr,donor_pos,acceptor_pos,strand,count')
-@click.option('--out', 'out_parquet', required=True, help='Output feature metrics Parquet path.')
-@click.option('--frame-support', 'frame_support_parquet', required=False, help='Optional frame support Parquet to use for frame-aware metrics.')
-@click.option('--progress/--no-progress', default=True, help='Show progress bars (default: on).')
-def feature_metrics_cmd(profiles: str, features: str, feature_map: str, splits_csv: Optional[str], out_parquet: str, frame_support_parquet: Optional[str], progress: bool):
-    """[DEPRECATED] Compute per-feature metrics including junction LLR scores and SRU for TIS/TTS.
-
-    Superseded by the event-scoring workflow: extract-events → score-bams/score-matrix.
-    """
-    setup_logging()
-    _warn_deprecated("feature-metrics", "extract-events + score-bams/score-matrix")
-    from .orf.feature_metrics import feature_metrics
-    splits_df = None
-    if splits_csv:
-        import polars as pl
-        splits_df = pl.read_csv(splits_csv)
-    feature_metrics(
-        profiles_parquet=profiles,
-        feature_parquet=features,
-        feature_map_parquet=feature_map,
-        genome_bam_splits=splits_df,
-        out_parquet=out_parquet,
-        frame_support_parquet=frame_support_parquet,
-    )
-    log_info("Feature metrics computed")
-
-
 @cli.command("assemble")
 @click.option('--orfs-parquet', required=True, help='ORF candidates with composite scores (Parquet).')
 @click.option('--out', 'out_parquet', required=True, help='Output assembled translome Parquet.')
@@ -954,22 +847,6 @@ def assemble_cmd(orfs_parquet: str, out_parquet: str, solver: str, timeout_sec: 
     assemble_translome(orfs_parquet, out_parquet, solver=solver, timeout_sec=timeout_sec)
     log_info("Translome assembly complete")
 
-
-@cli.command("orf-composite")
-@click.option('--orfs', required=True, help='ORF candidates (Parquet/CSV) with tran_id,start,stop,frame,type,length[,locus_id].')
-@click.option('--feature-metrics', required=True, help='Feature metrics Parquet.')
-@click.option('--feature-map', 'feature_map', required=True, help='Transcript→feature map Parquet.')
-@click.option('--out', 'out_parquet', required=True, help='Output ORFs with composite scores (Parquet).')
-def orf_composite_cmd(orfs: str, feature_metrics: str, feature_map: str, out_parquet: str):
-    """[DEPRECATED] Aggregate per-feature metrics into composite ORF scores.
-
-    Superseded by the event-scoring workflow: extract-events → score-bams/score-matrix.
-    """
-    setup_logging()
-    _warn_deprecated("orf-composite", "extract-events + score-bams/score-matrix")
-    from .orf.orf_composite import orf_composite
-    orf_composite(orfs, feature_metrics, feature_map, out_parquet)
-    log_info("Composite ORF scores written")
 
 @cli.command("map-orfs")
 @click.option('--orfs', 'orfs_parquet', required=True, help='Canonical ORFs with tran_id,start_pos_tran,stop_pos_tran (Parquet).')
@@ -1133,6 +1010,60 @@ def consequential_cmd(report_path: str, out_path: str, min_tier_confidence, min_
     out = consequential_workflow(report, policy)
     out.write_parquet(out_path)
     log_info(f"Consequentiality labels written: {out_path}")
+
+
+@cli.command("pipeline")
+@click.option('--sqlite', 'sqlite_path', required=True, help='Annotation sqlite database (translons + translon_blocks).')
+@click.option('--out-dir', required=True, help='Output directory; writes events/, scores/, report.parquet.')
+@click.option('--matrix', 'partitions', multiple=True, help='Sparse-matrix partition dir (repeatable) → matrix mode.')
+@click.option('--bam', 'bams', multiple=True, help='Genome/transcriptome BAM (repeatable) → BAM mode.')
+@click.option('--chrom', 'chroms', multiple=True, help='Restrict to chromosome(s) (repeatable; default: all).')
+@click.option('--data-version', default='run', show_default=True, help='Score-store partition label.')
+@click.option('--annotation-version', default='', help='Annotation version stamped into events/scores.')
+@click.option('--sample', 'sample_names', multiple=True, help='Sample name(s) aligned with --bam/--matrix order.')
+@click.option('--offset-method', type=click.Choice(['global', 'file', 'metagene']), default='global', show_default=True, help='P-site offset method (BAM mode).')
+@click.option('--global-offset', type=int, default=12, show_default=True, help='Fixed P-site offset for global method (BAM mode).')
+@click.option('--offsets-file', help='CSV read_length,offset for --offset-method file (BAM mode).')
+@click.option('--site', type=click.Choice(['A', 'P']), default='A', show_default=True, help='Coverage site to query.')
+@click.option('--transcriptome', is_flag=True, default=False, help='BAMs are transcriptome-aligned; project via --annotation (BAM mode).')
+@click.option('--annotation', '-a', help='GTF for transcriptome→genome projection (with --transcriptome).')
+@click.option('--min-tier-confidence', type=float, default=0.0, show_default=True, help='Consequential confidence floor.')
+@click.option('--min-expression-percentile', type=float, default=0.0, show_default=True, help='Consequential expression-percentile floor.')
+def pipeline_cmd(sqlite_path, out_dir, partitions, bams, chroms, data_version, annotation_version,
+                 sample_names, offset_method, global_offset, offsets_file, site,
+                 transcriptome, annotation, min_tier_confidence, min_expression_percentile):
+    """One-shot event-scoring run: extract-events → score (matrix or BAMs) → report.
+
+    Use --matrix for the sparse annotation-scale matrix, or --bam for 1-20 BAMs
+    (exactly one mode). Equivalent to running extract-events, score-matrix/
+    score-bams and report in sequence, into one output directory.
+    """
+    setup_logging()
+    from .model import ConsequentialityPolicy, OffsetParams
+    from .workflows import pipeline_workflow
+    if bool(partitions) == bool(bams):
+        raise click.BadParameter('provide exactly one of --matrix (matrix mode) or --bam (BAM mode)')
+    exon_df = None
+    if transcriptome:
+        if not annotation:
+            raise click.BadParameter('--transcriptome requires --annotation (GTF).')
+        from .io.annotation import build_exon_blocks
+        exon_df = build_exon_blocks(annotation)
+    policy = ConsequentialityPolicy(
+        min_tier_confidence=min_tier_confidence,
+        min_expression_percentile=min_expression_percentile,
+    )
+    paths = pipeline_workflow(
+        sqlite_path, out_dir,
+        partition_dirs=list(partitions) or None,
+        bams=list(bams) or None,
+        data_version=data_version, chroms=list(chroms) or None,
+        annotation_version=annotation_version,
+        offsets=OffsetParams(method=offset_method, global_offset=global_offset, offsets_file=offsets_file),
+        sample_names=list(sample_names) or None,
+        site=site, transcriptome=transcriptome, exon_df=exon_df, policy=policy,
+    )
+    log_info(f"Pipeline complete: {paths['report']}")
 
 
 if __name__ == '__main__':

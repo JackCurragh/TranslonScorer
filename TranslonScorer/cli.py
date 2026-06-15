@@ -5,8 +5,8 @@ import os
 import click
 from typing import Optional
 import polars as pl
-from .pipeline.config import Config
-from .pipeline.validator import validate_config
+from .config import Config
+from .config import validate_config
 from .utils.logging import setup_logging, log_info
 from .file_handlers import bam as bam_handlers
 
@@ -107,7 +107,7 @@ def all(**kwargs):
     setup_logging()
     config = Config.from_click_args(**kwargs)
     validate_config(config)
-    from .pipeline.workflow import all_workflow
+    from .legacy_workflow import all_workflow
     all_workflow(config)
     log_info("Pipeline completed successfully!")
 
@@ -126,7 +126,7 @@ def process_bam(bam: str, chromsizes: str, annotation: str, output: str, strande
     config._validate_file_exists(config.bam, 'BAM')
     config._validate_file_exists(config.chromsizes, 'Chromosome sizes')
     config._validate_file_exists(config.annotation, 'Annotation')
-    from .pipeline.workflow import process_bam_workflow
+    from .legacy_workflow import process_bam_workflow
     process_bam_workflow(config)
     log_info("BAM processing complete!")
 
@@ -139,7 +139,7 @@ def find_orfs(**kwargs):
     # minimal validation of inputs for this step
     config._validate_file_exists(config.sequence, 'Sequence')
     config._validate_file_exists(config.annotation, 'Annotation')
-    from .pipeline.workflow import find_orfs_workflow
+    from .legacy_workflow import find_orfs_workflow
     orf_df, _ = find_orfs_workflow(config)
     orf_df.write_csv(f"{config.output}_orfs.csv")
     log_info("ORF finding complete!")
@@ -230,7 +230,7 @@ def profiles(**kwargs):
     # Load annotation: prefer bundle if provided
     exon_df = cds_df = None
     if config.annotation_dir:
-        from .pipeline.annotation_bundle import load_annotation_bundle
+        from .io.annotation_bundle import load_annotation_bundle
         exon_df, cds_df, feats_df, fmap_df, tx_df, loci_bed, manifest = load_annotation_bundle(config.annotation_dir)
     else:
         cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
@@ -486,7 +486,7 @@ def score_orfs(orfs: str, exons: str, bigwig: str, output: str, scoring_method: 
     # load inputs
     orf_df = pl.read_csv(orfs)
     exon_df = pl.read_csv(exons)
-    from .pipeline.workflow import score_orfs_workflow
+    from .legacy_workflow import score_orfs_workflow
     scored = score_orfs_workflow(config, bigwig, exon_df, orf_df)
     scored_path = f"{output}_orfs_scored.csv"
     scored.write_csv(scored_path)
@@ -897,7 +897,7 @@ def features(annotation: str, out_dir: str = None, output_prefix: str = None, pr
         raise click.BadParameter('Provide either --out-dir for the bundle or -o for legacy outputs')
 
     # Always build the bundle
-    from .pipeline.annotation_bundle import build_annotation_bundle
+    from .io.annotation_bundle import build_annotation_bundle
     bdir, paths = build_annotation_bundle(annotation, out_dir, progress=progress)
     log_info(f"Annotation bundle written at: {bdir}")
 
@@ -994,7 +994,7 @@ def map_orfs_cmd(orfs_parquet: str, feature_map_parquet: str, features_parquet: 
 def inspect_cmd(parquet_path: str, limit: int, expand: bool, out_csv: Optional[str]):
     """Inspect a Parquet file (schema, summary, and an optional expanded composite preview)."""
     setup_logging()
-    from .pipeline.inspect import inspect_parquet
+    from .io.inspect import inspect_parquet
     inspect_parquet(parquet_path, limit=limit, expand=expand, out_csv=out_csv)
 
 

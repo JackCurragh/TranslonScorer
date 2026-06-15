@@ -533,7 +533,7 @@ def _build_frame_support_from_annotation(
     if cds_path:
         cds_tran = _load_table(cds_path)
     elif annotation_dir:
-        from ..pipeline.annotation_bundle import load_annotation_bundle
+        from ..io.annotation_bundle import load_annotation_bundle
 
         exon_df, cds_df, _feats_df, _fmap_df, _tx_df, _loci_bed, _manifest = load_annotation_bundle(annotation_dir)
         cds_tran = cds_to_transcript_space(cds_df, exon_df)

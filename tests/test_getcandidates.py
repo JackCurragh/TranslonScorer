@@ -1,6 +1,6 @@
 def orfrelativeposition(annotation, df, exondf):
     cds_df, exon_coords = getexons_and_cds(annotation, exondf, list(df["tran_id"].unique()))
-    print('filtering')
+    print("filtering")
     filtered_df = cds_df.select(pl.all().exclude("start", "stop"))
     orftype = []
     for orfid in sorted(df["tran_id"].unique()):
@@ -19,20 +19,11 @@ def orfrelativeposition(annotation, df, exondf):
                     orftype.append("CDS")
                 elif orf[0] > cdspair[1] and orf[1] > cdspair[1]:
                     orftype.append("dORF")
-                elif (
-                    orf[0] < cdspair[0] and orf[1] < cdspair[1] and orf[1] > cdspair[0]
-                ):
+                elif orf[0] < cdspair[0] and orf[1] < cdspair[1] and orf[1] > cdspair[0]:
                     orftype.append("uoORF")
-                elif (
-                    orf[0] <= cdspair[1]
-                    and orf[0] >= cdspair[0]
-                    and orf[1] > cdspair[1]
-                ):
+                elif orf[0] <= cdspair[1] and orf[0] >= cdspair[0] and orf[1] > cdspair[1]:
                     orftype.append("doORF")
-                elif (
-                    orf[0] < cdspair[0]
-                    and orf[1] <= cdspair[0]
-                ):
+                elif orf[0] < cdspair[0] and orf[1] <= cdspair[0]:
                     orftype.append("uoORF")
                 elif orf[0] >= cdspair[0] and orf[1] <= cdspair[1]:
                     orftype.append("iORF")

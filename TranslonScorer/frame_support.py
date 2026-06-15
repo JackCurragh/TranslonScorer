@@ -16,6 +16,7 @@ Public API
 ----------
 build_frame_support — profiles + cds_df + FrameSupportParams → per-codon posteriors
 """
+
 from __future__ import annotations
 
 from typing import Dict, List, Optional
@@ -39,6 +40,7 @@ QC_MIXED_FRAME_EVIDENCE = 1 << 1
 # ---------------------------------------------------------------------------
 # Schema helpers
 # ---------------------------------------------------------------------------
+
 
 def _empty_frame_support(has_len: bool = False) -> pl.DataFrame:
     schema = {
@@ -75,6 +77,7 @@ def _empty_frame_support(has_len: bool = False) -> pl.DataFrame:
 # ---------------------------------------------------------------------------
 # Core helpers
 # ---------------------------------------------------------------------------
+
 
 def _profiles_to_codon_frame_counts(profiles: pl.DataFrame) -> pl.DataFrame:
     """Aggregate nucleotide positions into per-codon frame triplets per transcript.
@@ -125,9 +128,8 @@ def _support_from_arrays(
     P = _posterior_from_counts(adjusted)
     ent = _entropy_vec(P)
     total = obs.sum(axis=1)
-    return (
-        grp.select(ids)
-        .with_columns([
+    return grp.select(ids).with_columns(
+        [
             pl.Series("observed_f0", obs[:, 0]),
             pl.Series("observed_f1", obs[:, 1]),
             pl.Series("observed_f2", obs[:, 2]),
@@ -141,7 +143,7 @@ def _support_from_arrays(
             pl.Series("entropy", ent),
             pl.lit(method).alias("method"),
             pl.lit(0).cast(pl.Int32).alias("qc_flags"),
-        ])
+        ]
     )
 
 
@@ -160,11 +162,13 @@ def _hmm_smooth(out: pl.DataFrame, has_len: bool, lam: float) -> pl.DataFrame:
         ]
         if "total_count" in df.columns:
             total = df.get_column("total_count").to_numpy()
-            exprs.extend([
-                pl.Series("adjusted_f0", P_s[:, 0] * total),
-                pl.Series("adjusted_f1", P_s[:, 1] * total),
-                pl.Series("adjusted_f2", P_s[:, 2] * total),
-            ])
+            exprs.extend(
+                [
+                    pl.Series("adjusted_f0", P_s[:, 0] * total),
+                    pl.Series("adjusted_f1", P_s[:, 1] * total),
+                    pl.Series("adjusted_f2", P_s[:, 2] * total),
+                ]
+            )
         parts.append(df.with_columns(exprs))
     return pl.concat(parts) if parts else out
 
@@ -199,22 +203,36 @@ def _add_support_diagnostics(out: pl.DataFrame) -> pl.DataFrame:
     pmin = pl.min_horizontal(["p0", "p1", "p2"])
 
     out = (
-        out.with_columns([
-            pmax.alias("p_max"),
-            (pl.col("p0") + pl.col("p1") + pl.col("p2") - pmax - pmin).alias("secondary_frame_mass"),
-            (1.0 - (pl.col("entropy") / MAX_FRAME_ENTROPY)).clip(0.0, 1.0).alias("frame_periodicity_score"),
-            (1.0 - (-pl.col("total_count") / depth_scale).exp()).clip(0.0, 1.0).alias("depth_score"),
-        ])
-        .with_columns((pl.col("frame_periodicity_score") * pl.col("depth_score")).alias("support_evidence"))
-        .with_columns([
-            (pl.col("p0") * pl.col("support_evidence")).alias("support_gated_p0"),
-            (pl.col("p1") * pl.col("support_evidence")).alias("support_gated_p1"),
-            (pl.col("p2") * pl.col("support_evidence")).alias("support_gated_p2"),
-        ])
+        out.with_columns(
+            [
+                pmax.alias("p_max"),
+                (pl.col("p0") + pl.col("p1") + pl.col("p2") - pmax - pmin).alias(
+                    "secondary_frame_mass"
+                ),
+                (1.0 - (pl.col("entropy") / MAX_FRAME_ENTROPY))
+                .clip(0.0, 1.0)
+                .alias("frame_periodicity_score"),
+                (1.0 - (-pl.col("total_count") / depth_scale).exp())
+                .clip(0.0, 1.0)
+                .alias("depth_score"),
+            ]
+        )
+        .with_columns(
+            (pl.col("frame_periodicity_score") * pl.col("depth_score")).alias("support_evidence")
+        )
+        .with_columns(
+            [
+                (pl.col("p0") * pl.col("support_evidence")).alias("support_gated_p0"),
+                (pl.col("p1") * pl.col("support_evidence")).alias("support_gated_p1"),
+                (pl.col("p2") * pl.col("support_evidence")).alias("support_gated_p2"),
+            ]
+        )
     )
 
     low_support_high_conf = (pl.col("total_count") < depth_scale) & (pl.col("p_max") >= 0.80)
-    mixed_frame_evidence = (pl.col("total_count") >= depth_scale) & (pl.col("secondary_frame_mass") >= 0.20)
+    mixed_frame_evidence = (pl.col("total_count") >= depth_scale) & (
+        pl.col("secondary_frame_mass") >= 0.20
+    )
     return out.with_columns(
         (
             low_support_high_conf.cast(pl.Int32) * QC_LOW_SUPPORT_HIGH_CONF
@@ -226,6 +244,7 @@ def _add_support_diagnostics(out: pl.DataFrame) -> pl.DataFrame:
 # ---------------------------------------------------------------------------
 # Method implementations
 # ---------------------------------------------------------------------------
+
 
 def _build_linear(
     prof_use: pl.DataFrame,
@@ -245,7 +264,9 @@ def _build_linear(
             C = _c if _c is not None else np.eye(3)
             obs = grp.select(["f0", "f1", "f2"]).to_numpy().astype(float)
             adj = apply_confusion_counts(obs, C, alpha=0.05)
-            parts.append(_support_from_arrays(grp, ["tran_id", "codon", "length"], obs, adj, method))
+            parts.append(
+                _support_from_arrays(grp, ["tran_id", "codon", "length"], obs, adj, method)
+            )
         return pl.concat(parts) if parts else _empty_frame_support(has_len=True)
     else:
         _c = C_by_len.get(None)
@@ -275,7 +296,9 @@ def _build_latent(
             obs = grp.select(["f0", "f1", "f2"]).to_numpy().astype(float)
             P, _, _ = fit_latent(obs, C_init, background=background)
             adj = P * obs.sum(axis=1, keepdims=True)
-            parts.append(_support_from_arrays(grp, ["tran_id", "codon", "length"], obs, adj, method))
+            parts.append(
+                _support_from_arrays(grp, ["tran_id", "codon", "length"], obs, adj, method)
+            )
         return pl.concat(parts) if parts else _empty_frame_support(has_len=True)
     else:
         _ci = C_by_len.get(None)
@@ -289,6 +312,7 @@ def _build_latent(
 # ---------------------------------------------------------------------------
 # Public entry point (pure — no file I/O)
 # ---------------------------------------------------------------------------
+
 
 def build_frame_support(
     profiles: pl.DataFrame,

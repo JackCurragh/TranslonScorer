@@ -44,13 +44,25 @@ def _ensure_read_key(df: pl.DataFrame) -> pl.DataFrame:
     if "qname" in df.columns:
         return df.with_columns(pl.col("qname").cast(pl.Utf8).alias("read_key"))
     if "read_id" in df.columns:
-        return df.with_columns(pl.concat_str([pl.lit("read"), pl.col("read_id").cast(pl.Utf8)], separator=":").alias("read_key"))
+        return df.with_columns(
+            pl.concat_str([pl.lit("read"), pl.col("read_id").cast(pl.Utf8)], separator=":").alias(
+                "read_key"
+            )
+        )
     coord_cols = [c for c in ["chr", "start", "stop", "length", "strand"] if c in df.columns]
     if coord_cols:
-        return df.with_columns(pl.concat_str([pl.col(c).cast(pl.Utf8) for c in coord_cols], separator=":").alias("read_key"))
+        return df.with_columns(
+            pl.concat_str([pl.col(c).cast(pl.Utf8) for c in coord_cols], separator=":").alias(
+                "read_key"
+            )
+        )
     return (
         df.with_row_index("_read_row")
-        .with_columns(pl.concat_str([pl.lit("row"), pl.col("_read_row").cast(pl.Utf8)], separator=":").alias("read_key"))
+        .with_columns(
+            pl.concat_str([pl.lit("row"), pl.col("_read_row").cast(pl.Utf8)], separator=":").alias(
+                "read_key"
+            )
+        )
         .drop("_read_row")
     )
 
@@ -80,8 +92,16 @@ def _normalise_frame_support(frame_support: pl.DataFrame | None) -> pl.DataFrame
                 pl.col("p0").cast(pl.Float64),
                 pl.col("p1").cast(pl.Float64),
                 pl.col("p2").cast(pl.Float64),
-                pl.col("support_evidence").cast(pl.Float64) if "support_evidence" in df.columns else pl.lit(1.0).alias("support_evidence"),
-                pl.col("total_count").cast(pl.Float64).alias("frame_support_count") if "total_count" in df.columns else pl.lit(None).cast(pl.Float64).alias("frame_support_count"),
+                (
+                    pl.col("support_evidence").cast(pl.Float64)
+                    if "support_evidence" in df.columns
+                    else pl.lit(1.0).alias("support_evidence")
+                ),
+                (
+                    pl.col("total_count").cast(pl.Float64).alias("frame_support_count")
+                    if "total_count" in df.columns
+                    else pl.lit(None).cast(pl.Float64).alias("frame_support_count")
+                ),
             ]
         )
         .group_by(["tran_id", "codon"])
@@ -145,7 +165,11 @@ def prepare_assignment_candidates(
             [
                 pl.col("tran_id").cast(pl.Utf8),
                 pl.col(pos_col).cast(pl.Int64).alias("pos"),
-                (pl.col("count").cast(pl.Float64) if "count" in candidates.columns else pl.lit(1.0)).alias("read_weight"),
+                (
+                    pl.col("count").cast(pl.Float64)
+                    if "count" in candidates.columns
+                    else pl.lit(1.0)
+                ).alias("read_weight"),
             ]
         )
     )
@@ -158,7 +182,9 @@ def prepare_assignment_candidates(
             raise ValueError(f"Candidate table missing abundance_key columns: {missing}")
         target_col = "_assignment_target_key"
         df = df.with_columns(
-            pl.concat_str([pl.col(col).cast(pl.Utf8) for col in target_cols], separator="|").alias(target_col)
+            pl.concat_str([pl.col(col).cast(pl.Utf8) for col in target_cols], separator="|").alias(
+                target_col
+            )
         )
     elif abundance_key not in df.columns:
         if abundance_key == "locus_id":
@@ -170,9 +196,19 @@ def prepare_assignment_candidates(
             raise ValueError(f"Candidate table missing abundance_key column: {abundance_key}")
 
     if "candidate_likelihood" in df.columns:
-        df = df.with_columns(pl.col("candidate_likelihood").cast(pl.Float64).clip(_EPS, None).alias("alignment_likelihood"))
+        df = df.with_columns(
+            pl.col("candidate_likelihood")
+            .cast(pl.Float64)
+            .clip(_EPS, None)
+            .alias("alignment_likelihood")
+        )
     elif "alignment_likelihood" in df.columns:
-        df = df.with_columns(pl.col("alignment_likelihood").cast(pl.Float64).clip(_EPS, None).alias("alignment_likelihood"))
+        df = df.with_columns(
+            pl.col("alignment_likelihood")
+            .cast(pl.Float64)
+            .clip(_EPS, None)
+            .alias("alignment_likelihood")
+        )
     elif "mapq" in df.columns:
         df = df.with_columns(
             (1.0 - (((-pl.col("mapq").cast(pl.Float64) / 10.0) * math.log(10.0)).exp()))
@@ -184,7 +220,9 @@ def prepare_assignment_candidates(
 
     if cds_tran is not None and not cds_tran.is_empty():
         start_col = "tran_start" if "tran_start" in cds_tran.columns else "start"
-        cds = cds_tran.select(["tran_id", pl.col(start_col).cast(pl.Int64).alias("cds_start")]).unique(subset=["tran_id"])
+        cds = cds_tran.select(
+            ["tran_id", pl.col(start_col).cast(pl.Int64).alias("cds_start")]
+        ).unique(subset=["tran_id"])
         df = df.join(cds, on="tran_id", how="left")
     else:
         df = df.with_columns(pl.lit(None).cast(pl.Int64).alias("cds_start"))
@@ -212,36 +250,47 @@ def prepare_assignment_candidates(
             ]
         )
 
-    df = df.with_columns(
-        [
-            pl.col("support_evidence").fill_null(0.0).clip(0.0, 1.0).alias("raw_support_evidence"),
-            pl.col("frame_support_count").fill_null(0.0).clip(0.0, None).alias("frame_support_count"),
-            pl.when(pl.col("signal_frame") == 0)
-            .then(pl.col("p0"))
-            .when(pl.col("signal_frame") == 1)
-            .then(pl.col("p1"))
-            .otherwise(pl.col("p2"))
-            .fill_null(1.0)
-            .clip(frame_floor, 1.0)
-            .alias("raw_frame_likelihood"),
-        ]
-    ).with_columns(
-        (
-            (pl.col("frame_support_count") >= float(min_frame_support_count))
-            & (pl.col("raw_support_evidence") >= float(min_frame_support_evidence))
-        ).alias("frame_support_passes_gate")
-    ).with_columns(
-        pl.when(pl.col("frame_support_passes_gate"))
-        .then(pl.col("raw_support_evidence"))
-        .otherwise(0.0)
-        .alias("support_evidence")
-    ).with_columns(
-        (
-            (1.0 - pl.col("support_evidence"))
-            + (pl.col("support_evidence") * pl.col("raw_frame_likelihood"))
+    df = (
+        df.with_columns(
+            [
+                pl.col("support_evidence")
+                .fill_null(0.0)
+                .clip(0.0, 1.0)
+                .alias("raw_support_evidence"),
+                pl.col("frame_support_count")
+                .fill_null(0.0)
+                .clip(0.0, None)
+                .alias("frame_support_count"),
+                pl.when(pl.col("signal_frame") == 0)
+                .then(pl.col("p0"))
+                .when(pl.col("signal_frame") == 1)
+                .then(pl.col("p1"))
+                .otherwise(pl.col("p2"))
+                .fill_null(1.0)
+                .clip(frame_floor, 1.0)
+                .alias("raw_frame_likelihood"),
+            ]
         )
-        .clip(frame_floor, 1.0)
-        .alias("frame_likelihood")
+        .with_columns(
+            (
+                (pl.col("frame_support_count") >= float(min_frame_support_count))
+                & (pl.col("raw_support_evidence") >= float(min_frame_support_evidence))
+            ).alias("frame_support_passes_gate")
+        )
+        .with_columns(
+            pl.when(pl.col("frame_support_passes_gate"))
+            .then(pl.col("raw_support_evidence"))
+            .otherwise(0.0)
+            .alias("support_evidence")
+        )
+        .with_columns(
+            (
+                (1.0 - pl.col("support_evidence"))
+                + (pl.col("support_evidence") * pl.col("raw_frame_likelihood"))
+            )
+            .clip(frame_floor, 1.0)
+            .alias("frame_likelihood")
+        )
     )
 
     if require_complete_frame_support:
@@ -249,10 +298,15 @@ def prepare_assignment_candidates(
             df.group_by(["read_key", "assignment_target"])
             .agg(pl.col("frame_support_passes_gate").any().alias("_target_has_frame_support"))
             .group_by("read_key")
-            .agg([
-                pl.len().alias("_n_assignment_targets_for_frame"),
-                pl.col("_target_has_frame_support").cast(pl.Int64).sum().alias("_n_supported_assignment_targets_for_frame"),
-            ])
+            .agg(
+                [
+                    pl.len().alias("_n_assignment_targets_for_frame"),
+                    pl.col("_target_has_frame_support")
+                    .cast(pl.Int64)
+                    .sum()
+                    .alias("_n_supported_assignment_targets_for_frame"),
+                ]
+            )
             .with_columns(
                 (
                     pl.col("_n_supported_assignment_targets_for_frame")
@@ -263,31 +317,36 @@ def prepare_assignment_candidates(
         df = (
             df.join(target_support, on="read_key", how="left")
             .with_columns(pl.col("frame_support_comparable").fill_null(False))
-            .with_columns([
-                pl.when(pl.col("frame_support_comparable"))
-                .then(pl.col("frame_likelihood"))
-                .otherwise(1.0)
-                .alias("frame_likelihood"),
-                pl.when(pl.col("frame_support_comparable"))
-                .then(pl.col("support_evidence"))
-                .otherwise(0.0)
-                .alias("support_evidence"),
-                (
-                    pl.col("frame_support_passes_gate")
-                    & pl.col("frame_support_comparable")
-                ).alias("frame_support_passes_gate"),
-            ])
+            .with_columns(
+                [
+                    pl.when(pl.col("frame_support_comparable"))
+                    .then(pl.col("frame_likelihood"))
+                    .otherwise(1.0)
+                    .alias("frame_likelihood"),
+                    pl.when(pl.col("frame_support_comparable"))
+                    .then(pl.col("support_evidence"))
+                    .otherwise(0.0)
+                    .alias("support_evidence"),
+                    (
+                        pl.col("frame_support_passes_gate") & pl.col("frame_support_comparable")
+                    ).alias("frame_support_passes_gate"),
+                ]
+            )
         )
     else:
         df = df.with_columns(pl.lit(True).alias("frame_support_comparable"))
 
     if frame_weight != 1.0:
-        df = df.with_columns((pl.col("frame_likelihood") ** float(frame_weight)).alias("frame_likelihood"))
+        df = df.with_columns(
+            (pl.col("frame_likelihood") ** float(frame_weight)).alias("frame_likelihood")
+        )
 
     return df.with_columns(
         [
             pl.col("alignment_likelihood").clip(_EPS, None).alias("alignment_likelihood"),
-            (pl.col("alignment_likelihood") * pl.col("frame_likelihood")).clip(_EPS, None).alias("frame_aware_likelihood"),
+            (pl.col("alignment_likelihood") * pl.col("frame_likelihood"))
+            .clip(_EPS, None)
+            .alias("frame_aware_likelihood"),
             pl.col("read_weight").fill_null(1.0).clip(0.0, None).alias("read_weight"),
         ]
     )
@@ -318,7 +377,9 @@ def _read_weights(read_idx: np.ndarray, weights: np.ndarray, n_reads: int) -> np
     return out
 
 
-def _normalise_within_reads(read_idx: np.ndarray, likelihood: np.ndarray, n_reads: int) -> np.ndarray:
+def _normalise_within_reads(
+    read_idx: np.ndarray, likelihood: np.ndarray, n_reads: int
+) -> np.ndarray:
     denom = np.bincount(read_idx, weights=likelihood, minlength=n_reads)
     posterior = np.zeros_like(likelihood, dtype=np.float64)
     valid = denom[read_idx] > _EPS
@@ -327,21 +388,19 @@ def _normalise_within_reads(read_idx: np.ndarray, likelihood: np.ndarray, n_read
 
 
 def _target_likelihood_table(prepared: pl.DataFrame, likelihood_col: str) -> pl.DataFrame:
-    return (
-        prepared
-        .group_by(["read_key", "assignment_target"], maintain_order=True)
-        .agg(
-            [
-                pl.col("read_weight").first().alias("read_weight"),
-                pl.col(likelihood_col).max().clip(_EPS, None).alias("target_likelihood"),
-                pl.len().alias("candidate_origin_rows"),
-            ]
-        )
+    return prepared.group_by(["read_key", "assignment_target"], maintain_order=True).agg(
+        [
+            pl.col("read_weight").first().alias("read_weight"),
+            pl.col(likelihood_col).max().clip(_EPS, None).alias("target_likelihood"),
+            pl.len().alias("candidate_origin_rows"),
+        ]
     )
 
 
 def _weighted_fraction_expr(flag_col: str, total_weight: float) -> pl.Expr:
-    return ((pl.col(flag_col).cast(pl.Float64) * pl.col("read_weight")).sum() / total_weight).fill_nan(0.0)
+    return (
+        (pl.col(flag_col).cast(pl.Float64) * pl.col("read_weight")).sum() / total_weight
+    ).fill_nan(0.0)
 
 
 def frame_assignment_gate_diagnostics(
@@ -391,7 +450,10 @@ def frame_assignment_gate_diagnostics(
             ]
         )
         .with_columns(
-            pl.col("target_frame_likelihood").max().over("read_key").alias("_max_target_frame_likelihood")
+            pl.col("target_frame_likelihood")
+            .max()
+            .over("read_key")
+            .alias("_max_target_frame_likelihood")
         )
         .with_columns(
             (pl.col("target_frame_likelihood") == pl.col("_max_target_frame_likelihood")).alias(
@@ -424,12 +486,12 @@ def frame_assignment_gate_diagnostics(
         )
         .with_columns(
             [
-                (
-                    pl.col("has_frame_contrast") & (pl.col("n_top_frame_targets") == 1)
-                ).alias("rdg_local_frame_gate"),
-                (
-                    pl.col("has_frame_contrast") & (pl.col("n_top_frame_targets") > 1)
-                ).alias("frame_separates_only_an_alias_group"),
+                (pl.col("has_frame_contrast") & (pl.col("n_top_frame_targets") == 1)).alias(
+                    "rdg_local_frame_gate"
+                ),
+                (pl.col("has_frame_contrast") & (pl.col("n_top_frame_targets") > 1)).alias(
+                    "frame_separates_only_an_alias_group"
+                ),
             ]
         )
     )
@@ -437,28 +499,38 @@ def frame_assignment_gate_diagnostics(
     total_weight = float(gate["read_weight"].sum() or 0.0)
     if total_weight <= 0.0:
         total_weight = 1.0
-    summary = gate.select(
-        [
-            pl.len().alias("n_reads"),
-            pl.col("read_weight").sum().alias("total_read_weight"),
-            _weighted_fraction_expr("rdg_local_frame_gate", total_weight).alias("rdg_gate_fraction"),
-            _weighted_fraction_expr("has_frame_contrast", total_weight).alias("frame_contrast_fraction"),
-            _weighted_fraction_expr("frame_separates_only_an_alias_group", total_weight).alias(
-                "alias_group_contrast_fraction"
-            ),
-            pl.col("n_assignment_targets").mean().alias("mean_assignment_targets"),
-            pl.col("n_candidate_frames").mean().alias("mean_candidate_frames"),
-        ]
-    ).with_columns(
-        (
-            (pl.col("rdg_gate_fraction") >= float(frame_gate_min_read_fraction))
-            & (pl.col("rdg_gate_fraction") > pl.col("alias_group_contrast_fraction"))
-        ).alias("rdg_scenario_frame_gate")
-    ).with_columns(
-        [
-            pl.lit(float(frame_gate_min_likelihood_range)).alias("frame_gate_min_likelihood_range"),
-            pl.lit(float(frame_gate_min_read_fraction)).alias("frame_gate_min_read_fraction"),
-        ]
+    summary = (
+        gate.select(
+            [
+                pl.len().alias("n_reads"),
+                pl.col("read_weight").sum().alias("total_read_weight"),
+                _weighted_fraction_expr("rdg_local_frame_gate", total_weight).alias(
+                    "rdg_gate_fraction"
+                ),
+                _weighted_fraction_expr("has_frame_contrast", total_weight).alias(
+                    "frame_contrast_fraction"
+                ),
+                _weighted_fraction_expr("frame_separates_only_an_alias_group", total_weight).alias(
+                    "alias_group_contrast_fraction"
+                ),
+                pl.col("n_assignment_targets").mean().alias("mean_assignment_targets"),
+                pl.col("n_candidate_frames").mean().alias("mean_candidate_frames"),
+            ]
+        )
+        .with_columns(
+            (
+                (pl.col("rdg_gate_fraction") >= float(frame_gate_min_read_fraction))
+                & (pl.col("rdg_gate_fraction") > pl.col("alias_group_contrast_fraction"))
+            ).alias("rdg_scenario_frame_gate")
+        )
+        .with_columns(
+            [
+                pl.lit(float(frame_gate_min_likelihood_range)).alias(
+                    "frame_gate_min_likelihood_range"
+                ),
+                pl.lit(float(frame_gate_min_read_fraction)).alias("frame_gate_min_read_fraction"),
+            ]
+        )
     )
     scenario_gate = bool(summary["rdg_scenario_frame_gate"][0])
     gate = gate.with_columns(pl.lit(scenario_gate).alias("rdg_scenario_frame_gate"))
@@ -480,18 +552,15 @@ def _apply_rdg_frame_gate(
     if prepared.is_empty():
         return prepared, summary
 
-    gated = (
-        prepared.join(
-            gate.select(["read_key", "rdg_local_frame_gate", "rdg_scenario_frame_gate"]),
-            on="read_key",
-            how="left",
-        )
-        .with_columns(
-            [
-                pl.col("rdg_local_frame_gate").fill_null(False),
-                pl.col("rdg_scenario_frame_gate").fill_null(False),
-            ]
-        )
+    gated = prepared.join(
+        gate.select(["read_key", "rdg_local_frame_gate", "rdg_scenario_frame_gate"]),
+        on="read_key",
+        how="left",
+    ).with_columns(
+        [
+            pl.col("rdg_local_frame_gate").fill_null(False),
+            pl.col("rdg_scenario_frame_gate").fill_null(False),
+        ]
     )
     effective_gate = pl.col("rdg_local_frame_gate")
     if use_scenario_consensus:
@@ -506,9 +575,9 @@ def _apply_rdg_frame_gate(
                 .alias("rdg_gated_frame_likelihood"),
             ]
         ).with_columns(
-            (
-                pl.col("alignment_likelihood") * pl.col("rdg_gated_frame_likelihood")
-            ).clip(_EPS, None).alias("rdg_gated_frame_aware_likelihood")
+            (pl.col("alignment_likelihood") * pl.col("rdg_gated_frame_likelihood"))
+            .clip(_EPS, None)
+            .alias("rdg_gated_frame_aware_likelihood")
         ),
         summary,
     )
@@ -522,8 +591,9 @@ def _candidate_posteriors_from_targets(
 ) -> pl.DataFrame:
     target_cols = ["read_key", "assignment_target", "target_posterior", "target_likelihood"]
     return (
-        prepared
-        .join(target_posteriors.select(target_cols), on=["read_key", "assignment_target"], how="left")
+        prepared.join(
+            target_posteriors.select(target_cols), on=["read_key", "assignment_target"], how="left"
+        )
         .with_columns(
             pl.col(likelihood_col)
             .sum()
@@ -559,9 +629,13 @@ def _run_em(
 
     likelihood = prepared[likelihood_col].to_numpy().astype(np.float64)
     likelihood[likelihood < _EPS] = _EPS
-    weights = _read_weights(read_idx, prepared["read_weight"].to_numpy().astype(np.float64), n_reads)
+    weights = _read_weights(
+        read_idx, prepared["read_weight"].to_numpy().astype(np.float64), n_reads
+    )
 
-    theta = np.bincount(target_idx, weights=likelihood, minlength=n_targets) + float(abundance_prior)
+    theta = np.bincount(target_idx, weights=likelihood, minlength=n_targets) + float(
+        abundance_prior
+    )
     theta = theta / max(float(theta.sum()), _EPS)
     posterior = np.zeros_like(likelihood)
     rows: list[dict[str, float | int]] = []
@@ -570,7 +644,9 @@ def _run_em(
         score = theta[target_idx] * likelihood
         posterior = _normalise_within_reads(read_idx, score, n_reads)
         assigned = posterior * weights[read_idx]
-        theta_new = np.bincount(target_idx, weights=assigned, minlength=n_targets) + float(abundance_prior)
+        theta_new = np.bincount(target_idx, weights=assigned, minlength=n_targets) + float(
+            abundance_prior
+        )
         theta_new = theta_new / max(float(theta_new.sum()), _EPS)
         delta = float(np.abs(theta_new - theta).sum())
         rows.append({"iteration": iteration + 1, "theta_l1_delta": delta})
@@ -578,7 +654,11 @@ def _run_em(
         if delta < tol:
             break
 
-    convergence = pl.DataFrame(rows) if rows else pl.DataFrame(schema={"iteration": pl.Int64, "theta_l1_delta": pl.Float64})
+    convergence = (
+        pl.DataFrame(rows)
+        if rows
+        else pl.DataFrame(schema={"iteration": pl.Int64, "theta_l1_delta": pl.Float64})
+    )
     abundance = pl.DataFrame({"assignment_target": target_labels, "abundance": theta})
     return posterior, theta, convergence.with_columns(pl.lit("em").alias("estimator"))
 
@@ -667,13 +747,20 @@ def assign_reads(
         )
 
     target_posteriors = target_table.with_columns(pl.Series("target_posterior", target_posterior))
-    out = _candidate_posteriors_from_targets(prepared, target_posteriors, likelihood_col=likelihood_col)
+    out = _candidate_posteriors_from_targets(
+        prepared, target_posteriors, likelihood_col=likelihood_col
+    )
     read_idx_out, _ = _factorize(out["read_key"].to_list())
     n_reads_out = int(read_idx_out.max()) + 1 if read_idx_out.size else 0
-    weights = _read_weights(read_idx_out, out["read_weight"].to_numpy().astype(np.float64), n_reads_out)
+    weights = _read_weights(
+        read_idx_out, out["read_weight"].to_numpy().astype(np.float64), n_reads_out
+    )
     out = out.with_columns(
         [
-            pl.Series("assigned_count", out["posterior"].to_numpy().astype(np.float64) * weights[read_idx_out]),
+            pl.Series(
+                "assigned_count",
+                out["posterior"].to_numpy().astype(np.float64) * weights[read_idx_out],
+            ),
             pl.lit(method).alias("assignment_method"),
             pl.lit(abundance_key).alias("abundance_key"),
         ]
@@ -681,13 +768,19 @@ def assign_reads(
     abundance = (
         out.group_by("assignment_target")
         .agg(pl.col("assigned_count").sum().alias("assigned_count"))
-        .with_columns((pl.col("assigned_count") / pl.col("assigned_count").sum()).fill_nan(0.0).alias("abundance"))
+        .with_columns(
+            (pl.col("assigned_count") / pl.col("assigned_count").sum())
+            .fill_nan(0.0)
+            .alias("abundance")
+        )
         .sort("assigned_count", descending=True)
     )
     return AssignmentResult(out, abundance, convergence, diagnostics)
 
 
-def evaluate_assignments(assignments: pl.DataFrame, *, truth_column: str = "is_true") -> pl.DataFrame:
+def evaluate_assignments(
+    assignments: pl.DataFrame, *, truth_column: str = "is_true"
+) -> pl.DataFrame:
     if assignments.is_empty():
         return pl.DataFrame()
 
@@ -729,7 +822,9 @@ def evaluate_assignments(assignments: pl.DataFrame, *, truth_column: str = "is_t
         .join(entropy_terms, on="read_key", how="left")
         .with_columns(
             pl.when(pl.col("n_assignment_targets") > 1)
-            .then(pl.col("assignment_entropy") / pl.col("n_assignment_targets").cast(pl.Float64).log())
+            .then(
+                pl.col("assignment_entropy") / pl.col("n_assignment_targets").cast(pl.Float64).log()
+            )
             .otherwise(0.0)
             .fill_nan(0.0)
             .alias("assignment_entropy_norm")
@@ -737,12 +832,17 @@ def evaluate_assignments(assignments: pl.DataFrame, *, truth_column: str = "is_t
     )
 
     if has_truth:
-        true_post = (
-            per_target.group_by("read_key")
-            .agg(pl.when(pl.col("_target_is_true")).then(pl.col("target_posterior")).otherwise(0.0).sum().alias("true_posterior"))
+        true_post = per_target.group_by("read_key").agg(
+            pl.when(pl.col("_target_is_true"))
+            .then(pl.col("target_posterior"))
+            .otherwise(0.0)
+            .sum()
+            .alias("true_posterior")
         )
         hard = (
-            per_target.join(per_read.select(["read_key", "_max_posterior"]), on="read_key", how="left")
+            per_target.join(
+                per_read.select(["read_key", "_max_posterior"]), on="read_key", how="left"
+            )
             .filter(pl.col("target_posterior") == pl.col("_max_posterior"))
             .group_by("read_key")
             .agg(
@@ -751,12 +851,13 @@ def evaluate_assignments(assignments: pl.DataFrame, *, truth_column: str = "is_t
                     pl.col("_target_is_true").cast(pl.Float64).sum().alias("_n_true_tied_max"),
                 ]
             )
-            .with_columns((pl.col("_n_true_tied_max") / pl.col("_n_tied_max")).alias("hard_correct"))
+            .with_columns(
+                (pl.col("_n_true_tied_max") / pl.col("_n_tied_max")).alias("hard_correct")
+            )
             .select(["read_key", "hard_correct"])
         )
         per_read = (
-            per_read
-            .join(true_post, on="read_key", how="left")
+            per_read.join(true_post, on="read_key", how="left")
             .join(hard, on="read_key", how="left")
             .with_columns(
                 [
@@ -779,19 +880,36 @@ def evaluate_assignments(assignments: pl.DataFrame, *, truth_column: str = "is_t
             pl.col("read_weight").sum().alias("total_read_weight"),
             pl.col("n_candidate_origins").mean().alias("mean_candidate_origins"),
             pl.col("n_assignment_targets").mean().alias("mean_assignment_targets"),
-            (pl.col("n_assignment_targets") > 1).cast(pl.Float64).mean().alias("ambiguous_read_fraction"),
-            ((pl.col("assigned_posterior_sum") * pl.col("read_weight")).sum() / total_weight).alias("assigned_fraction"),
-            ((pl.col("_max_posterior") * pl.col("read_weight")).sum() / total_weight).alias("mean_max_posterior"),
-            ((pl.col("assignment_entropy_norm") * pl.col("read_weight")).sum() / total_weight).alias("mean_assignment_entropy_norm"),
-            (((pl.col("_max_posterior") >= 0.8).cast(pl.Float64) * pl.col("read_weight")).sum() / total_weight).alias("high_confidence_fraction"),
+            (pl.col("n_assignment_targets") > 1)
+            .cast(pl.Float64)
+            .mean()
+            .alias("ambiguous_read_fraction"),
+            ((pl.col("assigned_posterior_sum") * pl.col("read_weight")).sum() / total_weight).alias(
+                "assigned_fraction"
+            ),
+            ((pl.col("_max_posterior") * pl.col("read_weight")).sum() / total_weight).alias(
+                "mean_max_posterior"
+            ),
+            (
+                (pl.col("assignment_entropy_norm") * pl.col("read_weight")).sum() / total_weight
+            ).alias("mean_assignment_entropy_norm"),
+            (
+                ((pl.col("_max_posterior") >= 0.8).cast(pl.Float64) * pl.col("read_weight")).sum()
+                / total_weight
+            ).alias("high_confidence_fraction"),
         ]
     )
     if not has_truth:
         return summary
     truth_summary = per_read.select(
         [
-            ((pl.col("true_posterior") * pl.col("read_weight")).sum() / total_weight).alias("soft_true_posterior"),
-            ((pl.col("hard_correct").cast(pl.Float64) * pl.col("read_weight")).sum() / total_weight).alias("hard_accuracy"),
+            ((pl.col("true_posterior") * pl.col("read_weight")).sum() / total_weight).alias(
+                "soft_true_posterior"
+            ),
+            (
+                (pl.col("hard_correct").cast(pl.Float64) * pl.col("read_weight")).sum()
+                / total_weight
+            ).alias("hard_accuracy"),
         ]
     )
     return pl.concat([summary, truth_summary], how="horizontal")
@@ -807,19 +925,14 @@ def assignment_identifiability(
     """Classify per-read assignment uncertainty at the assignment-target level."""
     if assignments.is_empty():
         return pl.DataFrame()
-    per_target = (
-        assignments
-        .group_by(["read_key", "assignment_target"])
-        .agg(
-            [
-                pl.col("posterior").sum().alias("target_posterior"),
-                pl.col("read_weight").first().alias("read_weight"),
-            ]
-        )
+    per_target = assignments.group_by(["read_key", "assignment_target"]).agg(
+        [
+            pl.col("posterior").sum().alias("target_posterior"),
+            pl.col("read_weight").first().alias("read_weight"),
+        ]
     )
     entropy = (
-        per_target
-        .with_columns(
+        per_target.with_columns(
             pl.when(pl.col("target_posterior") > _EPS)
             .then(-(pl.col("target_posterior") * pl.col("target_posterior").log()))
             .otherwise(0.0)
@@ -829,8 +942,7 @@ def assignment_identifiability(
         .agg(pl.col("_entropy_term").sum().alias("assignment_entropy"))
     )
     return (
-        per_target
-        .group_by("read_key")
+        per_target.group_by("read_key")
         .agg(
             [
                 pl.col("read_weight").first().alias("read_weight"),
@@ -842,7 +954,9 @@ def assignment_identifiability(
         .join(entropy, on="read_key", how="left")
         .with_columns(
             pl.when(pl.col("n_assignment_targets") > 1)
-            .then(pl.col("assignment_entropy") / pl.col("n_assignment_targets").cast(pl.Float64).log())
+            .then(
+                pl.col("assignment_entropy") / pl.col("n_assignment_targets").cast(pl.Float64).log()
+            )
             .otherwise(0.0)
             .fill_nan(0.0)
             .alias("assignment_entropy_norm")
@@ -852,7 +966,10 @@ def assignment_identifiability(
             .then(pl.lit("unassigned"))
             .when(pl.col("n_assignment_targets") == 1)
             .then(pl.lit("unique"))
-            .when((pl.col("max_posterior") >= confidence_threshold) & (pl.col("assignment_entropy_norm") <= entropy_resolved_threshold))
+            .when(
+                (pl.col("max_posterior") >= confidence_threshold)
+                & (pl.col("assignment_entropy_norm") <= entropy_resolved_threshold)
+            )
             .then(pl.lit("resolved"))
             .when(pl.col("assignment_entropy_norm") >= entropy_ambiguous_threshold)
             .then(pl.lit("ambiguous"))
@@ -867,8 +984,7 @@ def summarize_identifiability(classes: pl.DataFrame) -> pl.DataFrame:
         return pl.DataFrame()
     total_weight = float(classes["read_weight"].sum() or 1.0)
     return (
-        classes
-        .group_by("identifiability_class")
+        classes.group_by("identifiability_class")
         .agg(
             [
                 pl.len().alias("n_reads"),
@@ -931,28 +1047,53 @@ def compare_read_assignment_methods(
         )
         metric = evaluate_assignments(result.assignments, truth_column=truth_column)
         if metric.is_empty():
-            metric = pl.DataFrame([{"n_reads": result.assignments["read_key"].n_unique(), "total_read_weight": None}])
-        summaries.append(metric.with_columns(pl.lit(method).alias("method"), pl.lit(abundance_key).alias("abundance_key")))
+            metric = pl.DataFrame(
+                [{"n_reads": result.assignments["read_key"].n_unique(), "total_read_weight": None}]
+            )
+        summaries.append(
+            metric.with_columns(
+                pl.lit(method).alias("method"), pl.lit(abundance_key).alias("abundance_key")
+            )
+        )
         convergence.append(result.convergence.with_columns(pl.lit(method).alias("method")))
-        abundance.append(result.abundance.with_columns(pl.lit(method).alias("method"), pl.lit(abundance_key).alias("abundance_key")))
+        abundance.append(
+            result.abundance.with_columns(
+                pl.lit(method).alias("method"), pl.lit(abundance_key).alias("abundance_key")
+            )
+        )
         classes = assignment_identifiability(result.assignments)
         identifiability.append(
-            summarize_identifiability(classes)
-            .with_columns(pl.lit(method).alias("method"), pl.lit(abundance_key).alias("abundance_key"))
+            summarize_identifiability(classes).with_columns(
+                pl.lit(method).alias("method"), pl.lit(abundance_key).alias("abundance_key")
+            )
         )
         if result.diagnostics is not None and not result.diagnostics.is_empty():
-            diagnostics.append(result.diagnostics.with_columns(pl.lit(method).alias("method"), pl.lit(abundance_key).alias("abundance_key")))
+            diagnostics.append(
+                result.diagnostics.with_columns(
+                    pl.lit(method).alias("method"), pl.lit(abundance_key).alias("abundance_key")
+                )
+            )
         if write_assignments:
             path = f"{out_prefix}.{method}.read_assignments.parquet"
             write_parquet_safe(result.assignments, path)
             assignment_paths.append(path)
 
-    paths["summary"] = write_csv_safe(pl.concat(summaries), f"{out_prefix}.read_assignment.summary.csv")
-    paths["convergence"] = write_csv_safe(pl.concat(convergence), f"{out_prefix}.read_assignment.convergence.csv")
-    paths["abundance"] = write_csv_safe(pl.concat(abundance), f"{out_prefix}.read_assignment.abundance.csv")
-    paths["identifiability"] = write_csv_safe(pl.concat(identifiability), f"{out_prefix}.read_assignment.identifiability.csv")
+    paths["summary"] = write_csv_safe(
+        pl.concat(summaries), f"{out_prefix}.read_assignment.summary.csv"
+    )
+    paths["convergence"] = write_csv_safe(
+        pl.concat(convergence), f"{out_prefix}.read_assignment.convergence.csv"
+    )
+    paths["abundance"] = write_csv_safe(
+        pl.concat(abundance), f"{out_prefix}.read_assignment.abundance.csv"
+    )
+    paths["identifiability"] = write_csv_safe(
+        pl.concat(identifiability), f"{out_prefix}.read_assignment.identifiability.csv"
+    )
     if diagnostics:
-        paths["diagnostics"] = write_csv_safe(pl.concat(diagnostics), f"{out_prefix}.read_assignment.diagnostics.csv")
+        paths["diagnostics"] = write_csv_safe(
+            pl.concat(diagnostics), f"{out_prefix}.read_assignment.diagnostics.csv"
+        )
     if assignment_paths:
         paths["assignments"] = ",".join(assignment_paths)
     return paths

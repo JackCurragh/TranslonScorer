@@ -19,6 +19,7 @@ score_events_vectorised, which scores init/term scalar and elongation via prefix
 sums. Coverage is queried per chromosome so genomic positions never collide
 across chromosomes.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -48,6 +49,7 @@ from TranslonScorer.report import compose_report
 # extract-events
 # ---------------------------------------------------------------------------
 
+
 def extract_events_workflow(
     sqlite_path: str,
     out_dir: str,
@@ -62,14 +64,17 @@ def extract_events_workflow(
     ``chroms`` optionally restricts extraction to specific chromosomes.
     """
     return run_extract(
-        sqlite_path, out_dir,
-        annotation_version=annotation_version, chroms=chroms,
+        sqlite_path,
+        out_dir,
+        annotation_version=annotation_version,
+        chroms=chroms,
     )
 
 
 # ---------------------------------------------------------------------------
 # shared scoring helper
 # ---------------------------------------------------------------------------
+
 
 def _score_events_over_provider(
     events: pl.DataFrame,
@@ -87,6 +92,7 @@ def _score_events_over_provider(
     """
     if events.is_empty():
         from TranslonScorer.scoring.evidence import _RECORD_SCHEMA
+
         return pl.DataFrame(schema=_RECORD_SCHEMA)
 
     parts: List[pl.DataFrame] = []
@@ -99,14 +105,13 @@ def _score_events_over_provider(
         if cov_df.is_empty():
             continue
         cov_df = cov_df.select(["pos", "count"])
-        scored = score_events_vectorised(
-            ev_chrom, cov_df, group=group, tier=tier, thr=thr
-        )
+        scored = score_events_vectorised(ev_chrom, cov_df, group=group, tier=tier, thr=thr)
         if not scored.is_empty():
             parts.append(scored)
 
     if not parts:
         from TranslonScorer.scoring.evidence import _RECORD_SCHEMA
+
         return pl.DataFrame(schema=_RECORD_SCHEMA)
     return pl.concat(parts)
 
@@ -114,6 +119,7 @@ def _score_events_over_provider(
 # ---------------------------------------------------------------------------
 # score-matrix
 # ---------------------------------------------------------------------------
+
 
 def score_matrix_workflow(
     events_dir: str,
@@ -147,14 +153,17 @@ def score_matrix_workflow(
         events, provider, site=site, group=group, tier=tier, thr=thr
     )
     return persist_scores(
-        scored, store_dir,
-        data_version=data_version, annotation_version=annotation_version,
+        scored,
+        store_dir,
+        data_version=data_version,
+        annotation_version=annotation_version,
     )
 
 
 # ---------------------------------------------------------------------------
 # score-bams
 # ---------------------------------------------------------------------------
+
 
 def score_bams_workflow(
     events_dir: str,
@@ -195,14 +204,17 @@ def score_bams_workflow(
         events, provider, site=site, group=group, tier=tier, thr=thr
     )
     return persist_scores(
-        scored, store_dir,
-        data_version=data_version, annotation_version=annotation_version,
+        scored,
+        store_dir,
+        data_version=data_version,
+        annotation_version=annotation_version,
     )
 
 
 # ---------------------------------------------------------------------------
 # consequential
 # ---------------------------------------------------------------------------
+
 
 def consequential_workflow(
     report: pl.DataFrame,
@@ -217,6 +229,7 @@ def consequential_workflow(
 # ---------------------------------------------------------------------------
 # report  (scores store + events → per-translon report [+ consequentiality])
 # ---------------------------------------------------------------------------
+
 
 def report_workflow(
     store_dir: str,
@@ -244,6 +257,7 @@ def report_workflow(
 # ---------------------------------------------------------------------------
 # pipeline  (one-shot: extract-events -> score -> report)
 # ---------------------------------------------------------------------------
+
 
 def pipeline_workflow(
     sqlite_path: str,
@@ -278,25 +292,40 @@ def pipeline_workflow(
     report_path = str(out / "report.parquet")
 
     extract_events_workflow(
-        sqlite_path, events_dir,
-        annotation_version=annotation_version, chroms=chroms,
+        sqlite_path,
+        events_dir,
+        annotation_version=annotation_version,
+        chroms=chroms,
     )
     if partition_dirs:
         score_matrix_workflow(
-            events_dir, list(partition_dirs), store_dir,
-            data_version=data_version, sample_names=sample_names,
-            site=site, annotation_version=annotation_version,
+            events_dir,
+            list(partition_dirs),
+            store_dir,
+            data_version=data_version,
+            sample_names=sample_names,
+            site=site,
+            annotation_version=annotation_version,
         )
     else:
         score_bams_workflow(
-            events_dir, list(bams or []), store_dir,
-            data_version=data_version, offsets=offsets,
-            sample_names=sample_names, multimap=multimap, site=site,
+            events_dir,
+            list(bams or []),
+            store_dir,
+            data_version=data_version,
+            offsets=offsets,
+            sample_names=sample_names,
+            multimap=multimap,
+            site=site,
             annotation_version=annotation_version,
-            transcriptome=transcriptome, exon_df=exon_df,
+            transcriptome=transcriptome,
+            exon_df=exon_df,
         )
     report_workflow(
-        store_dir, events_dir, report_path,
-        data_version=data_version, policy=policy,
+        store_dir,
+        events_dir,
+        report_path,
+        data_version=data_version,
+        policy=policy,
     )
     return {"events": events_dir, "scores": store_dir, "report": report_path}

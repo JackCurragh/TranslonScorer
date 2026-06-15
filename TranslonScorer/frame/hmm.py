@@ -58,7 +58,7 @@ def smooth_posteriors(S: np.ndarray, lambda_switch: float) -> Tuple[np.ndarray, 
     beta = np.zeros_like(E)
     beta[-1] = 1.0
     for t in range(N - 2, -1, -1):
-        beta[t] = (A @ (E[t + 1] * beta[t + 1]))
+        beta[t] = A @ (E[t + 1] * beta[t + 1])
         s = beta[t].sum() or 1.0
         beta[t] /= s
 
@@ -82,4 +82,3 @@ def smooth_posteriors(S: np.ndarray, lambda_switch: float) -> Tuple[np.ndarray, 
         path[t] = int(psi[t + 1, path[t + 1]])
 
     return P, path
-

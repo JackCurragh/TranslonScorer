@@ -121,7 +121,10 @@ def _build_composites(
     # TIS window around ORF start
     comp_kind.append("TIS_region")
     # Prefer actual TIS feature id if present in chain; fall back to literal
-    tis_fid = next((fid for fid, ty in zip(chain, (types_by_id.get(x, "") for x in chain)) if ty == "TIS"), "TIS")
+    tis_fid = next(
+        (fid for fid, ty in zip(chain, (types_by_id.get(x, "") for x in chain)) if ty == "TIS"),
+        "TIS",
+    )
     comp_id.append(tis_fid)
     comp_s.append(-int(tis_range))
     comp_e.append(int(tis_range))
@@ -159,7 +162,10 @@ def _build_composites(
 
     # TTS window around ORF stop
     comp_kind.append("TTS_region")
-    tts_fid = next((fid for fid, ty in zip(chain, (types_by_id.get(x, "") for x in chain)) if ty == "TTS"), "TTS")
+    tts_fid = next(
+        (fid for fid, ty in zip(chain, (types_by_id.get(x, "") for x in chain)) if ty == "TTS"),
+        "TTS",
+    )
     comp_id.append(tts_fid)
     comp_s.append(int((orf_end - orf_start) - tis_range))
     comp_e.append(int((orf_end - orf_start) + tis_range))
@@ -204,11 +210,15 @@ def map_orfs(
     # Build lookup: transcript_id -> row with arrays
     fmap_lookup: Dict[str, Any] = {}
     for r in fmap.iter_rows(named=True):
-        fmap_lookup[str(r["transcript_id"])]=r
+        fmap_lookup[str(r["transcript_id"])] = r
 
     # Feature type map
-    types_by_id: Dict[str, str] = {str(fid): str(ft) for fid, ft in feats.select(["feature_id","feature_type"]).iter_rows()}
-    locus_by_id: Dict[str, str] = {str(fid): str(lid) for fid, lid in feats.select(["feature_id","locus_id"]).iter_rows()}
+    types_by_id: Dict[str, str] = {
+        str(fid): str(ft) for fid, ft in feats.select(["feature_id", "feature_type"]).iter_rows()
+    }
+    locus_by_id: Dict[str, str] = {
+        str(fid): str(lid) for fid, lid in feats.select(["feature_id", "locus_id"]).iter_rows()
+    }
 
     out_rows: List[Dict[str, Any]] = []
     rows_iter = orfs.iter_rows(named=True)
@@ -221,7 +231,8 @@ def map_orfs(
                 e = r.get("stop_pos_tran")
                 if tid is None or s is None or e is None:
                     continue
-                s = int(s); e = int(e)
+                s = int(s)
+                e = int(e)
                 if e <= s:
                     continue
                 fr = fmap_lookup.get(str(tid))
@@ -244,7 +255,9 @@ def map_orfs(
                     if locus:
                         break
                 # Composites
-                ck, cid, cs, ce = _build_composites(fr, s, e, types_by_id, tis_range=tis_range, flank_nt=flank_nt)
+                ck, cid, cs, ce = _build_composites(
+                    fr, s, e, types_by_id, tis_range=tis_range, flank_nt=flank_nt
+                )
                 out_rows.append(
                     {
                         "orf_id": r.get("orf_id"),
@@ -270,7 +283,8 @@ def map_orfs(
             e = r.get("stop_pos_tran")
             if tid is None or s is None or e is None:
                 continue
-            s = int(s); e = int(e)
+            s = int(s)
+            e = int(e)
             if e <= s:
                 continue
             fr = fmap_lookup.get(str(tid))
@@ -292,7 +306,9 @@ def map_orfs(
                 locus = locus_by_id.get(fid)
                 if locus:
                     break
-            ck, cid, cs, ce = _build_composites(fr, s, e, types_by_id, tis_range=tis_range, flank_nt=flank_nt)
+            ck, cid, cs, ce = _build_composites(
+                fr, s, e, types_by_id, tis_range=tis_range, flank_nt=flank_nt
+            )
             out_rows.append(
                 {
                     "orf_id": r.get("orf_id"),
@@ -311,6 +327,5 @@ def map_orfs(
                     "comp_slice_end": ce,
                 }
             )
-        
 
     pl.from_dicts(out_rows).write_parquet(out_parquet)

@@ -3,6 +3,7 @@
 Canonical annotation readers.  Pure I/O adapters: open → parse → close,
 return DataFrames / dicts with no side effects.
 """
+
 from __future__ import annotations
 
 import collections
@@ -21,8 +22,13 @@ def _blocks_from_gtf(gtf_path: str, feature_type: str) -> pl.DataFrame:
     tran_id, gene_id, chr, strand, start[list], stop[list], tran_start[list].
     """
     feats = (
-        pl.scan_csv(gtf_path, separator="\t", has_header=False, comment_prefix="#",
-                    schema_overrides={"column_1": pl.Utf8})
+        pl.scan_csv(
+            gtf_path,
+            separator="\t",
+            has_header=False,
+            comment_prefix="#",
+            schema_overrides={"column_1": pl.Utf8},
+        )
         .select(
             pl.col("column_1").alias("chr"),
             pl.col("column_3").alias("type"),
@@ -42,17 +48,27 @@ def _blocks_from_gtf(gtf_path: str, feature_type: str) -> pl.DataFrame:
     )
     grouped = (
         feats.group_by("tran_id")
-        .agg([
-            pl.col("gene_id").first(),
-            pl.col("chr").first(),
-            pl.col("strand").first(),
-            pl.col("start").sort(),
-            pl.col("stop").sort(),
-        ])
-        .with_columns([
-            pl.when(pl.col("strand") == "-").then(pl.col("start").list.reverse()).otherwise(pl.col("start")).alias("start"),
-            pl.when(pl.col("strand") == "-").then(pl.col("stop").list.reverse()).otherwise(pl.col("stop")).alias("stop"),
-        ])
+        .agg(
+            [
+                pl.col("gene_id").first(),
+                pl.col("chr").first(),
+                pl.col("strand").first(),
+                pl.col("start").sort(),
+                pl.col("stop").sort(),
+            ]
+        )
+        .with_columns(
+            [
+                pl.when(pl.col("strand") == "-")
+                .then(pl.col("start").list.reverse())
+                .otherwise(pl.col("start"))
+                .alias("start"),
+                pl.when(pl.col("strand") == "-")
+                .then(pl.col("stop").list.reverse())
+                .otherwise(pl.col("stop"))
+                .alias("stop"),
+            ]
+        )
     )
 
     def _cumstarts(s) -> list:
@@ -64,7 +80,9 @@ def _blocks_from_gtf(gtf_path: str, feature_type: str) -> pl.DataFrame:
         return out
 
     return grouped.with_columns(
-        pl.struct(["start", "stop"]).map_elements(_cumstarts, return_dtype=pl.List(pl.Int64)).alias("tran_start")
+        pl.struct(["start", "stop"])
+        .map_elements(_cumstarts, return_dtype=pl.List(pl.Int64))
+        .alias("tran_start")
     )
 
 
@@ -91,13 +109,21 @@ def build_gene_spans(
 
     Returns ({(chrom, strand): sorted [(start, stop, gene_code)]}, {gene_code: gene_id}).
     """
-    per_tx = cds_df.with_columns([
-        pl.col("start").list.min().alias("g_start"),
-        pl.col("stop").list.max().alias("g_stop"),
-    ]).group_by(["chr", "strand", "gene_id"]).agg([
-        pl.col("g_start").min(),
-        pl.col("g_stop").max(),
-    ])
+    per_tx = (
+        cds_df.with_columns(
+            [
+                pl.col("start").list.min().alias("g_start"),
+                pl.col("stop").list.max().alias("g_stop"),
+            ]
+        )
+        .group_by(["chr", "strand", "gene_id"])
+        .agg(
+            [
+                pl.col("g_start").min(),
+                pl.col("g_stop").max(),
+            ]
+        )
+    )
     gene_ids = per_tx.get_column("gene_id").to_list()
     code_of = {g: i for i, g in enumerate(sorted(set(gene_ids)))}
     id_of = {i: g for g, i in code_of.items()}

@@ -9,6 +9,7 @@ tests the provider-specific behaviour:
   - Coverage via BamSetProvider scores GAPDH with sane init/elong/term calls
     (when real BAM is available).
 """
+
 from __future__ import annotations
 
 import os
@@ -31,12 +32,17 @@ HAS_BAM = GENOME_BAM.exists()
 # Protocol compliance (no real data needed)
 # ---------------------------------------------------------------------------
 
+
 def test_bam_set_provider_protocols():
     """BamSetProvider satisfies all four capability protocols."""
     from TranslonScorer.coverage.bam import BamSetProvider
     from TranslonScorer.coverage.base import (
-        CoverageProvider, SupportsSites, SupportsJunctions, SupportsMappability,
+        CoverageProvider,
+        SupportsSites,
+        SupportsJunctions,
+        SupportsMappability,
     )
+
     provider = BamSetProvider([])
     assert isinstance(provider, CoverageProvider)
     assert isinstance(provider, SupportsSites)
@@ -48,8 +54,11 @@ def test_bigwig_set_provider_protocols():
     """BigwigSetProvider satisfies only CoverageProvider (no junctions/sites)."""
     from TranslonScorer.coverage.bigwig import BigwigSetProvider
     from TranslonScorer.coverage.base import (
-        CoverageProvider, SupportsJunctions, SupportsMappability,
+        CoverageProvider,
+        SupportsJunctions,
+        SupportsMappability,
     )
+
     provider = BigwigSetProvider([])
     assert isinstance(provider, CoverageProvider)
     # Bigwig does NOT satisfy SupportsJunctions or SupportsMappability
@@ -88,13 +97,16 @@ def test_metagene_offsets_picks_plausible_peak():
     """metagene_offsets picks the max-count rel_pos within the plausible window."""
     from TranslonScorer.offsets import metagene_offsets
     from TranslonScorer.model import OffsetParams
-    df = pl.DataFrame({
-        "read_length": [29, 29, 29, 30, 30],
-        "rel_pos":     [12, 11, 40, 13, 12],   # 40 is implausible (hi=19 for L29) → dropped
-        "count":       [100.0, 10.0, 999.0, 80.0, 20.0],
-    })
+
+    df = pl.DataFrame(
+        {
+            "read_length": [29, 29, 29, 30, 30],
+            "rel_pos": [12, 11, 40, 13, 12],  # 40 is implausible (hi=19 for L29) → dropped
+            "count": [100.0, 10.0, 999.0, 80.0, 20.0],
+        }
+    )
     off = metagene_offsets(df, OffsetParams())
-    assert off[29] == 12   # 40 filtered out; 12 wins among plausible
+    assert off[29] == 12  # 40 filtered out; 12 wins among plausible
     assert off[30] == 13
 
 
@@ -123,6 +135,7 @@ def test_metagene_offsets_on_fixture():
 def test_transcriptome_requires_exon_df():
     """transcriptome=True without exon_df fails loudly (can't project without structure)."""
     from TranslonScorer.coverage.bam import BamSetProvider
+
     with pytest.raises(ValueError):
         BamSetProvider(["t.bam"], transcriptome=True)
 
@@ -130,6 +143,7 @@ def test_transcriptome_requires_exon_df():
 def test_site_position_strand_aware():
     """P/A-site placement is strand-aware: + uses 5'=ref_start, - uses 5'=ref_end-1."""
     from TranslonScorer.coverage.profile import site_position
+
     # + strand read [1000, 1029): 5'=1000; P=1000+12=1012; A=1015
     assert site_position(1000, 1029, False, 12, "P") == (1, 1012)
     assert site_position(1000, 1029, False, 12, "A") == (1, 1015)
@@ -142,6 +156,7 @@ def test_bam_coverage_emits_strand():
     """coverage() output carries a strand column (protocol contract)."""
     from TranslonScorer.coverage.bam import BamSetProvider
     from TranslonScorer.model import Region, OffsetParams
+
     provider = BamSetProvider([], offsets=OffsetParams(method="global"))
     result = provider.coverage([Region("chr12", 1000, 2000)])
     assert "strand" in result.columns and "pos" in result.columns and "count" in result.columns
@@ -182,6 +197,7 @@ def test_bam_set_provider_mappability_ledger_empty():
 # Real-data tests (skipped unless SRR11005875.bam is present)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not HAS_BAM, reason="genome GAPDH fixture not in data/")
 def test_srr_bam_offsets_calibrated_once():
     """Offsets are calibrated once per BAM/length and cached across coverage() calls."""
@@ -220,10 +236,12 @@ def test_srr_gapdh_score_sane():
     )
     region = Region("chr12", 6534512, 6538371)
     cov_df = provider.coverage([region], site="A").filter(pl.col("strand") == 1)  # GAPDH +
-    cov_dict: Dict[int, float] = dict(zip(
-        cov_df["pos"].to_list(),
-        cov_df["count"].to_list(),
-    ))
+    cov_dict: Dict[int, float] = dict(
+        zip(
+            cov_df["pos"].to_list(),
+            cov_df["count"].to_list(),
+        )
+    )
 
     thr = ScoreThresholds()
     events = _gapdh_events()
@@ -234,6 +252,9 @@ def test_srr_gapdh_score_sane():
 
     # With real data, init/elong/term should at minimum be ELIGIBLE or SUPPORTED
     for aspect in ("init", "elongation", "term"):
-        assert calls.get(aspect) in ("SUPPORTED", "AMBIGUOUS", "ELIGIBLE", None), (
-            f"unexpected call for {aspect}: {calls.get(aspect)}"
-        )
+        assert calls.get(aspect) in (
+            "SUPPORTED",
+            "AMBIGUOUS",
+            "ELIGIBLE",
+            None,
+        ), f"unexpected call for {aspect}: {calls.get(aspect)}"

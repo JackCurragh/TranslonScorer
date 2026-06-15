@@ -25,6 +25,7 @@ Public API
 build_exon_index   — exon_df → {tran_id: ExonModel}
 project_to_genome  — (ExonModel, transcript_pos) → (strand∈{1,-1}, genomic_pos) | None
 """
+
 from __future__ import annotations
 
 from typing import Dict, List, NamedTuple, Optional, Tuple

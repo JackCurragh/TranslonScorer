@@ -43,7 +43,9 @@ def cds_to_transcript_space(cds_df: pl.DataFrame, exon_df: pl.DataFrame) -> pl.D
 
     required = {"tran_id", "start", "stop"}
     exon_required = {"tran_id", "start", "stop", "tran_start", "tran_stop"}
-    if not required.issubset(set(cds_df.columns)) or not exon_required.issubset(set(exon_df.columns)):
+    if not required.issubset(set(cds_df.columns)) or not exon_required.issubset(
+        set(exon_df.columns)
+    ):
         log_warning("CDS/exon schema lacks coordinate columns; using CDS coordinates unchanged")
         return cds_df
 
@@ -108,4 +110,3 @@ def cds_to_transcript_space(cds_df: pl.DataFrame, exon_df: pl.DataFrame) -> pl.D
 
     log_info(f"Mapped {mapped_df.height} CDS intervals to transcript coordinates")
     return mapped_df
-

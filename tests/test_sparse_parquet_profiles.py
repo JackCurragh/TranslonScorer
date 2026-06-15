@@ -99,9 +99,33 @@ def test_sparse_parquet_profiles_preserve_runs_and_gene_matrix(tmp_path):
     offset = offsets[28]
     profile_rows = profiles.sort(["sample_id", "tran_id", "pos"]).to_dicts()
     assert profile_rows == [
-        {"sample_id": "run_a", "sample_index": 0, "study_id": "study_a", "study_id_int": 0, "tran_id": "tx1", "pos": 10 + offset, "count": 2.0},
-        {"sample_id": "run_b", "sample_index": 1, "study_id": "study_b", "study_id_int": 1, "tran_id": "tx1", "pos": 10 + offset, "count": 5.0},
-        {"sample_id": "run_b", "sample_index": 1, "study_id": "study_b", "study_id_int": 1, "tran_id": "tx1", "pos": 20 + offset, "count": 7.0},
+        {
+            "sample_id": "run_a",
+            "sample_index": 0,
+            "study_id": "study_a",
+            "study_id_int": 0,
+            "tran_id": "tx1",
+            "pos": 10 + offset,
+            "count": 2.0,
+        },
+        {
+            "sample_id": "run_b",
+            "sample_index": 1,
+            "study_id": "study_b",
+            "study_id_int": 1,
+            "tran_id": "tx1",
+            "pos": 10 + offset,
+            "count": 5.0,
+        },
+        {
+            "sample_id": "run_b",
+            "sample_index": 1,
+            "study_id": "study_b",
+            "study_id_int": 1,
+            "tran_id": "tx1",
+            "pos": 20 + offset,
+            "count": 7.0,
+        },
     ]
 
     transcripts = pl.DataFrame({"tran_id": ["tx1"], "gene_id": ["gene1"]})

@@ -19,6 +19,7 @@ size_factors(profiles, sample_col)                          → {sample: float}
 _prefix_sums(cov_pos, cov_cnt)        → (pos_arr, cum_all, cum_frame)
 _range_sums(pos_arr, cum_all, cum_f, starts, ends) → (total, frames, covered)
 """
+
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
@@ -31,8 +32,10 @@ import polars as pl
 # Strand-aware genomic site placement (pure)
 # ---------------------------------------------------------------------------
 
-def site_position(ref_start: int, ref_end: int, is_reverse: bool,
-                  p_offset: int, site: str = "A") -> Tuple[int, int]:
+
+def site_position(
+    ref_start: int, ref_end: int, is_reverse: bool, p_offset: int, site: str = "A"
+) -> Tuple[int, int]:
     """Genomic (strand, position) of the P- or A-site for one aligned read.
 
     The 5' end of the footprint is `ref_start` on + strand and `ref_end - 1`
@@ -48,6 +51,7 @@ def site_position(ref_start: int, ref_end: int, is_reverse: bool,
 # ---------------------------------------------------------------------------
 # Core profile builder (pure — no I/O, no offset inference)
 # ---------------------------------------------------------------------------
+
 
 def apply_offsets(
     reads_df: pl.DataFrame,
@@ -93,20 +97,14 @@ def apply_offsets(
     def _offset(length: int) -> int:
         return int(offset_table.get(int(length), default_offset)) + a_shift
 
-    sample_cols = [
-        c for c in ("sample_id", "sample_index", "study_id")
-        if c in reads_df.columns
-    ]
+    sample_cols = [c for c in ("sample_id", "sample_index", "study_id") if c in reads_df.columns]
     group_cols = sample_cols + ["tran_id", "pos"]
     if keep_length and "length" in reads_df.columns:
         group_cols = group_cols + ["length"]
 
     out = (
-        reads_df
-        .with_columns(
-            pl.col("length")
-            .map_elements(_offset, return_dtype=pl.Int64)
-            .alias("_ofs"),
+        reads_df.with_columns(
+            pl.col("length").map_elements(_offset, return_dtype=pl.Int64).alias("_ofs"),
             pl.col("tran_start_bam").cast(pl.Int64),
         )
         .with_columns((pl.col("tran_start_bam") + pl.col("_ofs")).alias("pos"))
@@ -114,16 +112,13 @@ def apply_offsets(
     )
     if not keep_length:
         out = out.drop("length", strict=False)
-    return (
-        out.group_by(group_cols)
-        .agg(pl.col("count").sum())
-        .sort(group_cols)
-    )
+    return out.group_by(group_cols).agg(pl.col("count").sum()).sort(group_cols)
 
 
 # ---------------------------------------------------------------------------
 # Size factor estimation (pure — no file I/O)
 # ---------------------------------------------------------------------------
+
 
 def size_factors(
     profiles: pl.DataFrame,
@@ -182,6 +177,7 @@ def size_factors(
 # (the scoring layer imports from scoring/run.py which re-exports these)
 # ---------------------------------------------------------------------------
 
+
 def _prefix_sums(
     cov_pos: np.ndarray,
     cov_cnt: np.ndarray,
@@ -207,10 +203,7 @@ def _prefix_sums(
     c = cov_cnt[order].astype(np.float64)
     fr = np.mod(p, 3)
     cum_all = np.concatenate([[0.0], np.cumsum(c)])
-    cum_f = [
-        np.concatenate([[0.0], np.cumsum(np.where(fr == f, c, 0.0))])
-        for f in range(3)
-    ]
+    cum_f = [np.concatenate([[0.0], np.cumsum(np.where(fr == f, c, 0.0))]) for f in range(3)]
     return p, cum_all, cum_f
 
 
@@ -241,8 +234,6 @@ def _range_sums(
     lo = np.searchsorted(p, starts, side="left")
     hi = np.searchsorted(p, ends, side="left")
     total = cum_all[hi] - cum_all[lo]
-    frames = np.stack(
-        [cum_f[f][hi] - cum_f[f][lo] for f in range(3)], axis=-1
-    )
+    frames = np.stack([cum_f[f][hi] - cum_f[f][lo] for f in range(3)], axis=-1)
     covered = hi - lo
     return total, frames, covered

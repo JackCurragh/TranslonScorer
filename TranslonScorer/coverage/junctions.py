@@ -22,18 +22,18 @@ def aggregate_bam_junctions(bam_path: str) -> pl.DataFrame:
     OP_S = 4  # S
     OP_H = 5  # H
     OP_P = 6  # P
-    OP_EQ = 7 # =
+    OP_EQ = 7  # =
     OP_X = 8  # X
 
-    counts: Dict[Tuple[str,int,int,str], int] = {}
+    counts: Dict[Tuple[str, int, int, str], int] = {}
 
-    with pysam.AlignmentFile(bam_path, 'rb') as bam:
+    with pysam.AlignmentFile(bam_path, "rb") as bam:
         for aln in bam.fetch(until_eof=True):
             if aln.is_unmapped or aln.cigartuples is None:
                 continue
             chr_name = bam.get_reference_name(aln.reference_id)
             pos = int(aln.reference_start)
-            strand = '-' if aln.is_reverse else '+'
+            strand = "-" if aln.is_reverse else "+"
             for op, length in aln.cigartuples:
                 if op in (OP_M, OP_D, OP_EQ, OP_X):
                     pos += int(length)
@@ -48,9 +48,12 @@ def aggregate_bam_junctions(bam_path: str) -> pl.DataFrame:
                     continue
 
     if not counts:
-        return pl.DataFrame({'chr': [], 'donor_pos': [], 'acceptor_pos': [], 'strand': [], 'count': []})
+        return pl.DataFrame(
+            {"chr": [], "donor_pos": [], "acceptor_pos": [], "strand": [], "count": []}
+        )
 
-    rows = [{'chr': c, 'donor_pos': d, 'acceptor_pos': a, 'strand': s, 'count': cnt}
-            for (c,d,a,s), cnt in counts.items()]
+    rows = [
+        {"chr": c, "donor_pos": d, "acceptor_pos": a, "strand": s, "count": cnt}
+        for (c, d, a, s), cnt in counts.items()
+    ]
     return pl.from_dicts(rows)
-

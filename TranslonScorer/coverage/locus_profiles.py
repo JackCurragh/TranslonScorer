@@ -12,11 +12,12 @@ from ..utils import log_info, log_warning
 _zarr_mod = None
 _zarr_err = None
 
+
 def _require_zarr():
     global _zarr_mod, _zarr_err
     if _zarr_mod is None and _zarr_err is None:
         try:
-            _zarr_mod = importlib.import_module('zarr')
+            _zarr_mod = importlib.import_module("zarr")
         except Exception as e:
             _zarr_err = e
     if _zarr_mod is None:
@@ -48,7 +49,7 @@ def _offset_for(length: int, offsets: Dict[int, int], default_offset: int) -> in
 
 def _iter_loci_from_bed(bed_path: str) -> Iterator[Tuple[str, str, int, int]]:
     """Yield (locus_id, chr, start, stop) from a 4+ column BED-like file."""
-    df = pl.read_csv(bed_path, has_header=False, separator='\t')
+    df = pl.read_csv(bed_path, has_header=False, separator="\t")
     # Columns: chrom, start, end, name, ...
     for row in df.iter_rows():
         chrom = row[0]
@@ -82,10 +83,10 @@ def build_locus_profiles_zarr(
     """
     # Open inputs
     zarr = _require_zarr()
-    store = zarr.open(zarr_root, mode='r')
-    if 'counts' not in store:
+    store = zarr.open(zarr_root, mode="r")
+    if "counts" not in store:
         raise ValueError("Zarr root does not contain 'counts' array")
-    counts = store['counts']
+    counts = store["counts"]
     samples_first = counts.shape[0] <= counts.shape[1]
 
     # Map sample names to indices
@@ -93,14 +94,18 @@ def build_locus_profiles_zarr(
         sample_to_index = {s: i for i, s in enumerate(samples)}
 
     # Write output Zarr
-    out = zarr.open(out_zarr, mode='a')
+    out = zarr.open(out_zarr, mode="a")
     # Save samples once
-    if 'samples' in out:
-        del out['samples']
-    out.create_dataset('samples', data=np.array(samples, dtype=object), dtype=object, overwrite=True)
+    if "samples" in out:
+        del out["samples"]
+    out.create_dataset(
+        "samples", data=np.array(samples, dtype=object), dtype=object, overwrite=True
+    )
 
     # Prepare index scan
-    scan_idx = pl.scan_parquet(read_index_parquet).select(['read_id', 'chr', 'start', 'stop', 'strand', 'length'])
+    scan_idx = pl.scan_parquet(read_index_parquet).select(
+        ["read_id", "chr", "start", "stop", "strand", "length"]
+    )
 
     # Load offsets mapping
     offsets = _load_offsets_dict(offsets_file, default_offset=default_offset)
@@ -116,35 +121,35 @@ def build_locus_profiles_zarr(
         grp = out.require_group(f"loci/{locus_id}")
         # Genomic coordinate axis
         pos_vec = np.arange(locus_start, locus_end, dtype=np.int64)
-        if 'pos' in grp:
-            del grp['pos']
-        grp.create_dataset('pos', data=pos_vec, dtype='i8', overwrite=True)
+        if "pos" in grp:
+            del grp["pos"]
+        grp.create_dataset("pos", data=pos_vec, dtype="i8", overwrite=True)
 
         # Profiles array
-        if 'profiles' in grp:
-            del grp['profiles']
+        if "profiles" in grp:
+            del grp["profiles"]
         prof = grp.create_dataset(
-            'profiles',
+            "profiles",
             shape=(len(samples), locus_len),
             chunks=(min(len(samples), 64), min(locus_len, 16384)),
-            dtype='f4',
+            dtype="f4",
             overwrite=True,
         )
 
         # Get read_ids overlapping locus from index (predicate pushdown)
-        idx = (
-            scan_idx
-            .filter((pl.col('chr') == chrom) & (pl.col('start') < locus_end) & (pl.col('stop') > locus_start))
-            .collect()
-        )
+        idx = scan_idx.filter(
+            (pl.col("chr") == chrom)
+            & (pl.col("start") < locus_end)
+            & (pl.col("stop") > locus_start)
+        ).collect()
         if idx.is_empty():
             continue
 
         # Compute A-site genomic positions for index rows
         # Simple rule: A-site = start + offset (improve for strand-specific when available)
-        lengths = idx.get_column('length').to_list()
+        lengths = idx.get_column("length").to_list()
         ofs = np.array([_offset_for(L, offsets, default_offset) for L in lengths], dtype=np.int64)
-        a_site = (idx.get_column('start').to_numpy() + ofs)
+        a_site = idx.get_column("start").to_numpy() + ofs
         # Keep those within locus bounds
         mask = (a_site >= locus_start) & (a_site < locus_end)
         if not mask.any():
@@ -156,7 +161,7 @@ def build_locus_profiles_zarr(
         col_idx = (a_site - locus_start).astype(np.int64)
 
         # Read IDs for slicing counts
-        read_ids = idx.get_column('read_id').to_numpy()
+        read_ids = idx.get_column("read_id").to_numpy()
 
         # For each sample, slice counts and scatter-add into profiles
         for s_i, s_name in enumerate(samples):

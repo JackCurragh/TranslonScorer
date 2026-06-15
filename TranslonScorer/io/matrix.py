@@ -3,6 +3,7 @@
 Pure I/O adapters — open → read → close, return basic Python / Polars objects.
 No computation, no frame assignment.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,6 +17,7 @@ import polars as pl
 # ---------------------------------------------------------------------------
 # Manifest + lookup helpers
 # ---------------------------------------------------------------------------
+
 
 def _manifest(partition_dir: "str | Path") -> Tuple[Path, dict]:
     d = Path(partition_dir)

@@ -15,4 +15,3 @@ def test_classify_orf_labels():
     assert coordinates.classify_orf(row(12, 18, 10, 20)) == "iORF"
     assert coordinates.classify_orf(row(5, 25, 10, 20)) == "eoORF"
     assert coordinates.classify_orf(row(5, 20, 10, 20)) == "extORF"
-

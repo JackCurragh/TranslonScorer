@@ -17,6 +17,7 @@ cluster_profiles                — simple k-means/agglomerative entry point
 aggregate_cluster_profiles      — {cluster_id: aggregate_profile}
 build_profile_matrix            — tidy profiles DataFrame → dense matrix + pos_vec
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -50,6 +51,7 @@ class ClusterShapeDriverResult:
 # Normalisation
 # ---------------------------------------------------------------------------
 
+
 def normalise_profiles(
     matrix: np.ndarray,
     *,
@@ -82,8 +84,7 @@ def normalise_profiles(
         out = (out - mins) / ranges
     else:
         raise ValueError(
-            f"Unknown normalisation method: {method!r}. "
-            "Choose from: total_count, zscore, minmax"
+            f"Unknown normalisation method: {method!r}. " "Choose from: total_count, zscore, minmax"
         )
     return out
 
@@ -91,6 +92,7 @@ def normalise_profiles(
 # ---------------------------------------------------------------------------
 # Internal numpy k-means with cosine distance
 # ---------------------------------------------------------------------------
+
 
 def _l2_normalise(X: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(X, axis=1, keepdims=True)
@@ -148,8 +150,7 @@ def _agglomerative_cosine(X: np.ndarray, k: int) -> np.ndarray:
         from scipy.spatial.distance import pdist
     except ImportError as exc:
         raise ImportError(
-            "scipy is required for agglomerative clustering. "
-            "Install with: pip install scipy"
+            "scipy is required for agglomerative clustering. " "Install with: pip install scipy"
         ) from exc
     dists = pdist(X, metric="cosine")
     Z = linkage(dists, method="average")
@@ -233,12 +234,8 @@ def _probability_distance_contributions(
         out = np.zeros_like(p)
         p_mask = p > 0
         q_mask = q > 0
-        out[p_mask] += 0.5 * p[p_mask] * np.log2(
-            p[p_mask] / np.maximum(m[p_mask], 1e-300)
-        )
-        out[q_mask] += 0.5 * q[q_mask] * np.log2(
-            q[q_mask] / np.maximum(m[q_mask], 1e-300)
-        )
+        out[p_mask] += 0.5 * p[p_mask] * np.log2(p[p_mask] / np.maximum(m[p_mask], 1e-300))
+        out[q_mask] += 0.5 * q[q_mask] * np.log2(q[q_mask] / np.maximum(m[q_mask], 1e-300))
         return out
     if metric == "hellinger":
         return (np.sqrt(p) - np.sqrt(q)) ** 2 / 2.0
@@ -267,8 +264,7 @@ def _agglomerative_precomputed(
         from scipy.spatial.distance import squareform
     except ImportError as exc:
         raise ImportError(
-            "scipy is required for homogeneous shape clustering. "
-            "Install with: pip install scipy"
+            "scipy is required for homogeneous shape clustering. " "Install with: pip install scipy"
         ) from exc
     if linkage_method not in {"average", "complete", "single"}:
         raise ValueError("linkage_method must be one of: average, complete, single")
@@ -292,8 +288,7 @@ def _agglomerative_distance(
         from scipy.spatial.distance import pdist
     except ImportError as exc:
         raise ImportError(
-            "scipy is required for hierarchical clustering. "
-            "Install with: pip install scipy"
+            "scipy is required for hierarchical clustering. " "Install with: pip install scipy"
         ) from exc
     if linkage_method not in {"average", "complete", "single"}:
         raise ValueError("linkage_method must be one of: average, complete, single")
@@ -356,15 +351,17 @@ def _cluster_diagnostics(
         if low_conf:
             weak.add(cid)
 
-        rows.append({
-            "cluster_id": int(cid),
-            "n_samples": int(len(idx)),
-            "mean_within_cluster_cosine_distance": mean_within,
-            "max_within_cluster_cosine_distance": max_within,
-            "nearest_other_cluster_distance": nearest,
-            "low_confidence": low_conf,
-            "reason": "; ".join(reasons) if reasons else None,
-        })
+        rows.append(
+            {
+                "cluster_id": int(cid),
+                "n_samples": int(len(idx)),
+                "mean_within_cluster_cosine_distance": mean_within,
+                "max_within_cluster_cosine_distance": max_within,
+                "nearest_other_cluster_distance": nearest,
+                "low_confidence": low_conf,
+                "reason": "; ".join(reasons) if reasons else None,
+            }
+        )
 
     pruned = labels.copy()
     for cid in weak:
@@ -416,6 +413,7 @@ def _relabel_active_clusters(labels: np.ndarray) -> Tuple[np.ndarray, Dict[int, 
 # ---------------------------------------------------------------------------
 # Public clustering functions
 # ---------------------------------------------------------------------------
+
 
 def cluster_locus_profiles(
     X_cluster: np.ndarray,
@@ -472,8 +470,10 @@ def cluster_locus_profiles(
         Xi = X[included_idx]
         if method == "kmeans_cosine":
             k = min(int(n_clusters or 1), len(included_idx))
-            local = np.zeros(len(included_idx), dtype=int) if k == 1 else _kmeans_cosine(
-                Xi, k, random_state=random_state
+            local = (
+                np.zeros(len(included_idx), dtype=int)
+                if k == 1
+                else _kmeans_cosine(Xi, k, random_state=random_state)
             )
         elif method == "dbscan":
             try:
@@ -481,9 +481,9 @@ def cluster_locus_profiles(
             except ImportError as exc:
                 raise ImportError("scikit-learn is required for DBSCAN clustering") from exc
             eps = 0.25 if distance_threshold is None else float(distance_threshold)
-            local = DBSCAN(
-                eps=eps, min_samples=min_cluster_size, metric="cosine"
-            ).fit_predict(_distance_space(Xi, metric))
+            local = DBSCAN(eps=eps, min_samples=min_cluster_size, metric="cosine").fit_predict(
+                _distance_space(Xi, metric)
+            )
         else:
             if len(included_idx) == 1 or (n_clusters == 1 and distance_threshold is None):
                 local = np.zeros(len(included_idx), dtype=int)
@@ -497,7 +497,8 @@ def cluster_locus_profiles(
                 )
         labels[included_idx] = local.astype(int)
         summary, pruned_local = _cluster_diagnostics(
-            Xi, local.astype(int),
+            Xi,
+            local.astype(int),
             metric=metric,
             min_cluster_size=min_cluster_size,
             min_separation=min_separation,
@@ -511,9 +512,7 @@ def cluster_locus_profiles(
         nearest, margin = _sample_assignment_diagnostics(X, labels, metric=metric)
         if sample_margin_threshold is not None:
             ambiguous = (
-                (labels >= 0)
-                & np.isfinite(margin)
-                & (margin < float(sample_margin_threshold))
+                (labels >= 0) & np.isfinite(margin) & (margin < float(sample_margin_threshold))
             )
             labels[ambiguous] = -1
             statuses[ambiguous] = "ambiguous"
@@ -547,10 +546,14 @@ def cluster_locus_profiles(
         sample_labels=out_labels,
         cluster_summary=summary,
         params={
-            "method": method, "metric": metric,
-            "n_clusters": n_clusters, "distance_threshold": distance_threshold,
-            "linkage_method": linkage_method, "min_cluster_size": int(min_cluster_size),
-            "min_separation": min_separation, "max_within_distance": max_within_distance,
+            "method": method,
+            "metric": metric,
+            "n_clusters": n_clusters,
+            "distance_threshold": distance_threshold,
+            "linkage_method": linkage_method,
+            "min_cluster_size": int(min_cluster_size),
+            "min_separation": min_separation,
+            "max_within_distance": max_within_distance,
             "sample_margin_threshold": sample_margin_threshold,
         },
     )
@@ -600,8 +603,9 @@ def cluster_locus_shape_homogeneous(
     if len(included_idx) > 0:
         P = P_all[included_idx]
         D = _pairwise_probability_distances(P, metric=distance_metric)
-        local = _agglomerative_precomputed(D, linkage_method=linkage_method,
-                                           distance_threshold=distance_threshold)
+        local = _agglomerative_precomputed(
+            D, linkage_method=linkage_method, distance_threshold=distance_threshold
+        )
 
         accepted_local = local.copy()
         active = sorted(set(local.tolist()))
@@ -620,9 +624,9 @@ def cluster_locus_shape_homogeneous(
 
             centroid = P[idx].mean(axis=0)
             centroid = centroid / max(float(centroid.sum()), 1e-12)
-            centroid_d = np.array([
-                _probability_distance(P[j], centroid, distance_metric) for j in idx
-            ])
+            centroid_d = np.array(
+                [_probability_distance(P[j], centroid, distance_metric) for j in idx]
+            )
             max_centroid = float(centroid_d.max()) if centroid_d.size else 0.0
             mean_centroid = float(centroid_d.mean()) if centroid_d.size else 0.0
 
@@ -642,16 +646,18 @@ def cluster_locus_shape_homogeneous(
             else:
                 centroids[int(cid)] = centroid
 
-            cluster_rows.append({
-                "cluster_id": int(cid),
-                "n_samples": int(len(idx)),
-                "mean_pairwise_distance": mean_within,
-                "max_pairwise_distance": max_within,
-                "mean_member_to_centroid_distance": mean_centroid,
-                "max_member_to_centroid_distance": max_centroid,
-                "low_confidence": low_confidence,
-                "reason": "; ".join(reasons) if reasons else None,
-            })
+            cluster_rows.append(
+                {
+                    "cluster_id": int(cid),
+                    "n_samples": int(len(idx)),
+                    "mean_pairwise_distance": mean_within,
+                    "max_pairwise_distance": max_within,
+                    "mean_member_to_centroid_distance": mean_centroid,
+                    "max_member_to_centroid_distance": max_centroid,
+                    "low_confidence": low_confidence,
+                    "reason": "; ".join(reasons) if reasons else None,
+                }
+            )
 
         labels[included_idx] = accepted_local
         accepted_mask = accepted_local >= 0
@@ -690,17 +696,19 @@ def cluster_locus_shape_homogeneous(
                 pl.col("cluster_id").is_in(active_after_prune).not_().alias("pruned")
             )
 
-    out_labels = pl.DataFrame({
-        "sample_id": sample_names,
-        "qc_pass": include_mask.tolist(),
-        "cluster_id": labels.tolist(),
-        "clustering_status": statuses.tolist(),
-        "locus_total_raw": totals.tolist(),
-        "locus_total_depth_norm": totals.tolist(),
-        "member_to_centroid_distance": member_to_centroid.tolist(),
-        "nearest_cluster_distance": nearest_cluster_distance.tolist(),
-        "nearest_centroid_margin": nearest_centroid_margin.tolist(),
-    })
+    out_labels = pl.DataFrame(
+        {
+            "sample_id": sample_names,
+            "qc_pass": include_mask.tolist(),
+            "cluster_id": labels.tolist(),
+            "clustering_status": statuses.tolist(),
+            "locus_total_raw": totals.tolist(),
+            "locus_total_depth_norm": totals.tolist(),
+            "member_to_centroid_distance": member_to_centroid.tolist(),
+            "nearest_cluster_distance": nearest_cluster_distance.tolist(),
+            "nearest_centroid_margin": nearest_centroid_margin.tolist(),
+        }
+    )
 
     return ProfileClusteringResult(
         sample_labels=out_labels,
@@ -774,17 +782,19 @@ def explain_shape_cluster_drivers(
         centroid = centroid / max(float(centroid.sum()), 1e-12)
         centroids[int(cluster_id)] = centroid
         for i, value in enumerate(centroid):
-            centroid_rows.append({
-                "cluster_id": int(cluster_id),
-                "position_index": int(i),
-                "position": int(pos[i]),
-                "centroid_probability": float(value),
-                "aggregate_fraction": float(aggregate_fraction[i]),
-            })
+            centroid_rows.append(
+                {
+                    "cluster_id": int(cluster_id),
+                    "position_index": int(i),
+                    "position": int(pos[i]),
+                    "centroid_probability": float(value),
+                    "aggregate_fraction": float(aggregate_fraction[i]),
+                }
+            )
 
     contrast_rows = []
     for a_i, cluster_a in enumerate(active_clusters):
-        for cluster_b in active_clusters[a_i + 1:]:
+        for cluster_b in active_clusters[a_i + 1 :]:
             p = centroids[int(cluster_a)]
             q = centroids[int(cluster_b)]
             contributions = _probability_distance_contributions(p, q, distance_metric)
@@ -794,20 +804,22 @@ def explain_shape_cluster_drivers(
             for rank, idx in enumerate(order[:top_n], start=1):
                 contribution = float(contributions[idx])
                 cumulative += contribution
-                contrast_rows.append({
-                    "cluster_a": int(cluster_a),
-                    "cluster_b": int(cluster_b),
-                    "rank": int(rank),
-                    "position_index": int(idx),
-                    "position": int(pos[idx]),
-                    "distance_contribution": contribution,
-                    "distance_fraction": contribution / total if total > 0 else 0.0,
-                    "cumulative_distance_fraction": cumulative / total if total > 0 else 0.0,
-                    "centroid_a_probability": float(p[idx]),
-                    "centroid_b_probability": float(q[idx]),
-                    "probability_difference": float(q[idx] - p[idx]),
-                    "aggregate_fraction": float(aggregate_fraction[idx]),
-                })
+                contrast_rows.append(
+                    {
+                        "cluster_a": int(cluster_a),
+                        "cluster_b": int(cluster_b),
+                        "rank": int(rank),
+                        "position_index": int(idx),
+                        "position": int(pos[idx]),
+                        "distance_contribution": contribution,
+                        "distance_fraction": contribution / total if total > 0 else 0.0,
+                        "cumulative_distance_fraction": cumulative / total if total > 0 else 0.0,
+                        "centroid_a_probability": float(p[idx]),
+                        "centroid_b_probability": float(q[idx]),
+                        "probability_difference": float(q[idx] - p[idx]),
+                        "aggregate_fraction": float(aggregate_fraction[idx]),
+                    }
+                )
 
     return ClusterShapeDriverResult(
         cluster_centroids=pl.DataFrame(centroid_rows),
@@ -838,11 +850,13 @@ def aggregate_score_profiles_by_cluster(
             "Choose from: sum_depth_norm, sum_raw, mean_depth_norm"
         )
     labels = sample_labels.get_column("cluster_id").to_numpy().astype(int)
-    if not include_low_confidence and cluster_summary is not None and not cluster_summary.is_empty():
+    if (
+        not include_low_confidence
+        and cluster_summary is not None
+        and not cluster_summary.is_empty()
+    ):
         weak = set(
-            cluster_summary.filter(pl.col("low_confidence"))
-            .get_column("cluster_id")
-            .to_list()
+            cluster_summary.filter(pl.col("low_confidence")).get_column("cluster_id").to_list()
         )
     else:
         weak = set()
@@ -860,13 +874,15 @@ def aggregate_score_profiles_by_cluster(
         else:
             profile = X_score[mask].sum(axis=0)
         aggregates[int(cid)] = profile
-        rows.append({
-            "cluster_id": int(cid),
-            "sample_count": int(mask.sum()),
-            "total_raw_counts": float(raw_matrix[mask].sum()),
-            "total_depth_norm_counts": float(X_score[mask].sum()),
-            "aggregation_method": method,
-        })
+        rows.append(
+            {
+                "cluster_id": int(cid),
+                "sample_count": int(mask.sum()),
+                "total_raw_counts": float(raw_matrix[mask].sum()),
+                "total_depth_norm_counts": float(X_score[mask].sum()),
+                "aggregation_method": method,
+            }
+        )
 
     out = pl.DataFrame(rows)
     if cluster_summary is not None and not cluster_summary.is_empty() and not out.is_empty():
@@ -877,6 +893,7 @@ def aggregate_score_profiles_by_cluster(
 # ---------------------------------------------------------------------------
 # Simple entry points
 # ---------------------------------------------------------------------------
+
 
 def cluster_profiles(
     matrix: np.ndarray,

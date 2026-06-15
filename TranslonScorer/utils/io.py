@@ -30,4 +30,3 @@ def write_csv_safe(df: Any, path: str, **kwargs) -> str:
     ensure_dir_for_file(path)
     df.write_csv(path, **kwargs)
     return path
-

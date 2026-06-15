@@ -10,6 +10,7 @@ _contention      — elongation events that overlap in a different frame
 _deconflict_intervals  — remove CDS positions with conflicting frame phases
 _build_frame_intervals — per-(chrom,strand) CDS exon intervals with phase
 """
+
 from __future__ import annotations
 
 import collections
@@ -24,6 +25,7 @@ from TranslonScorer.io.bam import normalise_chrom as _normalise_chrom
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _mod3(expr: pl.Expr) -> pl.Expr:
     return ((expr % 3) + 3) % 3
 
@@ -37,6 +39,7 @@ def _eid(key: pl.Expr) -> pl.Expr:
 # Core extraction
 # ---------------------------------------------------------------------------
 
+
 def extract_events(
     blocks: pl.DataFrame,
     translons: pl.DataFrame,
@@ -49,61 +52,96 @@ def extract_events(
                        bed_start, bed_end, seq_region_strand, block_length_nt
     translons columns: translon_id, bed_chrom, bed_start, bed_end, seq_region_strand
     """
-    b = blocks.rename({"seq_region_strand": "strand", "bed_chrom": "chrom"}).with_columns([
-        pl.col("bed_start").cast(pl.Int64),
-        pl.col("bed_end").cast(pl.Int64),
-        pl.col("strand").cast(pl.Int64),
-        pl.col("block_length_nt").cast(pl.Int64),
-        pl.col("translation_block_rank").cast(pl.Int64),
-    ])
+    b = blocks.rename({"seq_region_strand": "strand", "bed_chrom": "chrom"}).with_columns(
+        [
+            pl.col("bed_start").cast(pl.Int64),
+            pl.col("bed_end").cast(pl.Int64),
+            pl.col("strand").cast(pl.Int64),
+            pl.col("block_length_nt").cast(pl.Int64),
+            pl.col("translation_block_rank").cast(pl.Int64),
+        ]
+    )
 
     # Phase per block (CDS-relative 5' offset = cumulative prior length)
-    b = b.sort(["translon_id", "translation_block_rank"]).with_columns(
-        (pl.col("block_length_nt").cum_sum().over("translon_id") - pl.col("block_length_nt")).alias("ts")
-    ).with_columns(
-        pl.when(pl.col("strand") > 0)
-        .then(_mod3(pl.col("ts") - pl.col("bed_start")))
-        .otherwise(_mod3(pl.col("ts") + pl.col("bed_end") - 1))
-        .alias("phase")
+    b = (
+        b.sort(["translon_id", "translation_block_rank"])
+        .with_columns(
+            (
+                pl.col("block_length_nt").cum_sum().over("translon_id") - pl.col("block_length_nt")
+            ).alias("ts")
+        )
+        .with_columns(
+            pl.when(pl.col("strand") > 0)
+            .then(_mod3(pl.col("ts") - pl.col("bed_start")))
+            .otherwise(_mod3(pl.col("ts") + pl.col("bed_end") - 1))
+            .alias("phase")
+        )
     )
 
     # Elongation events
     b = b.with_columns(
-        pl.concat_str([
-            pl.lit("E"), pl.col("chrom"), pl.col("strand").cast(pl.Utf8),
-            pl.col("bed_start").cast(pl.Utf8), pl.col("bed_end").cast(pl.Utf8),
-            pl.col("phase").cast(pl.Utf8),
-        ], separator="|").alias("_k")
+        pl.concat_str(
+            [
+                pl.lit("E"),
+                pl.col("chrom"),
+                pl.col("strand").cast(pl.Utf8),
+                pl.col("bed_start").cast(pl.Utf8),
+                pl.col("bed_end").cast(pl.Utf8),
+                pl.col("phase").cast(pl.Utf8),
+            ],
+            separator="|",
+        ).alias("_k")
     ).with_columns(_eid(pl.col("_k")))
     elong_events = b.unique("event_id").select(
-        "event_id", pl.lit("elongation").alias("type"), "chrom", "strand",
-        pl.col("bed_start").alias("start"), pl.col("bed_end").alias("end"), "phase",
+        "event_id",
+        pl.lit("elongation").alias("type"),
+        "chrom",
+        "strand",
+        pl.col("bed_start").alias("start"),
+        pl.col("bed_end").alias("end"),
+        "phase",
     )
     fe_elong = b.select(
-        pl.col("translon_id").alias("feature_id"), "event_id",
+        pl.col("translon_id").alias("feature_id"),
+        "event_id",
         pl.lit("elongation").alias("role"),
-        pl.col("translation_block_rank").alias("rank"), "phase",
+        pl.col("translation_block_rank").alias("rank"),
+        "phase",
     )
 
     # Junction events (genomic adjacencies within a translon)
-    bj = b.sort(["translon_id", "bed_start"]).with_columns(
-        pl.col("bed_start").shift(-1).over("translon_id").alias("next_start")
-    ).filter(pl.col("next_start").is_not_null() & (pl.col("next_start") > pl.col("bed_end")))
+    bj = (
+        b.sort(["translon_id", "bed_start"])
+        .with_columns(pl.col("bed_start").shift(-1).over("translon_id").alias("next_start"))
+        .filter(pl.col("next_start").is_not_null() & (pl.col("next_start") > pl.col("bed_end")))
+    )
     if bj.height:
         bj = bj.with_columns(
-            pl.concat_str([
-                pl.lit("J"), pl.col("chrom"), pl.col("strand").cast(pl.Utf8),
-                pl.col("bed_end").cast(pl.Utf8), pl.col("next_start").cast(pl.Utf8),
-            ], separator="|").alias("_k")
+            pl.concat_str(
+                [
+                    pl.lit("J"),
+                    pl.col("chrom"),
+                    pl.col("strand").cast(pl.Utf8),
+                    pl.col("bed_end").cast(pl.Utf8),
+                    pl.col("next_start").cast(pl.Utf8),
+                ],
+                separator="|",
+            ).alias("_k")
         ).with_columns(_eid(pl.col("_k")))
         junc_events = bj.unique("event_id").select(
-            "event_id", pl.lit("junction").alias("type"), "chrom", "strand",
-            pl.col("bed_end").alias("start"), pl.col("next_start").alias("end"),
+            "event_id",
+            pl.lit("junction").alias("type"),
+            "chrom",
+            "strand",
+            pl.col("bed_end").alias("start"),
+            pl.col("next_start").alias("end"),
             pl.lit(None, dtype=pl.Int64).alias("phase"),
         )
         fe_junc = bj.select(
-            pl.col("translon_id").alias("feature_id"), "event_id",
-            pl.lit("junction").alias("role"), pl.col("translation_block_rank").alias("rank"),
+            pl.col("translon_id").alias("feature_id"),
+            "event_id",
+            pl.lit("junction").alias("role"),
+            pl.col("translation_block_rank").alias("rank"),
             pl.lit(None, dtype=pl.Int64).alias("phase"),
         )
     else:
@@ -111,26 +149,57 @@ def extract_events(
         fe_junc = fe_elong.clear()
 
     # Init / term events (translon 5' / 3' ends)
-    t = translons.rename({"seq_region_strand": "strand", "bed_chrom": "chrom"}).with_columns([
-        pl.col("bed_start").cast(pl.Int64), pl.col("bed_end").cast(pl.Int64), pl.col("strand").cast(pl.Int64),
-    ]).with_columns([
-        pl.when(pl.col("strand") > 0).then(pl.col("bed_start")).otherwise(pl.col("bed_end") - 1).alias("init_pos"),
-        pl.when(pl.col("strand") > 0).then(pl.col("bed_end") - 1).otherwise(pl.col("bed_start")).alias("term_pos"),
-    ])
+    t = (
+        translons.rename({"seq_region_strand": "strand", "bed_chrom": "chrom"})
+        .with_columns(
+            [
+                pl.col("bed_start").cast(pl.Int64),
+                pl.col("bed_end").cast(pl.Int64),
+                pl.col("strand").cast(pl.Int64),
+            ]
+        )
+        .with_columns(
+            [
+                pl.when(pl.col("strand") > 0)
+                .then(pl.col("bed_start"))
+                .otherwise(pl.col("bed_end") - 1)
+                .alias("init_pos"),
+                pl.when(pl.col("strand") > 0)
+                .then(pl.col("bed_end") - 1)
+                .otherwise(pl.col("bed_start"))
+                .alias("term_pos"),
+            ]
+        )
+    )
 
     def _point_events(pos_col: str, typ: str, prefix: str):
         tt = t.with_columns(
-            pl.concat_str([pl.lit(prefix), pl.col("chrom"), pl.col("strand").cast(pl.Utf8),
-                           pl.col(pos_col).cast(pl.Utf8)], separator="|").alias("_k")
+            pl.concat_str(
+                [
+                    pl.lit(prefix),
+                    pl.col("chrom"),
+                    pl.col("strand").cast(pl.Utf8),
+                    pl.col(pos_col).cast(pl.Utf8),
+                ],
+                separator="|",
+            ).alias("_k")
         ).with_columns(_eid(pl.col("_k")))
         ev = tt.unique("event_id").select(
-            "event_id", pl.lit(typ).alias("type"), "chrom", "strand",
-            pl.col(pos_col).alias("start"), (pl.col(pos_col) + 1).alias("end"),
+            "event_id",
+            pl.lit(typ).alias("type"),
+            "chrom",
+            "strand",
+            pl.col(pos_col).alias("start"),
+            (pl.col(pos_col) + 1).alias("end"),
             pl.lit(None, dtype=pl.Int64).alias("phase"),
         )
-        fe = tt.select(pl.col("translon_id").alias("feature_id"), "event_id",
-                       pl.lit(typ).alias("role"), pl.lit(0, dtype=pl.Int64).alias("rank"),
-                       pl.lit(None, dtype=pl.Int64).alias("phase"))
+        fe = tt.select(
+            pl.col("translon_id").alias("feature_id"),
+            "event_id",
+            pl.lit(typ).alias("role"),
+            pl.lit(0, dtype=pl.Int64).alias("rank"),
+            pl.lit(None, dtype=pl.Int64).alias("phase"),
+        )
         return ev, fe
 
     init_events, fe_init = _point_events("init_pos", "init", "I")
@@ -166,8 +235,12 @@ def run_extract(
     (out / "event_overlap").mkdir(parents=True, exist_ok=True)
 
     con = sqlite3.connect(sqlite_path)
-    all_chroms = [r[0] for r in con.execute(
-        "SELECT DISTINCT bed_chrom FROM translons WHERE bed_chrom IS NOT NULL").fetchall()]
+    all_chroms = [
+        r[0]
+        for r in con.execute(
+            "SELECT DISTINCT bed_chrom FROM translons WHERE bed_chrom IS NOT NULL"
+        ).fetchall()
+    ]
     if chroms:
         wanted = set(chroms)
         chroms = [c for c in all_chroms if c in wanted]
@@ -180,11 +253,15 @@ def run_extract(
         blocks = pl.read_database(
             "SELECT translon_id, translation_block_rank, bed_chrom, bed_start, bed_end, "
             "seq_region_strand, block_length_nt FROM translon_blocks WHERE bed_chrom = ?",
-            con, execute_options={"parameters": [chrom]})
+            con,
+            execute_options={"parameters": [chrom]},
+        )
         trans = pl.read_database(
             "SELECT translon_id, bed_chrom, bed_start, bed_end, seq_region_strand "
             "FROM translons WHERE bed_chrom = ?",
-            con, execute_options={"parameters": [chrom]})
+            con,
+            execute_options={"parameters": [chrom]},
+        )
         if blocks.is_empty():
             continue
         events, fe, overlap = extract_events(blocks, trans, annotation_version=annotation_version)
@@ -192,25 +269,39 @@ def run_extract(
         events.write_parquet(out / "events" / f"{safe}.parquet")
         fe.write_parquet(out / "feature_event" / f"{safe}.parquet")
         overlap.write_parquet(out / "event_overlap" / f"{safe}.parquet")
-        n_ev += events.height; n_fe += fe.height; n_ov += overlap.height
+        n_ev += events.height
+        n_fe += fe.height
+        n_ov += overlap.height
         for t_type, c in events.group_by("type").len().iter_rows():
             by_type[t_type] = by_type.get(t_type, 0) + c
     con.close()
-    return {"events": n_ev, "feature_event": n_fe, "event_overlap": n_ov,
-            "by_type": by_type, "chroms": len(chroms)}
+    return {
+        "events": n_ev,
+        "feature_event": n_fe,
+        "event_overlap": n_ov,
+        "by_type": by_type,
+        "chroms": len(chroms),
+    }
 
 
 # ---------------------------------------------------------------------------
 # Contention: elongation events overlapping in a different frame
 # ---------------------------------------------------------------------------
 
+
 def _contention(elong: pl.DataFrame) -> pl.DataFrame:
     """Elongation events that overlap another in a DIFFERENT reading-frame
     register → convoluted signal. Returns (event_id, other_event_id,
     overlap_start, overlap_end). Sweep-line per (chrom, strand)."""
     if elong.is_empty():
-        return pl.DataFrame(schema={"event_id": pl.UInt64, "other_event_id": pl.UInt64,
-                                    "overlap_start": pl.Int64, "overlap_end": pl.Int64})
+        return pl.DataFrame(
+            schema={
+                "event_id": pl.UInt64,
+                "other_event_id": pl.UInt64,
+                "overlap_start": pl.Int64,
+                "overlap_end": pl.Int64,
+            }
+        )
     e = elong.with_columns(pl.col("phase").alias("reg"))
     rows = []
     for (_chrom, _strand), grp in e.group_by(["chrom", "strand"]):
@@ -226,15 +317,23 @@ def _contention(elong: pl.DataFrame) -> pl.DataFrame:
                         rows.append((aid, eid, os, oe))
             active.append((en, eid, s, reg))
     if not rows:
-        return pl.DataFrame(schema={"event_id": pl.UInt64, "other_event_id": pl.UInt64,
-                                    "overlap_start": pl.Int64, "overlap_end": pl.Int64})
-    return pl.DataFrame(rows, schema=["event_id", "other_event_id", "overlap_start", "overlap_end"],
-                        orient="row")
+        return pl.DataFrame(
+            schema={
+                "event_id": pl.UInt64,
+                "other_event_id": pl.UInt64,
+                "overlap_start": pl.Int64,
+                "overlap_end": pl.Int64,
+            }
+        )
+    return pl.DataFrame(
+        rows, schema=["event_id", "other_event_id", "overlap_start", "overlap_end"], orient="row"
+    )
 
 
 # ---------------------------------------------------------------------------
 # CDS frame interval utilities (annotation-derived, pure)
 # ---------------------------------------------------------------------------
+
 
 def _deconflict_intervals(
     intervals: List[Tuple[int, int, int]],
@@ -282,7 +381,7 @@ def _deconflict_intervals(
 
 
 def _build_frame_intervals(
-    exon_df: pl.DataFrame,   # unused — cds_df already carries CDS exon structure
+    exon_df: pl.DataFrame,  # unused — cds_df already carries CDS exon structure
     cds_df: pl.DataFrame,
     bam_refs: set,
 ) -> Dict[Tuple[str, str], List[Tuple[int, int, int]]]:
@@ -298,9 +397,9 @@ def _build_frame_intervals(
         norm = _normalise_chrom(chrom, bam_refs)
         if norm is None:
             continue
-        strand  = str(row["strand"])
-        starts  = row["start"]
-        stops   = row["stop"]
+        strand = str(row["strand"])
+        starts = row["start"]
+        stops = row["stop"]
         ts_list = row["tran_start"]
         key = (norm, strand)
         bucket = raw.setdefault(key, [])
@@ -311,7 +410,4 @@ def _build_frame_intervals(
                 phase = int(ts + ee - 1) % 3
             bucket.append((int(es), int(ee), phase))
 
-    return {
-        k: _deconflict_intervals(sorted(v, key=lambda x: x[0]))
-        for k, v in raw.items()
-    }
+    return {k: _deconflict_intervals(sorted(v, key=lambda x: x[0])) for k, v in raw.items()}

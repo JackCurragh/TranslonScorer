@@ -4,6 +4,7 @@ Covers report.compose_report (scores + feature_event → per-translon rows, with
 shared events giving identical aspect scores to both translons) and
 consequential.apply_policy (tier-confidence × expression, no hard gates).
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -96,8 +97,7 @@ def test_apply_policy_no_hard_length_gate():
         }
     )
     fe = pl.DataFrame(
-        {"feature_id": ["tiny"] * 3, "event_id": [1, 2, 3],
-         "role": ["init", "elongation", "term"]}
+        {"feature_id": ["tiny"] * 3, "event_id": [1, 2, 3], "role": ["init", "elongation", "term"]}
     )
     out = apply_policy(compose_report(scores, fe), ConsequentialityPolicy())
     assert out.filter(pl.col("feature_id") == "tiny")["consequential"][0] is True

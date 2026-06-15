@@ -9,6 +9,7 @@ Bigwigs carry pre-computed coverage with no read-length information, so:
 
 Requires pyBigWig (pip install pyBigWig).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -95,7 +96,8 @@ class BigwigSetProvider:
         all_rows: List[dict] = []
         for bw_path, sample_id in zip(self._bigwigs, self._sample_names):
             paths = (
-                [str(bw_path)] if isinstance(bw_path, (str, Path))
+                [str(bw_path)]
+                if isinstance(bw_path, (str, Path))
                 else [str(v) for v in bw_path.values() if v is not None]
             )
             for path in paths:
@@ -123,11 +125,7 @@ class BigwigSetProvider:
 
         df = pl.DataFrame(all_rows)
         group_cols = ["pos"] + (["sample_id"] if by_sample else [])
-        return (
-            df.group_by(group_cols)
-            .agg(pl.col("count").sum())
-            .sort("pos")
-        )
+        return df.group_by(group_cols).agg(pl.col("count").sum()).sort("pos")
 
     def size_factors(self) -> Dict[str, float]:
         """Return 1.0 per bigwig (external normalisation assumed)."""

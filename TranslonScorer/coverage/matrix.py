@@ -15,6 +15,7 @@ SupportsSites       — coverage(…, site="P"|"A", …)
 SupportsJunctions   — junction_support()
 SupportsMappability — mappability_ledger() (stub; returns empty ledger)
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -92,10 +93,7 @@ class MatrixProvider:
         from TranslonScorer.matrix_rollup import region_coverage
 
         a_shift = 3 if site == "A" else 0
-        query_regions = [
-            Region(r.chrom, r.start - a_shift, r.end - a_shift)
-            for r in regions
-        ]
+        query_regions = [Region(r.chrom, r.start - a_shift, r.end - a_shift) for r in regions]
 
         group_level = "sample" if by_sample else "aggregate"
         df = region_coverage(
@@ -164,6 +162,7 @@ class MatrixProvider:
 # ---------------------------------------------------------------------------
 # coverage() adapter: dict → DataFrame (for testing / lightweight paths)
 # ---------------------------------------------------------------------------
+
 
 class DictCoverageProvider:
     """Minimal CoverageProvider wrapping a {pos: count} dict.

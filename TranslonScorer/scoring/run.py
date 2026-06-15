@@ -14,6 +14,7 @@ score_elongation_batch  — vectorised elongation: prefix sums → {event_id: di
 score_events            — scalar reference scorer → pl.DataFrame
 score_events_vectorised — vectorised scorer → pl.DataFrame
 """
+
 from __future__ import annotations
 
 from typing import Dict, List, Optional
@@ -50,6 +51,7 @@ from TranslonScorer.coverage.profile import (  # noqa: E402, F401
 # Vectorised elongation kernel
 # ---------------------------------------------------------------------------
 
+
 def score_elongation_batch(
     elong: pl.DataFrame,
     overlaps_df: pl.DataFrame,
@@ -78,32 +80,35 @@ def score_elongation_batch(
     cont_nt = _np.zeros(len(eids))
     comp_frames: Dict[int, dict] = {}
     if overlaps_df is not None and not overlaps_df.is_empty():
-        od = overlaps_df.with_columns([
-            pl.col("event_id").cast(pl.UInt64),
-            pl.col("other_event_id").cast(pl.UInt64),
-        ]).filter(
-            pl.col("event_id").is_in(elong["event_id"].cast(pl.UInt64))
-        ).sort(["event_id", "overlap_start"])
+        od = (
+            overlaps_df.with_columns(
+                [
+                    pl.col("event_id").cast(pl.UInt64),
+                    pl.col("other_event_id").cast(pl.UInt64),
+                ]
+            )
+            .filter(pl.col("event_id").is_in(elong["event_id"].cast(pl.UInt64)))
+            .sort(["event_id", "overlap_start"])
+        )
         if not od.is_empty():
             m_start, m_end, m_idx = [], [], []
             for eid, grp in od.group_by("event_id", maintain_order=True):
                 i = idx_of[int(eid[0] if isinstance(eid, tuple) else eid)]
-                ivs = sorted(zip(
-                    grp["overlap_start"].to_list(), grp["overlap_end"].to_list()
-                ))
+                ivs = sorted(zip(grp["overlap_start"].to_list(), grp["overlap_end"].to_list()))
                 cs, ce = ivs[0]
                 merged = []
                 for s, e in ivs[1:]:
                     if s <= ce:
                         ce = max(ce, e)
                     else:
-                        merged.append((cs, ce)); cs, ce = s, e
+                        merged.append((cs, ce))
+                        cs, ce = s, e
                 merged.append((cs, ce))
                 for s, e in merged:
-                    m_start.append(s); m_end.append(e); m_idx.append(i)
-                for cid, cph in zip(
-                    grp["other_event_id"].to_list(), grp["comp_phase"].to_list()
-                ):
+                    m_start.append(s)
+                    m_end.append(e)
+                    m_idx.append(i)
+                for cid, cph in zip(grp["other_event_id"].to_list(), grp["comp_phase"].to_list()):
                     af = (-cph) % 3 if strand[i] > 0 else cph % 3
                     comp_frames.setdefault(i, {})[int(cid)] = int(af)
             m_start = _np.array(m_start, dtype=_np.int64)
@@ -119,9 +124,17 @@ def score_elongation_batch(
         clean_tot = float(tot_w[i] - cont_tot[i])
         clean_inf = float(fr_w[i][a_e[i]] - cont_fr[i][a_e[i]])
         out[int(eid)] = _elong_evidence(
-            float(tot_w[i]), int(ncov_w[i]), clean_tot, clean_inf,
-            float(cont_tot[i]), list(map(float, cont_fr[i])), int(a_e[i]),
-            comp_frames.get(i, {}), int(cont_nt[i]), int(ends[i] - starts[i]), thr,
+            float(tot_w[i]),
+            int(ncov_w[i]),
+            clean_tot,
+            clean_inf,
+            float(cont_tot[i]),
+            list(map(float, cont_fr[i])),
+            int(a_e[i]),
+            comp_frames.get(i, {}),
+            int(cont_nt[i]),
+            int(ends[i] - starts[i]),
+            thr,
         )
     return out
 
@@ -129,6 +142,7 @@ def score_elongation_batch(
 # ---------------------------------------------------------------------------
 # Main entry points
 # ---------------------------------------------------------------------------
+
 
 def score_events(
     events: pl.DataFrame,
@@ -159,15 +173,22 @@ def score_events(
             raw = score_termination_event(r["start"], r["strand"], coverage, thr=thr)
         elif t == "elongation":
             raw = score_elongation_event(
-                r["start"], r["end"], r["phase"], r["strand"],
-                coverage, overlaps.get(eid), thr=thr,
+                r["start"],
+                r["end"],
+                r["phase"],
+                r["strand"],
+                coverage,
+                overlaps.get(eid),
+                thr=thr,
             )
         elif t == "junction":
             raw = score_junction_event(junction_support.get(eid, {}), thr=thr)
         else:
             continue
         rows.append(event_record(eid, t, group, tier, raw, thr.version))
-    return pl.from_dicts(rows, schema=_RECORD_SCHEMA) if rows else pl.DataFrame(schema=_RECORD_SCHEMA)
+    return (
+        pl.from_dicts(rows, schema=_RECORD_SCHEMA) if rows else pl.DataFrame(schema=_RECORD_SCHEMA)
+    )
 
 
 def score_events_vectorised(
@@ -211,4 +232,6 @@ def score_events_vectorised(
         else:
             continue
         rows.append(event_record(eid, t, group, tier, raw, thr.version))
-    return pl.from_dicts(rows, schema=_RECORD_SCHEMA) if rows else pl.DataFrame(schema=_RECORD_SCHEMA)
+    return (
+        pl.from_dicts(rows, schema=_RECORD_SCHEMA) if rows else pl.DataFrame(schema=_RECORD_SCHEMA)
+    )

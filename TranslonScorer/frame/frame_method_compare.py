@@ -38,11 +38,15 @@ def _argmax_expr(prefix: str) -> pl.Expr:
 
 
 def _pmax_expr(prefix: str) -> pl.Expr:
-    return pl.max_horizontal([pl.col(f"{prefix}_p0"), pl.col(f"{prefix}_p1"), pl.col(f"{prefix}_p2")])
+    return pl.max_horizontal(
+        [pl.col(f"{prefix}_p0"), pl.col(f"{prefix}_p1"), pl.col(f"{prefix}_p2")]
+    )
 
 
 def _pmin_expr(prefix: str) -> pl.Expr:
-    return pl.min_horizontal([pl.col(f"{prefix}_p0"), pl.col(f"{prefix}_p1"), pl.col(f"{prefix}_p2")])
+    return pl.min_horizontal(
+        [pl.col(f"{prefix}_p0"), pl.col(f"{prefix}_p1"), pl.col(f"{prefix}_p2")]
+    )
 
 
 def _secondary_mass_expr(prefix: str) -> pl.Expr:
@@ -73,7 +77,14 @@ def _true_p_expr() -> pl.Expr:
 
 def _cds_interiors(cds: pl.DataFrame, trim_nt: int) -> pl.DataFrame:
     if cds.is_empty():
-        return pl.DataFrame(schema={"tran_id": pl.Utf8, "cds_start": pl.Int64, "cds_stop": pl.Int64, "true_frame": pl.Int64})
+        return pl.DataFrame(
+            schema={
+                "tran_id": pl.Utf8,
+                "cds_start": pl.Int64,
+                "cds_stop": pl.Int64,
+                "true_frame": pl.Int64,
+            }
+        )
     start_col = "tran_start" if "tran_start" in cds.columns else "start"
     stop_col = "tran_stop" if "tran_stop" in cds.columns else "stop"
     required = {"tran_id", start_col, stop_col}
@@ -81,19 +92,22 @@ def _cds_interiors(cds: pl.DataFrame, trim_nt: int) -> pl.DataFrame:
     if missing:
         raise ValueError(f"CDS table missing required columns: {sorted(missing)}")
     return (
-        cds
-        .select([
-            pl.col("tran_id"),
-            pl.col(start_col).cast(pl.Int64).alias("cds_start"),
-            pl.col(stop_col).cast(pl.Int64).alias("cds_stop"),
-        ])
+        cds.select(
+            [
+                pl.col("tran_id"),
+                pl.col(start_col).cast(pl.Int64).alias("cds_start"),
+                pl.col(stop_col).cast(pl.Int64).alias("cds_stop"),
+            ]
+        )
         .with_columns((pl.col("cds_stop") - pl.col("cds_start")).alias("cds_len"))
         .filter(pl.col("cds_len") > (2 * int(trim_nt) + 3))
-        .with_columns([
-            (pl.col("cds_start") + int(trim_nt)).alias("interior_start"),
-            (pl.col("cds_stop") - int(trim_nt)).alias("interior_stop"),
-            (pl.col("cds_start") % 3).cast(pl.Int64).alias("true_frame"),
-        ])
+        .with_columns(
+            [
+                (pl.col("cds_start") + int(trim_nt)).alias("interior_start"),
+                (pl.col("cds_stop") - int(trim_nt)).alias("interior_stop"),
+                (pl.col("cds_start") % 3).cast(pl.Int64).alias("true_frame"),
+            ]
+        )
         .select(["tran_id", "interior_start", "interior_stop", "true_frame"])
     )
 
@@ -109,65 +123,92 @@ def validate_frame_support_on_cds(
     interiors = _cds_interiors(cds, trim_nt)
     if frame_support.is_empty() or interiors.is_empty():
         empty_positions = pl.DataFrame()
-        summary = pl.DataFrame({
-            "method": [method],
-            "trim_nt": [trim_nt],
-            "n_rows": [0],
-            "n_transcripts": [0],
-            "total_weight": [0.0],
-            "mean_p_true": [None],
-            "weighted_mean_p_true": [None],
-            "argmax_accuracy": [None],
-            "weighted_argmax_accuracy": [None],
-            "mean_entropy": [None],
-            "weighted_mean_entropy": [None],
-            "mean_off_frame_mass": [None],
-            "high_conf_wrong_rate": [None],
-        })
+        summary = pl.DataFrame(
+            {
+                "method": [method],
+                "trim_nt": [trim_nt],
+                "n_rows": [0],
+                "n_transcripts": [0],
+                "total_weight": [0.0],
+                "mean_p_true": [None],
+                "weighted_mean_p_true": [None],
+                "argmax_accuracy": [None],
+                "weighted_argmax_accuracy": [None],
+                "mean_entropy": [None],
+                "weighted_mean_entropy": [None],
+                "mean_off_frame_mass": [None],
+                "high_conf_wrong_rate": [None],
+            }
+        )
         return empty_positions, summary
 
     fs = (
-        frame_support
-        .with_columns([
-            (pl.col("codon").cast(pl.Int64) * 3).alias("codon_start"),
-            (
-                pl.col("total_count").cast(pl.Float64)
-                if "total_count" in frame_support.columns
-                else pl.lit(1.0)
-            ).alias("weight"),
-        ])
+        frame_support.with_columns(
+            [
+                (pl.col("codon").cast(pl.Int64) * 3).alias("codon_start"),
+                (
+                    pl.col("total_count").cast(pl.Float64)
+                    if "total_count" in frame_support.columns
+                    else pl.lit(1.0)
+                ).alias("weight"),
+            ]
+        )
         .join(interiors, on="tran_id", how="inner")
-        .filter((pl.col("codon_start") >= pl.col("interior_start")) & (pl.col("codon_start") < pl.col("interior_stop")))
-        .with_columns([
-            _argmax_p_expr().alias("pred_frame"),
-            _true_p_expr().alias("p_true"),
-        ])
-        .with_columns([
-            (pl.col("pred_frame") == pl.col("true_frame")).alias("is_correct"),
-            pl.max_horizontal([pl.col("p0"), pl.col("p1"), pl.col("p2")]).alias("p_max"),
-            (1.0 - pl.col("p_true")).alias("off_frame_mass"),
-        ])
+        .filter(
+            (pl.col("codon_start") >= pl.col("interior_start"))
+            & (pl.col("codon_start") < pl.col("interior_stop"))
+        )
+        .with_columns(
+            [
+                _argmax_p_expr().alias("pred_frame"),
+                _true_p_expr().alias("p_true"),
+            ]
+        )
+        .with_columns(
+            [
+                (pl.col("pred_frame") == pl.col("true_frame")).alias("is_correct"),
+                pl.max_horizontal([pl.col("p0"), pl.col("p1"), pl.col("p2")]).alias("p_max"),
+                (1.0 - pl.col("p_true")).alias("off_frame_mass"),
+            ]
+        )
         .with_columns(((pl.col("p_max") >= 0.8) & (~pl.col("is_correct"))).alias("high_conf_wrong"))
     )
 
     if fs.is_empty():
         return validate_frame_support_on_cds(pl.DataFrame(), cds, method=method, trim_nt=trim_nt)
 
-    summary = fs.select([
-        pl.lit(method).alias("method"),
-        pl.lit(trim_nt).alias("trim_nt"),
-        pl.len().alias("n_rows"),
-        pl.col("tran_id").n_unique().alias("n_transcripts"),
-        pl.col("weight").sum().alias("total_weight"),
-        pl.col("p_true").mean().alias("mean_p_true"),
-        ((pl.col("p_true") * pl.col("weight")).sum() / pl.col("weight").sum()).alias("weighted_mean_p_true"),
-        pl.col("is_correct").cast(pl.Float64).mean().alias("argmax_accuracy"),
-        ((pl.col("is_correct").cast(pl.Float64) * pl.col("weight")).sum() / pl.col("weight").sum()).alias("weighted_argmax_accuracy"),
-        pl.col("entropy").mean().alias("mean_entropy") if "entropy" in fs.columns else pl.lit(None).cast(pl.Float64).alias("mean_entropy"),
-        ((pl.col("entropy") * pl.col("weight")).sum() / pl.col("weight").sum()).alias("weighted_mean_entropy") if "entropy" in fs.columns else pl.lit(None).cast(pl.Float64).alias("weighted_mean_entropy"),
-        pl.col("off_frame_mass").mean().alias("mean_off_frame_mass"),
-        pl.col("high_conf_wrong").cast(pl.Float64).mean().alias("high_conf_wrong_rate"),
-    ])
+    summary = fs.select(
+        [
+            pl.lit(method).alias("method"),
+            pl.lit(trim_nt).alias("trim_nt"),
+            pl.len().alias("n_rows"),
+            pl.col("tran_id").n_unique().alias("n_transcripts"),
+            pl.col("weight").sum().alias("total_weight"),
+            pl.col("p_true").mean().alias("mean_p_true"),
+            ((pl.col("p_true") * pl.col("weight")).sum() / pl.col("weight").sum()).alias(
+                "weighted_mean_p_true"
+            ),
+            pl.col("is_correct").cast(pl.Float64).mean().alias("argmax_accuracy"),
+            (
+                (pl.col("is_correct").cast(pl.Float64) * pl.col("weight")).sum()
+                / pl.col("weight").sum()
+            ).alias("weighted_argmax_accuracy"),
+            (
+                pl.col("entropy").mean().alias("mean_entropy")
+                if "entropy" in fs.columns
+                else pl.lit(None).cast(pl.Float64).alias("mean_entropy")
+            ),
+            (
+                ((pl.col("entropy") * pl.col("weight")).sum() / pl.col("weight").sum()).alias(
+                    "weighted_mean_entropy"
+                )
+                if "entropy" in fs.columns
+                else pl.lit(None).cast(pl.Float64).alias("weighted_mean_entropy")
+            ),
+            pl.col("off_frame_mass").mean().alias("mean_off_frame_mass"),
+            pl.col("high_conf_wrong").cast(pl.Float64).mean().alias("high_conf_wrong_rate"),
+        ]
+    )
     return fs, summary
 
 
@@ -202,7 +243,9 @@ def compare_frame_support_tables(
     """Compare two frame-support tables on shared transcript/codon rows."""
     left_keys = {"tran_id", "codon", "length"} & set(left.columns)
     right_keys = {"tran_id", "codon", "length"} & set(right.columns)
-    join_keys = ["tran_id", "codon"] + (["length"] if "length" in left_keys and "length" in right_keys else [])
+    join_keys = ["tran_id", "codon"] + (
+        ["length"] if "length" in left_keys and "length" in right_keys else []
+    )
 
     value_cols = [
         "observed_f0",
@@ -225,29 +268,35 @@ def compare_frame_support_tables(
     ]
     left_keep = join_keys + [c for c in value_cols if c in left.columns]
     right_keep = join_keys + [c for c in value_cols if c in right.columns]
-    left_prepped = left.select(left_keep).rename({c: f"{label_left}_{c}" for c in left_keep if c not in join_keys})
-    right_prepped = right.select(right_keep).rename({c: f"{label_right}_{c}" for c in right_keep if c not in join_keys})
+    left_prepped = left.select(left_keep).rename(
+        {c: f"{label_left}_{c}" for c in left_keep if c not in join_keys}
+    )
+    right_prepped = right.select(right_keep).rename(
+        {c: f"{label_right}_{c}" for c in right_keep if c not in join_keys}
+    )
 
     joined = left_prepped.join(right_prepped, on=join_keys, how="inner")
     if joined.is_empty():
-        summary = pl.DataFrame({
-            "method_left": [label_left],
-            "method_right": [label_right],
-            "n_joined": [0],
-            "argmax_agreement": [None],
-            "mean_l1_posterior_delta": [None],
-            "mean_max_abs_posterior_delta": [None],
-            "mean_entropy_left": [None],
-            "mean_entropy_right": [None],
-            "mean_entropy_delta": [None],
-            "mean_abs_adjusted_count_delta": [None],
-            "mean_p_max_left": [None],
-            "mean_p_max_right": [None],
-            "mean_secondary_frame_mass_left": [None],
-            "mean_secondary_frame_mass_right": [None],
-            "mean_secondary_frame_mass_delta": [None],
-            "hmm_overclean_candidate_rate": [None],
-        })
+        summary = pl.DataFrame(
+            {
+                "method_left": [label_left],
+                "method_right": [label_right],
+                "n_joined": [0],
+                "argmax_agreement": [None],
+                "mean_l1_posterior_delta": [None],
+                "mean_max_abs_posterior_delta": [None],
+                "mean_entropy_left": [None],
+                "mean_entropy_right": [None],
+                "mean_entropy_delta": [None],
+                "mean_abs_adjusted_count_delta": [None],
+                "mean_p_max_left": [None],
+                "mean_p_max_right": [None],
+                "mean_secondary_frame_mass_left": [None],
+                "mean_secondary_frame_mass_right": [None],
+                "mean_secondary_frame_mass_delta": [None],
+                "hmm_overclean_candidate_rate": [None],
+            }
+        )
         return joined, summary
 
     for label in (label_left, label_right):
@@ -255,36 +304,60 @@ def compare_frame_support_tables(
         if total_col not in joined.columns:
             joined = joined.with_columns(pl.lit(0.0).alias(total_col))
 
-    joined = joined.with_columns([
-        _argmax_expr(label_left).alias(f"{label_left}_argmax"),
-        _argmax_expr(label_right).alias(f"{label_right}_argmax"),
-        _pmax_expr(label_left).alias(f"{label_left}_p_max"),
-        _pmax_expr(label_right).alias(f"{label_right}_p_max"),
-        _secondary_mass_expr(label_left).alias(f"{label_left}_secondary_frame_mass"),
-        _secondary_mass_expr(label_right).alias(f"{label_right}_secondary_frame_mass"),
-    ]).with_columns([
-        (pl.col(f"{label_right}_p0") - pl.col(f"{label_left}_p0")).alias("p0_delta"),
-        (pl.col(f"{label_right}_p1") - pl.col(f"{label_left}_p1")).alias("p1_delta"),
-        (pl.col(f"{label_right}_p2") - pl.col(f"{label_left}_p2")).alias("p2_delta"),
-        (pl.col(f"{label_right}_entropy") - pl.col(f"{label_left}_entropy")).alias("entropy_delta"),
-        (pl.col(f"{label_right}_secondary_frame_mass") - pl.col(f"{label_left}_secondary_frame_mass")).alias("secondary_frame_mass_delta"),
-        (pl.col(f"{label_left}_argmax") == pl.col(f"{label_right}_argmax")).alias("same_argmax"),
-    ]).with_columns([
-        (pl.col("p0_delta").abs() + pl.col("p1_delta").abs() + pl.col("p2_delta").abs()).alias("l1_posterior_delta"),
-        pl.max_horizontal([
-            pl.col("p0_delta").abs(),
-            pl.col("p1_delta").abs(),
-            pl.col("p2_delta").abs(),
-        ]).alias("max_abs_posterior_delta"),
-        (
-            (pl.col(f"{label_left}_total_count").fill_null(0.0) >= 10.0)
-            & (pl.col(f"{label_left}_secondary_frame_mass") >= 0.20)
-            & (pl.col(f"{label_right}_secondary_frame_mass") < 0.10)
-            & (pl.col(f"{label_right}_entropy") < pl.col(f"{label_left}_entropy"))
-        ).alias("hmm_overclean_candidate"),
-    ])
+    joined = (
+        joined.with_columns(
+            [
+                _argmax_expr(label_left).alias(f"{label_left}_argmax"),
+                _argmax_expr(label_right).alias(f"{label_right}_argmax"),
+                _pmax_expr(label_left).alias(f"{label_left}_p_max"),
+                _pmax_expr(label_right).alias(f"{label_right}_p_max"),
+                _secondary_mass_expr(label_left).alias(f"{label_left}_secondary_frame_mass"),
+                _secondary_mass_expr(label_right).alias(f"{label_right}_secondary_frame_mass"),
+            ]
+        )
+        .with_columns(
+            [
+                (pl.col(f"{label_right}_p0") - pl.col(f"{label_left}_p0")).alias("p0_delta"),
+                (pl.col(f"{label_right}_p1") - pl.col(f"{label_left}_p1")).alias("p1_delta"),
+                (pl.col(f"{label_right}_p2") - pl.col(f"{label_left}_p2")).alias("p2_delta"),
+                (pl.col(f"{label_right}_entropy") - pl.col(f"{label_left}_entropy")).alias(
+                    "entropy_delta"
+                ),
+                (
+                    pl.col(f"{label_right}_secondary_frame_mass")
+                    - pl.col(f"{label_left}_secondary_frame_mass")
+                ).alias("secondary_frame_mass_delta"),
+                (pl.col(f"{label_left}_argmax") == pl.col(f"{label_right}_argmax")).alias(
+                    "same_argmax"
+                ),
+            ]
+        )
+        .with_columns(
+            [
+                (
+                    pl.col("p0_delta").abs() + pl.col("p1_delta").abs() + pl.col("p2_delta").abs()
+                ).alias("l1_posterior_delta"),
+                pl.max_horizontal(
+                    [
+                        pl.col("p0_delta").abs(),
+                        pl.col("p1_delta").abs(),
+                        pl.col("p2_delta").abs(),
+                    ]
+                ).alias("max_abs_posterior_delta"),
+                (
+                    (pl.col(f"{label_left}_total_count").fill_null(0.0) >= 10.0)
+                    & (pl.col(f"{label_left}_secondary_frame_mass") >= 0.20)
+                    & (pl.col(f"{label_right}_secondary_frame_mass") < 0.10)
+                    & (pl.col(f"{label_right}_entropy") < pl.col(f"{label_left}_entropy"))
+                ).alias("hmm_overclean_candidate"),
+            ]
+        )
+    )
 
-    if f"{label_left}_adjusted_f0" in joined.columns and f"{label_right}_adjusted_f0" in joined.columns:
+    if (
+        f"{label_left}_adjusted_f0" in joined.columns
+        and f"{label_right}_adjusted_f0" in joined.columns
+    ):
         joined = joined.with_columns(
             (
                 (pl.col(f"{label_right}_adjusted_f0") - pl.col(f"{label_left}_adjusted_f0")).abs()
@@ -293,26 +366,37 @@ def compare_frame_support_tables(
             ).alias("abs_adjusted_count_delta")
         )
     else:
-        joined = joined.with_columns(pl.lit(None).cast(pl.Float64).alias("abs_adjusted_count_delta"))
+        joined = joined.with_columns(
+            pl.lit(None).cast(pl.Float64).alias("abs_adjusted_count_delta")
+        )
 
-    summary = joined.select([
-        pl.lit(label_left).alias("method_left"),
-        pl.lit(label_right).alias("method_right"),
-        pl.len().alias("n_joined"),
-        pl.col("same_argmax").cast(pl.Float64).mean().alias("argmax_agreement"),
-        pl.col("l1_posterior_delta").mean().alias("mean_l1_posterior_delta"),
-        pl.col("max_abs_posterior_delta").mean().alias("mean_max_abs_posterior_delta"),
-        pl.col(f"{label_left}_entropy").mean().alias("mean_entropy_left"),
-        pl.col(f"{label_right}_entropy").mean().alias("mean_entropy_right"),
-        pl.col("entropy_delta").mean().alias("mean_entropy_delta"),
-        pl.col("abs_adjusted_count_delta").mean().alias("mean_abs_adjusted_count_delta"),
-        pl.col(f"{label_left}_p_max").mean().alias("mean_p_max_left"),
-        pl.col(f"{label_right}_p_max").mean().alias("mean_p_max_right"),
-        pl.col(f"{label_left}_secondary_frame_mass").mean().alias("mean_secondary_frame_mass_left"),
-        pl.col(f"{label_right}_secondary_frame_mass").mean().alias("mean_secondary_frame_mass_right"),
-        pl.col("secondary_frame_mass_delta").mean().alias("mean_secondary_frame_mass_delta"),
-        pl.col("hmm_overclean_candidate").cast(pl.Float64).mean().alias("hmm_overclean_candidate_rate"),
-    ])
+    summary = joined.select(
+        [
+            pl.lit(label_left).alias("method_left"),
+            pl.lit(label_right).alias("method_right"),
+            pl.len().alias("n_joined"),
+            pl.col("same_argmax").cast(pl.Float64).mean().alias("argmax_agreement"),
+            pl.col("l1_posterior_delta").mean().alias("mean_l1_posterior_delta"),
+            pl.col("max_abs_posterior_delta").mean().alias("mean_max_abs_posterior_delta"),
+            pl.col(f"{label_left}_entropy").mean().alias("mean_entropy_left"),
+            pl.col(f"{label_right}_entropy").mean().alias("mean_entropy_right"),
+            pl.col("entropy_delta").mean().alias("mean_entropy_delta"),
+            pl.col("abs_adjusted_count_delta").mean().alias("mean_abs_adjusted_count_delta"),
+            pl.col(f"{label_left}_p_max").mean().alias("mean_p_max_left"),
+            pl.col(f"{label_right}_p_max").mean().alias("mean_p_max_right"),
+            pl.col(f"{label_left}_secondary_frame_mass")
+            .mean()
+            .alias("mean_secondary_frame_mass_left"),
+            pl.col(f"{label_right}_secondary_frame_mass")
+            .mean()
+            .alias("mean_secondary_frame_mass_right"),
+            pl.col("secondary_frame_mass_delta").mean().alias("mean_secondary_frame_mass_delta"),
+            pl.col("hmm_overclean_candidate")
+            .cast(pl.Float64)
+            .mean()
+            .alias("hmm_overclean_candidate_rate"),
+        ]
+    )
     return joined, summary
 
 
@@ -349,7 +433,9 @@ def compare_frame_methods(
         )
         supports[method] = support
         key = f"{_method_slug(method)}_support"
-        paths[key] = write_parquet_safe(support, f"{out_prefix}.{_method_slug(method)}.frame_support.parquet")
+        paths[key] = write_parquet_safe(
+            support, f"{out_prefix}.{_method_slug(method)}.frame_support.parquet"
+        )
 
     validation_summaries: list[pl.DataFrame] = []
     validation_paths: list[str] = []
@@ -384,7 +470,9 @@ def compare_frame_methods(
     summary_df = pl.concat(summaries) if summaries else pl.DataFrame()
     paths["summary"] = write_csv_safe(summary_df, f"{out_prefix}.frame_compare.summary.csv")
     validation_df = pl.concat(validation_summaries) if validation_summaries else pl.DataFrame()
-    paths["validation_summary"] = write_csv_safe(validation_df, f"{out_prefix}.frame_validation.summary.csv")
+    paths["validation_summary"] = write_csv_safe(
+        validation_df, f"{out_prefix}.frame_validation.summary.csv"
+    )
     if validation_paths:
         paths["validation_rows"] = ",".join(validation_paths)
     paths["comparisons"] = ",".join(comparison_paths)

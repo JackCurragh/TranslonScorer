@@ -40,48 +40,48 @@ def generate_report(plotlist, tranplot, parameters, table, filename, pertranscri
         pertranscript (list): List of HTML strings with transcript-specific plots
     """
     log_info(f"Generating report {filename}_report.html...")
-    
+
     # Get package directory for template loading
     pkg_dir = Path(__file__).parent.parent
     template_dir = pkg_dir / "templates"
     template_dir.mkdir(exist_ok=True)
-    
+
     # Create template if it doesn't exist
     template_path = template_dir / "report.html"
     if not template_path.exists():
         create_report_template(template_path)
-    
+
     # Generate report
     env = Environment(loader=FileSystemLoader(template_dir))
     template = env.get_template("report.html")
-    
+
     # Filter parameters
     if parameters:
         parameters = getparameters(parameters)
-    
+
     report = template.render(
         plotlist=plotlist,
         tranplot=tranplot,
         table=table,
         filename=filename,
         tranplotlist=pertranscript,
-        parameters=parameters
+        parameters=parameters,
     )
-    
+
     # Save report
     output_path = Path(filename).parent
     output_path.mkdir(parents=True, exist_ok=True)
-    
+
     with open(f"{filename}_report.html", "w") as fh:
         fh.write(report)
-    
+
     log_info("Report generated successfully")
 
 
 def create_report_template(template_path):
     """
     Create the default report template.
-    
+
     Args:
         template_path (Path): Path where template should be created
     """
@@ -165,4 +165,4 @@ def create_report_template(template_path):
 </html>"""
 
     with open(template_path, "w") as f:
-        f.write(template) 
+        f.write(template)

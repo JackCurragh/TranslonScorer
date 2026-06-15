@@ -2,6 +2,7 @@
 
 Append-only, partitioned by data_version / tier.  Pure I/O: no computation.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,10 +26,12 @@ def persist_scores(
     """
     if scored.is_empty():
         return ""
-    scored = scored.with_columns([
-        pl.lit(data_version).alias("data_version"),
-        pl.lit(annotation_version).alias("annotation_version"),
-    ])
+    scored = scored.with_columns(
+        [
+            pl.lit(data_version).alias("data_version"),
+            pl.lit(annotation_version).alias("annotation_version"),
+        ]
+    )
     out = Path(store_dir) / f"data_version={data_version}"
     written = []
     for tier in scored["tier"].unique().to_list():

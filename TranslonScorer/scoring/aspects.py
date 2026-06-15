@@ -13,6 +13,7 @@ score_termination_event — A-site coverage step DOWN at stop codon
 score_elongation_event  — frame-resolved in-frame fraction + identifiability
 score_junction_event    — splice-junction confident-spanning count + psi
 """
+
 from __future__ import annotations
 
 import math
@@ -27,6 +28,7 @@ from TranslonScorer.scoring.evidence import _decide_step, _elong_evidence
 # Frame utility
 # ---------------------------------------------------------------------------
 
+
 def abs_frame(phase: int, strand: int) -> int:
     """Genomic frame (p % 3) carrying this event's in-frame (codon-0) signal."""
     return (-phase) % 3 if strand > 0 else phase % 3
@@ -38,6 +40,7 @@ def abs_frame(phase: int, strand: int) -> int:
 # Each flank is binned into codons (3 nt, periodicity-aware) and the MEDIAN
 # bin is taken as the robust level.  The step is measured at several flank
 # lengths; the consensus (median of log2FCs) is the headline metric.
+
 
 def _flank_positions(pos: int, strand: int, length: int, *, body_side: bool) -> range:
     """Genomic positions for a flank of `length` nt on the body or outer side of
@@ -57,8 +60,7 @@ def _codon_levels(
     """
     pos = list(positions)
     bins = [
-        sum(coverage.get(p, 0.0) for p in pos[i:i + 3])
-        for i in range(0, max(len(pos) - 2, 0), 3)
+        sum(coverage.get(p, 0.0) for p in pos[i : i + 3]) for i in range(0, max(len(pos) - 2, 0), 3)
     ]
     total = sum(coverage.get(p, 0.0) for p in pos)
     if not bins:
@@ -78,12 +80,8 @@ def _step_score(
     lengths. Metric = log2 fold-change (body vs outer) with pseudocount α."""
     rises: Dict[int, float] = {}
     for L in flanks:
-        body_med, _, _ = _codon_levels(
-            coverage, _flank_positions(pos, strand, L, body_side=True)
-        )
-        out_med, _, _ = _codon_levels(
-            coverage, _flank_positions(pos, strand, L, body_side=False)
-        )
+        body_med, _, _ = _codon_levels(coverage, _flank_positions(pos, strand, L, body_side=True))
+        out_med, _, _ = _codon_levels(coverage, _flank_positions(pos, strand, L, body_side=False))
         rises[L] = math.log2((body_med + alpha) / (out_med + alpha))
     vals = list(rises.values())
     consensus = statistics.median(vals)
@@ -92,13 +90,8 @@ def _step_score(
     out_med, out_max, _ = _codon_levels(
         coverage, _flank_positions(pos, strand, refL, body_side=False)
     )
-    flank_peakiness = (
-        (out_max / out_med) if out_med > 0
-        else (float("inf") if out_max > 0 else 0.0)
-    )
-    n_reads = _codon_levels(
-        coverage, _flank_positions(pos, strand, min(flanks), body_side=True)
-    )[2]
+    flank_peakiness = (out_max / out_med) if out_med > 0 else (float("inf") if out_max > 0 else 0.0)
+    n_reads = _codon_levels(coverage, _flank_positions(pos, strand, min(flanks), body_side=True))[2]
     return {
         "rise_by_flank": rises,
         "consensus_rise": consensus,
@@ -162,8 +155,7 @@ def score_termination_event(
         "consensus_rise": statistics.median(vals),
         "stability": (max(vals) - min(vals)) if len(vals) > 1 else 0.0,
         "flank_peakiness": (
-            (utr_max / utr_med) if utr_med > 0
-            else (float("inf") if utr_max > 0 else 0.0)
+            (utr_max / utr_med) if utr_med > 0 else (float("inf") if utr_max > 0 else 0.0)
         ),
         "n_reads": _codon_levels(
             coverage, _flank_positions(term_pos, strand, min(flanks), body_side=False)
@@ -178,6 +170,7 @@ def score_termination_event(
 # ---------------------------------------------------------------------------
 # Elongation
 # ---------------------------------------------------------------------------
+
 
 def score_elongation_event(
     start: int,
@@ -225,14 +218,24 @@ def score_elongation_event(
                 clean_inf += c
 
     return _elong_evidence(
-        n, covered, clean_tot, clean_inf, cont_tot, cont_by_frame,
-        a_e, comp_frame, len(contended), end - start, thr,
+        n,
+        covered,
+        clean_tot,
+        clean_inf,
+        cont_tot,
+        cont_by_frame,
+        a_e,
+        comp_frame,
+        len(contended),
+        end - start,
+        thr,
     )
 
 
 # ---------------------------------------------------------------------------
 # Junction
 # ---------------------------------------------------------------------------
+
 
 def score_junction_event(
     support: dict,

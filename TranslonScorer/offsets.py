@@ -21,6 +21,7 @@ Contract (all functions)
 - Offsets are clamped to plausible_offset_range.
 - Inputs are OffsetParams + a data source; NEVER a locus, transcript, or profile matrix.
 """
+
 from __future__ import annotations
 
 from typing import Dict, Optional, Tuple
@@ -33,6 +34,7 @@ from TranslonScorer.model import OffsetParams
 # ---------------------------------------------------------------------------
 # Plausibility guard
 # ---------------------------------------------------------------------------
+
 
 def plausible_offset_range(read_length: int, p: OffsetParams) -> Tuple[int, int]:
     """Physically plausible P-site offset window for `read_length`.
@@ -57,6 +59,7 @@ def psite_to_asite(offset_p: int) -> int:
 # ---------------------------------------------------------------------------
 # Offset methods
 # ---------------------------------------------------------------------------
+
 
 def metagene_offsets(
     five_prime_by_length: pl.DataFrame,
@@ -95,7 +98,8 @@ def metagene_offsets(
         lo, hi = plausible_offset_range(length, p)
         cand = (
             grp.filter((pl.col("rel_pos") >= lo) & (pl.col("rel_pos") <= hi))
-            .group_by("rel_pos").agg(pl.col("count").sum().alias("count"))
+            .group_by("rel_pos")
+            .agg(pl.col("count").sum().alias("count"))
             .sort(["count", "rel_pos"], descending=[True, False])
         )
         if cand.is_empty():
@@ -121,9 +125,7 @@ def file_offsets(path: str, p: OffsetParams) -> Dict[int, int]:
     required = {"read_length", "offset"}
     missing = required - set(df.columns)
     if missing:
-        raise ValueError(
-            f"Offsets file {path!r} missing columns {missing}; got {list(df.columns)}"
-        )
+        raise ValueError(f"Offsets file {path!r} missing columns {missing}; got {list(df.columns)}")
     if "site" in df.columns:
         df = df.filter(pl.col("site").is_in(["P", "p"]))
     result: Dict[int, int] = {}
@@ -149,7 +151,8 @@ def global_offsets(
     """
     if read_lengths is not None:
         lengths = sorted(
-            int(l) for l in read_lengths.drop_nulls().unique().to_list()
+            int(l)
+            for l in read_lengths.drop_nulls().unique().to_list()
             if usable_read_length(int(l), p)
         )
     else:
@@ -160,6 +163,7 @@ def global_offsets(
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
+
 
 def make_offset_table(
     p: OffsetParams,
@@ -178,9 +182,7 @@ def make_offset_table(
         return global_offsets(p, read_lengths)
     if p.method == "file":
         if p.offsets_file is None:
-            raise ValueError(
-                "OffsetParams.method='file' requires offsets_file to be set"
-            )
+            raise ValueError("OffsetParams.method='file' requires offsets_file to be set")
         return file_offsets(p.offsets_file, p)
     if p.method == "metagene":
         raise NotImplementedError(

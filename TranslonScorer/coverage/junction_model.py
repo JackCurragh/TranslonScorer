@@ -27,10 +27,12 @@ def estimate_junction_expectation(
         return pl.DataFrame({"bin_id": [], "E_split_fraction": [], "var": []})
 
     # Mock bin: single bin with global rate
-    split = genome_bam_df.filter(pl.col('cigar_N') == True)['count'].sum()
-    total = genome_bam_df['count'].sum() or 1
+    split = genome_bam_df.filter(pl.col("cigar_N") == True)["count"].sum()
+    total = genome_bam_df["count"].sum() or 1
     frac = float(split / total)
-    return pl.DataFrame({"bin_id": [0], "E_split_fraction": [frac], "var": [frac * (1 - frac) + 1e-6]})
+    return pl.DataFrame(
+        {"bin_id": [0], "E_split_fraction": [frac], "var": [frac * (1 - frac) + 1e-6]}
+    )
 
 
 def junction_llr(obs_split: int, exp_frac: float, total: int, var: float) -> float:
@@ -38,4 +40,3 @@ def junction_llr(obs_split: int, exp_frac: float, total: int, var: float) -> flo
     exp = exp_frac * total
     denom = max(var * total, 1e-6)
     return -0.5 * ((obs_split - exp) ** 2) / denom
-

@@ -25,7 +25,14 @@ def _read_gtf(gtf_path: str) -> pl.DataFrame:
     feature = df.get("Feature")
     # Attributes (fallbacks if GTF uses different names)
     gene_col = next((c for c in ("gene_id", "gene", "gene_name", "Gene") if c in df.columns), None)
-    tx_col = next((c for c in ("transcript_id", "transcript", "transcript_name", "Transcript") if c in df.columns), None)
+    tx_col = next(
+        (
+            c
+            for c in ("transcript_id", "transcript", "transcript_name", "Transcript")
+            if c in df.columns
+        ),
+        None,
+    )
     gene = df[gene_col] if gene_col else pd.Series([pd.NA] * len(df))
     tx = df[tx_col] if tx_col else pd.Series([pd.NA] * len(df))
     pdf = pd.DataFrame(
@@ -54,7 +61,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
     features_df: Polars DataFrame with feature rows
     map_df: Polars DataFrame mapping transcript to ordered feature_chain with transcript-space ranges
     """
-    t0=time.time()
+    t0 = time.time()
     log_info("Reading annotation via PyRanges …")
     gtf = _read_gtf(gtf_path)
     log_info(f"Read annotation: {gtf.height:,} rows in {time.time()-t0:.2f}s")
@@ -98,33 +105,36 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
     features: List[dict] = []
     tmap_rows: List[dict] = []
 
-    t1=time.time()
+    t1 = time.time()
     # Precompute per-transcript exon arrays (sorted later by strand within each gene)
-    tx_exons = (
-        exons.group_by(["transcript_id", "strand"]).agg([
+    tx_exons = exons.group_by(["transcript_id", "strand"]).agg(
+        [
             pl.col("start").implode().alias("tx_starts"),
             pl.col("end").implode().alias("tx_ends"),
             pl.col("chr").first().alias("chr"),
             pl.col("gene_id").first().alias("gene_id"),
-        ])
+        ]
     )
     # Precompute TIS/TTS per transcript from CDS once
-    cds_tx = (
-        cds.group_by(["transcript_id", "strand"]).agg([
+    cds_tx = cds.group_by(["transcript_id", "strand"]).agg(
+        [
             pl.col("start").min().alias("cds_start_min"),
             pl.col("end").max().alias("cds_end_max"),
-        ])
+        ]
     )
-    cds_lookup = { (r["transcript_id"], r["strand"]): (int(r["cds_start_min"]), int(r["cds_end_max"])) for r in cds_tx.iter_rows(named=True) }
+    cds_lookup = {
+        (r["transcript_id"], r["strand"]): (int(r["cds_start_min"]), int(r["cds_end_max"]))
+        for r in cds_tx.iter_rows(named=True)
+    }
 
-    grouped = (
-        tx_exons.group_by(["gene_id", "chr", "strand"]).agg([
+    grouped = tx_exons.group_by(["gene_id", "chr", "strand"]).agg(
+        [
             pl.col("transcript_id").implode().alias("transcripts"),
             pl.col("tx_starts").implode().alias("starts"),
             pl.col("tx_ends").implode().alias("ends"),
-        ])
+        ]
     )
-    n_groups=grouped.height
+    n_groups = grouped.height
     log_info(f"Index exons/CDS and building features for {n_groups:,} genes …")
     rows_iter = grouped.iter_rows(named=True)
     if progress:
@@ -135,7 +145,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                 chr_ = row["chr"]
                 strand = row["strand"]
                 starts = row["starts"]  # list[list[int]] per transcript
-                ends = row["ends"]      # list[list[int]] per transcript
+                ends = row["ends"]  # list[list[int]] per transcript
                 trans = row["transcripts"]
 
                 # Flatten all exons for chunk sweep
@@ -153,15 +163,17 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                 for a, b in chunks:
                     fid = f"{gene_id}|chunk|{a}-{b}"
                     chunk_ids.append(fid)
-                    features.append({
-                        "feature_id": fid,
-                        "feature_type": "exon_chunk",
-                        "locus_id": gene_id,
-                        "chr": chr_,
-                        "start": int(a),
-                        "end": int(b),
-                        "strand": strand,
-                    })
+                    features.append(
+                        {
+                            "feature_id": fid,
+                            "feature_type": "exon_chunk",
+                            "locus_id": gene_id,
+                            "chr": chr_,
+                            "start": int(a),
+                            "end": int(b),
+                            "strand": strand,
+                        }
+                    )
 
                 # Transcript paths
                 for tx, s_list, e_list in zip(trans, starts, ends):
@@ -182,7 +194,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                     tr_offset = 0
 
                     for s, e in zip(s_list, e_list):
-                        for (a, b) in chunks:
+                        for a, b in chunks:
                             if a >= s and b <= e:
                                 fid = f"{gene_id}|chunk|{a}-{b}"
                                 if fid in chunk_ids:
@@ -194,7 +206,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                                         tr_starts.append(tr_offset + (e - b))
                                         tr_ends.append(tr_offset + (e - a))
                                     tr_pos.append(None)
-                        tr_offset += (e - s)
+                        tr_offset += e - s
 
                     # Junctions between consecutive exons
                     for i in range(len(s_list) - 1):
@@ -203,15 +215,17 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                         else:
                             donor, acceptor = int(s_list[i]), int(s_list[i + 1])
                         jf = f"{gene_id}|junc|{donor}-{acceptor}"
-                        features.append({
-                            "feature_id": jf,
-                            "feature_type": "junction",
-                            "locus_id": gene_id,
-                            "chr": chr_,
-                            "donor_pos": donor,
-                            "acceptor_pos": acceptor,
-                            "strand": strand,
-                        })
+                        features.append(
+                            {
+                                "feature_id": jf,
+                                "feature_type": "junction",
+                                "locus_id": gene_id,
+                                "chr": chr_,
+                                "donor_pos": donor,
+                                "acceptor_pos": acceptor,
+                                "strand": strand,
+                            }
+                        )
                         path.append(jf)
                         tr_starts.append(None)
                         tr_ends.append(None)
@@ -228,24 +242,26 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                             tts_pos = int(cds_pair[0])
                         tis_id = f"{gene_id}|TIS|{tis_pos}"
                         tts_id = f"{gene_id}|TTS|{tts_pos}"
-                        features.extend([
-                            {
-                                "feature_id": tis_id,
-                                "feature_type": "TIS",
-                                "locus_id": gene_id,
-                                "chr": chr_,
-                                "pos": tis_pos,
-                                "strand": strand,
-                            },
-                            {
-                                "feature_id": tts_id,
-                                "feature_type": "TTS",
-                                "locus_id": gene_id,
-                                "chr": chr_,
-                                "pos": tts_pos,
-                                "strand": strand,
-                            },
-                        ])
+                        features.extend(
+                            [
+                                {
+                                    "feature_id": tis_id,
+                                    "feature_type": "TIS",
+                                    "locus_id": gene_id,
+                                    "chr": chr_,
+                                    "pos": tis_pos,
+                                    "strand": strand,
+                                },
+                                {
+                                    "feature_id": tts_id,
+                                    "feature_type": "TTS",
+                                    "locus_id": gene_id,
+                                    "chr": chr_,
+                                    "pos": tts_pos,
+                                    "strand": strand,
+                                },
+                            ]
+                        )
 
                         def genomic_to_tran_pos(gpos: int) -> int | None:
                             tpos = 0
@@ -255,7 +271,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                                         return tpos + (gpos - s)
                                     else:
                                         return tpos + (e - gpos - 1)
-                                tpos += (e - s)
+                                tpos += e - s
                             return None
 
                         tis_tr = genomic_to_tran_pos(tis_pos)
@@ -265,14 +281,16 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                         tr_ends = [None] + tr_ends + [None]
                         tr_pos = [tis_tr] + tr_pos + [tts_tr]
 
-                    tmap_rows.append({
-                        "locus_id": gene_id,
-                        "transcript_id": tx,
-                        "feature_chain": path,
-                        "tran_ranges_start": tr_starts,
-                        "tran_ranges_end": tr_ends,
-                        "tran_pos": tr_pos,
-                    })
+                    tmap_rows.append(
+                        {
+                            "locus_id": gene_id,
+                            "transcript_id": tx,
+                            "feature_chain": path,
+                            "tran_ranges_start": tr_starts,
+                            "tran_ranges_end": tr_ends,
+                            "tran_pos": tr_pos,
+                        }
+                    )
     else:
         for row in rows_iter:
             gene_id = row["gene_id"]
@@ -290,15 +308,17 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                     continue
                 fid = f"{gene_id}|chunk|{a}-{b}"
                 chunk_ids.append(fid)
-                features.append({
-                    "feature_id": fid,
-                    "feature_type": "exon_chunk",
-                    "locus_id": gene_id,
-                    "chr": chr_,
-                    "start": int(a),
-                    "end": int(b),
-                    "strand": strand,
-                })
+                features.append(
+                    {
+                        "feature_id": fid,
+                        "feature_type": "exon_chunk",
+                        "locus_id": gene_id,
+                        "chr": chr_,
+                        "start": int(a),
+                        "end": int(b),
+                        "strand": strand,
+                    }
+                )
             per_tx = (
                 exon_tbl.group_by("transcript_id")
                 .agg([pl.col("start").sort(), pl.col("end").sort()])
@@ -320,7 +340,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                 tr_pos: List[int | None] = []
                 tr_offset = 0
                 for s, e in zip(s_list, e_list):
-                    for (a, b) in chunks:
+                    for a, b in chunks:
                         if a >= s and b <= e:
                             fid = f"{gene_id}|chunk|{a}-{b}"
                             if fid in chunk_ids:
@@ -332,22 +352,24 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                                     tr_starts.append(tr_offset + (e - b))
                                     tr_ends.append(tr_offset + (e - a))
                                 tr_pos.append(None)
-                    tr_offset += (e - s)
+                    tr_offset += e - s
                 for i in range(len(s_list) - 1):
                     if strand == "+":
                         donor, acceptor = int(e_list[i]), int(s_list[i + 1])
                     else:
                         donor, acceptor = int(s_list[i]), int(e_list[i + 1])
                     jf = f"{gene_id}|junc|{donor}-{acceptor}"
-                    features.append({
-                        "feature_id": jf,
-                        "feature_type": "junction",
-                        "locus_id": gene_id,
-                        "chr": chr_,
-                        "donor_pos": donor,
-                        "acceptor_pos": acceptor,
-                        "strand": strand,
-                    })
+                    features.append(
+                        {
+                            "feature_id": jf,
+                            "feature_type": "junction",
+                            "locus_id": gene_id,
+                            "chr": chr_,
+                            "donor_pos": donor,
+                            "acceptor_pos": acceptor,
+                            "strand": strand,
+                        }
+                    )
                     path.append(jf)
                     tr_starts.append(None)
                     tr_ends.append(None)
@@ -362,24 +384,27 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                         tts_pos = int(cds_tx["start"].min())
                     tis_id = f"{gene_id}|TIS|{tis_pos}"
                     tts_id = f"{gene_id}|TTS|{tts_pos}"
-                    features.extend([
-                        {
-                            "feature_id": tis_id,
-                            "feature_type": "TIS",
-                            "locus_id": gene_id,
-                            "chr": chr_,
-                            "pos": tis_pos,
-                            "strand": strand,
-                        },
-                        {
-                            "feature_id": tts_id,
-                            "feature_type": "TTS",
-                            "locus_id": gene_id,
-                            "chr": chr_,
-                            "pos": tts_pos,
-                            "strand": strand,
-                        },
-                    ])
+                    features.extend(
+                        [
+                            {
+                                "feature_id": tis_id,
+                                "feature_type": "TIS",
+                                "locus_id": gene_id,
+                                "chr": chr_,
+                                "pos": tis_pos,
+                                "strand": strand,
+                            },
+                            {
+                                "feature_id": tts_id,
+                                "feature_type": "TTS",
+                                "locus_id": gene_id,
+                                "chr": chr_,
+                                "pos": tts_pos,
+                                "strand": strand,
+                            },
+                        ]
+                    )
+
                     def genomic_to_tran_pos(gpos: int) -> int | None:
                         tpos = 0
                         for s, e in zip(s_list, e_list):
@@ -388,22 +413,25 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                                     return tpos + (gpos - s)
                                 else:
                                     return tpos + (e - gpos - 1)
-                            tpos += (e - s)
+                            tpos += e - s
                         return None
+
                     tis_tr = genomic_to_tran_pos(tis_pos)
                     tts_tr = genomic_to_tran_pos(tts_pos)
                     path = [tis_id] + path + [tts_id]
                     tr_starts = [None] + tr_starts + [None]
                     tr_ends = [None] + tr_ends + [None]
                     tr_pos = [tis_tr] + tr_pos + [tts_tr]
-                tmap_rows.append({
-                    "locus_id": gene_id,
-                    "transcript_id": tx,
-                    "feature_chain": path,
-                    "tran_ranges_start": tr_starts,
-                    "tran_ranges_end": tr_ends,
-                    "tran_pos": tr_pos,
-                })
+                tmap_rows.append(
+                    {
+                        "locus_id": gene_id,
+                        "transcript_id": tx,
+                        "feature_chain": path,
+                        "tran_ranges_start": tr_starts,
+                        "tran_ranges_end": tr_ends,
+                        "tran_pos": tr_pos,
+                    }
+                )
         gene_id = row["gene_id"]
         chr_ = row["chr"]
         strand = row["strand"]
@@ -425,15 +453,17 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
         for a, b in chunks:
             fid = f"{gene_id}|chunk|{a}-{b}"
             chunk_ids.append(fid)
-            features.append({
-                "feature_id": fid,
-                "feature_type": "exon_chunk",
-                "locus_id": gene_id,
-                "chr": chr_,
-                "start": int(a),
-                "end": int(b),
-                "strand": strand,
-            })
+            features.append(
+                {
+                    "feature_id": fid,
+                    "feature_type": "exon_chunk",
+                    "locus_id": gene_id,
+                    "chr": chr_,
+                    "start": int(a),
+                    "end": int(b),
+                    "strand": strand,
+                }
+            )
 
         # Per-transcript path: exonic chunks in transcript order + junctions + TIS/TTS
         # Iterate transcripts listed in this gene
@@ -455,7 +485,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
             tr_offset = 0
 
             for s, e in zip(s_list, e_list):
-                for (a, b) in chunks:
+                for a, b in chunks:
                     if a >= s and b <= e:
                         fid = f"{gene_id}|chunk|{a}-{b}"
                         if fid in chunk_ids:
@@ -468,7 +498,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                                 tr_starts.append(tr_offset + (e - b))
                                 tr_ends.append(tr_offset + (e - a))
                             tr_pos.append(None)
-                tr_offset += (e - s)
+                tr_offset += e - s
 
             # Junctions between consecutive exons
             for i in range(len(s_list) - 1):
@@ -477,15 +507,17 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                 else:
                     donor, acceptor = int(s_list[i]), int(e_list[i + 1])
                 jf = f"{gene_id}|junc|{donor}-{acceptor}"
-                features.append({
-                    "feature_id": jf,
-                    "feature_type": "junction",
-                    "locus_id": gene_id,
-                    "chr": chr_,
-                    "donor_pos": donor,
-                    "acceptor_pos": acceptor,
-                    "strand": strand,
-                })
+                features.append(
+                    {
+                        "feature_id": jf,
+                        "feature_type": "junction",
+                        "locus_id": gene_id,
+                        "chr": chr_,
+                        "donor_pos": donor,
+                        "acceptor_pos": acceptor,
+                        "strand": strand,
+                    }
+                )
                 path.append(jf)
                 tr_starts.append(None)
                 tr_ends.append(None)
@@ -502,24 +534,26 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                     tts_pos = int(cds_pair[0])
                 tis_id = f"{gene_id}|TIS|{tis_pos}"
                 tts_id = f"{gene_id}|TTS|{tts_pos}"
-                features.extend([
-                    {
-                        "feature_id": tis_id,
-                        "feature_type": "TIS",
-                        "locus_id": gene_id,
-                        "chr": chr_,
-                        "pos": tis_pos,
-                        "strand": strand,
-                    },
-                    {
-                        "feature_id": tts_id,
-                        "feature_type": "TTS",
-                        "locus_id": gene_id,
-                        "chr": chr_,
-                        "pos": tts_pos,
-                        "strand": strand,
-                    },
-                ])
+                features.extend(
+                    [
+                        {
+                            "feature_id": tis_id,
+                            "feature_type": "TIS",
+                            "locus_id": gene_id,
+                            "chr": chr_,
+                            "pos": tis_pos,
+                            "strand": strand,
+                        },
+                        {
+                            "feature_id": tts_id,
+                            "feature_type": "TTS",
+                            "locus_id": gene_id,
+                            "chr": chr_,
+                            "pos": tts_pos,
+                            "strand": strand,
+                        },
+                    ]
+                )
 
                 def genomic_to_tran_pos(gpos: int) -> int | None:
                     tpos = 0
@@ -529,7 +563,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                                 return tpos + (gpos - s)
                             else:
                                 return tpos + (e - gpos - 1)
-                        tpos += (e - s)
+                        tpos += e - s
                     return None
 
                 tis_tr = genomic_to_tran_pos(tis_pos)
@@ -539,16 +573,20 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                 tr_ends = [None] + tr_ends + [None]
                 tr_pos = [tis_tr] + tr_pos + [tts_tr]
 
-            tmap_rows.append({
-                "locus_id": gene_id,
-                "transcript_id": tx,
-                "feature_chain": path,
-                "tran_ranges_start": tr_starts,
-                "tran_ranges_end": tr_ends,
-                "tran_pos": tr_pos,
-            })
+            tmap_rows.append(
+                {
+                    "locus_id": gene_id,
+                    "transcript_id": tx,
+                    "feature_chain": path,
+                    "tran_ranges_start": tr_starts,
+                    "tran_ranges_end": tr_ends,
+                    "tran_pos": tr_pos,
+                }
+            )
 
     features_df = pl.from_dicts(features).unique(subset=["feature_id"], maintain_order=True)
     map_df = pl.from_dicts(tmap_rows)
-    log_info(f"Built features: {features_df.height} rows; mappings: {map_df.height} rows in {time.time()-t1:.2f}s (total {time.time()-t0:.2f}s)")
+    log_info(
+        f"Built features: {features_df.height} rows; mappings: {map_df.height} rows in {time.time()-t1:.2f}s (total {time.time()-t0:.2f}s)"
+    )
     return features_df, map_df

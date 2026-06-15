@@ -4,6 +4,7 @@ events.py, io/bam.py, io/matrix.py, offsets.py, coverage/profile.py.
 These are pure (or fixture-backed) functions on the live event-scoring path.
 Real-data cases skip when the local matrix / BAM fixtures are absent.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -22,31 +23,37 @@ HAS_MATRIX = MATRIX_PART.exists()
 # events.py
 # ===========================================================================
 
+
 def _blocks() -> pl.DataFrame:
     # One + strand translon, two exons with a genomic gap (=> one junction).
-    return pl.DataFrame({
-        "translon_id": ["T1", "T1"],
-        "translation_block_rank": [1, 2],
-        "bed_chrom": ["chr1", "chr1"],
-        "bed_start": [100, 200],
-        "bed_end": [130, 230],
-        "seq_region_strand": [1, 1],
-        "block_length_nt": [30, 30],
-    })
+    return pl.DataFrame(
+        {
+            "translon_id": ["T1", "T1"],
+            "translation_block_rank": [1, 2],
+            "bed_chrom": ["chr1", "chr1"],
+            "bed_start": [100, 200],
+            "bed_end": [130, 230],
+            "seq_region_strand": [1, 1],
+            "block_length_nt": [30, 30],
+        }
+    )
 
 
 def _translons() -> pl.DataFrame:
-    return pl.DataFrame({
-        "translon_id": ["T1"],
-        "bed_chrom": ["chr1"],
-        "bed_start": [100],
-        "bed_end": [230],
-        "seq_region_strand": [1],
-    })
+    return pl.DataFrame(
+        {
+            "translon_id": ["T1"],
+            "bed_chrom": ["chr1"],
+            "bed_start": [100],
+            "bed_end": [230],
+            "seq_region_strand": [1],
+        }
+    )
 
 
 def test_extract_events_shapes_and_aspects():
     from TranslonScorer.events import extract_events
+
     events, feature_event, overlap = extract_events(_blocks(), _translons())
     aspects = set(events["type"])
     assert {"elongation", "junction", "init", "term"} <= aspects
@@ -66,6 +73,7 @@ def test_extract_events_shapes_and_aspects():
 
 def test_extract_events_deterministic_event_ids():
     from TranslonScorer.events import extract_events
+
     e1, _, _ = extract_events(_blocks(), _translons())
     e2, _, _ = extract_events(_blocks(), _translons())
     assert e1.sort("event_id")["event_id"].to_list() == e2.sort("event_id")["event_id"].to_list()
@@ -73,6 +81,7 @@ def test_extract_events_deterministic_event_ids():
 
 def test_extract_events_empty_junction_branch():
     from TranslonScorer.events import extract_events
+
     # Single contiguous block => no junction.
     blocks = _blocks().filter(pl.col("translation_block_rank") == 1)
     events, _, _ = extract_events(blocks, _translons())
@@ -81,14 +90,17 @@ def test_extract_events_empty_junction_branch():
 
 def test_contention_flags_different_frame_overlap():
     from TranslonScorer.events import _contention
-    elong = pl.DataFrame({
-        "event_id": pl.Series([1, 2], dtype=pl.UInt64),
-        "chrom": ["chr1", "chr1"],
-        "strand": [1, 1],
-        "start": [100, 110],
-        "end": [160, 170],
-        "phase": [0, 1],          # different registers => contention
-    })
+
+    elong = pl.DataFrame(
+        {
+            "event_id": pl.Series([1, 2], dtype=pl.UInt64),
+            "chrom": ["chr1", "chr1"],
+            "strand": [1, 1],
+            "start": [100, 110],
+            "end": [160, 170],
+            "phase": [0, 1],  # different registers => contention
+        }
+    )
     out = _contention(elong)
     assert out.height == 2  # symmetric pair
     assert set(out["overlap_start"]) == {110}
@@ -97,19 +109,23 @@ def test_contention_flags_different_frame_overlap():
 
 def test_contention_same_frame_no_overlap():
     from TranslonScorer.events import _contention
-    elong = pl.DataFrame({
-        "event_id": pl.Series([1, 2], dtype=pl.UInt64),
-        "chrom": ["chr1", "chr1"],
-        "strand": [1, 1],
-        "start": [100, 110],
-        "end": [160, 170],
-        "phase": [0, 0],          # same register => no contention
-    })
+
+    elong = pl.DataFrame(
+        {
+            "event_id": pl.Series([1, 2], dtype=pl.UInt64),
+            "chrom": ["chr1", "chr1"],
+            "strand": [1, 1],
+            "start": [100, 110],
+            "end": [160, 170],
+            "phase": [0, 0],  # same register => no contention
+        }
+    )
     assert _contention(elong).is_empty()
 
 
 def test_deconflict_intervals_drops_conflicting_phase():
     from TranslonScorer.events import _deconflict_intervals
+
     # [0,10) phase0 and [5,15) phase1 overlap in [5,10): conflict dropped.
     out = _deconflict_intervals([(0, 10, 0), (5, 15, 1)])
     # surviving: [0,5) phase0, [10,15) phase1 ; [5,10) removed.
@@ -122,24 +138,29 @@ def test_deconflict_intervals_drops_conflicting_phase():
 
 def test_deconflict_intervals_merges_adjacent_same_phase():
     from TranslonScorer.events import _deconflict_intervals
+
     out = _deconflict_intervals([(0, 5, 0), (5, 10, 0)])
     assert out == [(0, 10, 0)]
 
 
 def test_deconflict_intervals_empty():
     from TranslonScorer.events import _deconflict_intervals
+
     assert _deconflict_intervals([]) == []
 
 
 def test_build_frame_intervals():
     from TranslonScorer.events import _build_frame_intervals
-    cds_df = pl.DataFrame({
-        "chr": ["chr1"],
-        "strand": ["+"],
-        "start": [[0]],
-        "stop": [[9]],
-        "tran_start": [[0]],
-    })
+
+    cds_df = pl.DataFrame(
+        {
+            "chr": ["chr1"],
+            "strand": ["+"],
+            "start": [[0]],
+            "stop": [[9]],
+            "tran_start": [[0]],
+        }
+    )
     out = _build_frame_intervals(pl.DataFrame(), cds_df, {"chr1"})
     assert ("chr1", "+") in out
     assert out[("chr1", "+")] == [(0, 9, 0)]
@@ -149,23 +170,27 @@ def test_build_frame_intervals():
 # io/bam.py (pure helpers)
 # ===========================================================================
 
+
 def test_parse_read_id():
     from TranslonScorer.io.bam import parse_read_id
+
     assert parse_read_id("read_42") == 42
     assert parse_read_id("no-id-here") is None
 
 
 def test_normalise_chrom():
     from TranslonScorer.io.bam import normalise_chrom
+
     refs = {"chr1", "chr2"}
-    assert normalise_chrom("chr1", refs) == "chr1"   # direct
-    assert normalise_chrom("1", refs) == "chr1"      # add prefix
-    assert normalise_chrom("chr3", refs) is None     # absent
-    assert normalise_chrom("2", {"2"}) == "2"        # strip prefix path
+    assert normalise_chrom("chr1", refs) == "chr1"  # direct
+    assert normalise_chrom("1", refs) == "chr1"  # add prefix
+    assert normalise_chrom("chr3", refs) is None  # absent
+    assert normalise_chrom("2", {"2"}) == "2"  # strip prefix path
 
 
 def test_cigar_blocks_splits_on_intron():
     from TranslonScorer.io.bam import cigar_blocks
+
     # 30M 100N 20M starting at 1000 => two ref blocks separated by the N skip.
     blocks = cigar_blocks(1000, [(0, 30), (3, 100), (0, 20)])
     assert blocks == [(1000, 1030), (1130, 1150)]
@@ -173,6 +198,7 @@ def test_cigar_blocks_splits_on_intron():
 
 def test_cigar_blocks_soft_clip_ignored():
     from TranslonScorer.io.bam import cigar_blocks
+
     # 5S 10M : soft-clip consumes no reference.
     assert cigar_blocks(500, [(4, 5), (0, 10)]) == [(500, 510)]
 
@@ -180,6 +206,7 @@ def test_cigar_blocks_soft_clip_ignored():
 @pytest.mark.skipif(not HAS_BAM, reason="genome GAPDH fixture not in data/")
 def test_aggregate_junctions_on_fixture():
     from TranslonScorer.io.bam import aggregate_junctions
+
     j = aggregate_junctions(str(GENOME_BAM))
     assert set(j.columns) == {"chr", "donor_pos", "acceptor_pos", "strand", "count"}
     if not j.is_empty():
@@ -189,11 +216,13 @@ def test_aggregate_junctions_on_fixture():
 def test_aggregate_junctions_empty(tmp_path):
     """Unmapped/empty BAM path returns the typed empty schema."""
     import pysam
+
     header = {"HD": {"VN": "1.0"}, "SQ": [{"SN": "chr1", "LN": 1000}]}
     bam_path = tmp_path / "empty.bam"
     with pysam.AlignmentFile(str(bam_path), "wb", header=header):
         pass
     from TranslonScorer.io.bam import aggregate_junctions
+
     out = aggregate_junctions(str(bam_path))
     assert out.is_empty()
     assert "donor_pos" in out.columns
@@ -203,9 +232,11 @@ def test_aggregate_junctions_empty(tmp_path):
 # offsets.py
 # ===========================================================================
 
+
 def test_plausible_range_and_usable():
     from TranslonScorer.offsets import plausible_offset_range, usable_read_length, psite_to_asite
     from TranslonScorer.model import OffsetParams
+
     p = OffsetParams()
     lo, hi = plausible_offset_range(25, p)
     assert lo == 8 and hi == min(20, int(25 * p.max_frac))  # 25*0.6667=16
@@ -216,6 +247,7 @@ def test_plausible_range_and_usable():
 def test_global_offsets_and_dispatch():
     from TranslonScorer.offsets import global_offsets, make_offset_table
     from TranslonScorer.model import OffsetParams
+
     p = OffsetParams(method="global", global_offset=12)
     table = global_offsets(p)
     assert set(table.keys()) == set(range(25, 36))
@@ -227,6 +259,7 @@ def test_global_offsets_and_dispatch():
 def test_make_offset_table_metagene_raises():
     from TranslonScorer.offsets import make_offset_table
     from TranslonScorer.model import OffsetParams
+
     with pytest.raises(NotImplementedError):
         make_offset_table(OffsetParams(method="metagene"))
 
@@ -234,6 +267,7 @@ def test_make_offset_table_metagene_raises():
 def test_make_offset_table_unknown_raises():
     from TranslonScorer.offsets import make_offset_table
     from TranslonScorer.model import OffsetParams
+
     with pytest.raises(ValueError):
         make_offset_table(OffsetParams(method="bogus"))
 
@@ -241,16 +275,19 @@ def test_make_offset_table_unknown_raises():
 def test_file_offsets_roundtrip_and_clamp(tmp_path):
     from TranslonScorer.offsets import file_offsets, make_offset_table
     from TranslonScorer.model import OffsetParams
+
     csv = tmp_path / "offsets.csv"
-    pl.DataFrame({
-        "read_length": [28, 29, 24, 30],   # 24 dropped (unusable)
-        "offset": [12, 99, 12, 13],        # 99 clamped to plausible hi
-        "site": ["P", "P", "P", "A"],      # A row dropped
-    }).write_csv(csv)
+    pl.DataFrame(
+        {
+            "read_length": [28, 29, 24, 30],  # 24 dropped (unusable)
+            "offset": [12, 99, 12, 13],  # 99 clamped to plausible hi
+            "site": ["P", "P", "P", "A"],  # A row dropped
+        }
+    ).write_csv(csv)
     p = OffsetParams(method="file", offsets_file=str(csv))
     table = file_offsets(str(csv), p)
-    assert 24 not in table          # unusable length
-    assert 30 not in table          # A-site row filtered
+    assert 24 not in table  # unusable length
+    assert 30 not in table  # A-site row filtered
     assert table[28] == 12
     assert table[29] == min(20, int(29 * p.max_frac))  # clamped
     # dispatch path equivalent
@@ -260,6 +297,7 @@ def test_file_offsets_roundtrip_and_clamp(tmp_path):
 def test_file_offsets_missing_columns_raises(tmp_path):
     from TranslonScorer.offsets import file_offsets
     from TranslonScorer.model import OffsetParams
+
     csv = tmp_path / "bad.csv"
     pl.DataFrame({"read_length": [28]}).write_csv(csv)
     with pytest.raises(ValueError):
@@ -269,6 +307,7 @@ def test_file_offsets_missing_columns_raises(tmp_path):
 def test_make_offset_table_file_requires_path():
     from TranslonScorer.offsets import make_offset_table
     from TranslonScorer.model import OffsetParams
+
     with pytest.raises(ValueError):
         make_offset_table(OffsetParams(method="file", offsets_file=None))
 
@@ -277,41 +316,48 @@ def test_make_offset_table_file_requires_path():
 # coverage/profile.py
 # ===========================================================================
 
+
 def _reads() -> pl.DataFrame:
-    return pl.DataFrame({
-        "tran_id": ["t1", "t1", "t1"],
-        "tran_start_bam": [100, 100, 200],
-        "length": [29, 29, 30],
-        "count": [1.0, 2.0, 5.0],
-    })
+    return pl.DataFrame(
+        {
+            "tran_id": ["t1", "t1", "t1"],
+            "tran_start_bam": [100, 100, 200],
+            "length": [29, 29, 30],
+            "count": [1.0, 2.0, 5.0],
+        }
+    )
 
 
 def test_apply_offsets_psite_groups_positions():
     from TranslonScorer.coverage.profile import apply_offsets
+
     out = apply_offsets(_reads(), {29: 12, 30: 13}, site="P")
     d = dict(zip(out["pos"], out["count"]))
-    assert d[112] == 3.0   # 100+12, two reads summed
-    assert d[213] == 5.0   # 200+13
+    assert d[112] == 3.0  # 100+12, two reads summed
+    assert d[213] == 5.0  # 200+13
 
 
 def test_apply_offsets_asite_adds_codon():
     from TranslonScorer.coverage.profile import apply_offsets
+
     out = apply_offsets(_reads(), {29: 12, 30: 13}, site="A")
     d = dict(zip(out["pos"], out["count"]))
-    assert d[115] == 3.0   # 100+12+3
-    assert d[216] == 5.0   # 200+13+3
+    assert d[115] == 3.0  # 100+12+3
+    assert d[216] == 5.0  # 200+13+3
 
 
 def test_apply_offsets_default_offset_fallback():
     from TranslonScorer.coverage.profile import apply_offsets
+
     out = apply_offsets(_reads(), {}, site="P", default_offset=10)
     d = dict(zip(out["pos"], out["count"]))
-    assert d[110] == 3.0   # 100+10 fallback
+    assert d[110] == 3.0  # 100+10 fallback
     assert d[210] == 5.0
 
 
 def test_apply_offsets_empty_and_bad_site_and_missing_cols():
     from TranslonScorer.coverage.profile import apply_offsets
+
     empty = apply_offsets(pl.DataFrame(), {}, site="P")
     assert empty.is_empty() and "pos" in empty.columns
     with pytest.raises(ValueError):
@@ -322,6 +368,7 @@ def test_apply_offsets_empty_and_bad_site_and_missing_cols():
 
 def test_size_factors_single_and_multi():
     from TranslonScorer.coverage.profile import size_factors
+
     # no sample col => trivial
     assert size_factors(pl.DataFrame({"pos": [1], "count": [1.0]})) == {"": 1.0}
     one = size_factors(pl.DataFrame({"sample_id": ["a"], "pos": [1], "count": [1.0]}))
@@ -332,8 +379,10 @@ def test_size_factors_single_and_multi():
 # workflows.py  (orchestration loop via a fake provider — no heavy data)
 # ===========================================================================
 
+
 class _FakeProvider:
     """Minimal CoverageProvider: returns the same coverage for any region."""
+
     def __init__(self, cov: pl.DataFrame):
         self._cov = cov
 
@@ -352,8 +401,12 @@ def test_score_events_over_provider_scores_and_skips():
     cov = pl.DataFrame({"pos": pos, "count": [50.0] * len(pos)})
 
     scored = _score_events_over_provider(
-        events, _FakeProvider(cov),
-        site="A", group="g", tier="aggregate", thr=DEFAULT_THRESHOLDS,
+        events,
+        _FakeProvider(cov),
+        site="A",
+        group="g",
+        tier="aggregate",
+        thr=DEFAULT_THRESHOLDS,
     )
     assert scored.height > 0
     assert set(scored.columns) >= {"event_id", "aspect", "eligibility", "call"}
@@ -362,13 +415,25 @@ def test_score_events_over_provider_scores_and_skips():
 def test_score_events_over_provider_empty_events():
     from TranslonScorer.workflows import _score_events_over_provider
     from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
-    empty = pl.DataFrame(schema={
-        "event_id": pl.UInt64, "type": pl.Utf8, "chrom": pl.Utf8,
-        "strand": pl.Int64, "start": pl.Int64, "end": pl.Int64, "phase": pl.Int64,
-    })
+
+    empty = pl.DataFrame(
+        schema={
+            "event_id": pl.UInt64,
+            "type": pl.Utf8,
+            "chrom": pl.Utf8,
+            "strand": pl.Int64,
+            "start": pl.Int64,
+            "end": pl.Int64,
+            "phase": pl.Int64,
+        }
+    )
     out = _score_events_over_provider(
-        empty, _FakeProvider(pl.DataFrame({"pos": [1], "count": [1.0]})),
-        site="A", group="g", tier="t", thr=DEFAULT_THRESHOLDS,
+        empty,
+        _FakeProvider(pl.DataFrame({"pos": [1], "count": [1.0]})),
+        site="A",
+        group="g",
+        tier="t",
+        thr=DEFAULT_THRESHOLDS,
     )
     assert out.is_empty()
 
@@ -377,11 +442,16 @@ def test_score_events_over_provider_empty_coverage_skips():
     from TranslonScorer.workflows import _score_events_over_provider
     from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
     from TranslonScorer.events import extract_events
+
     events, _, _ = extract_events(_blocks(), _translons())
     empty_cov = pl.DataFrame(schema={"pos": pl.Int64, "count": pl.Float64})
     out = _score_events_over_provider(
-        events, _FakeProvider(empty_cov),
-        site="A", group="g", tier="t", thr=DEFAULT_THRESHOLDS,
+        events,
+        _FakeProvider(empty_cov),
+        site="A",
+        group="g",
+        tier="t",
+        thr=DEFAULT_THRESHOLDS,
     )
     assert out.is_empty()
 
@@ -390,8 +460,10 @@ def test_score_events_over_provider_empty_coverage_skips():
 # io/matrix.py (fixture-backed)
 # ===========================================================================
 
+
 def test_matrix_parse_read_id():
     from TranslonScorer.io.matrix import _parse_read_id
+
     assert _parse_read_id("read_7") == 7
     assert _parse_read_id("junk") is None
 
@@ -399,6 +471,7 @@ def test_matrix_parse_read_id():
 # ===========================================================================
 # io/annotation.py
 # ===========================================================================
+
 
 def _write_gtf(tmp_path) -> str:
     # Two-CDS-exon transcript on + strand, plus one on - strand, same gene.
@@ -415,6 +488,7 @@ def _write_gtf(tmp_path) -> str:
 
 def test_build_cds_blocks(tmp_path):
     from TranslonScorer.io.annotation import build_cds_blocks
+
     df = build_cds_blocks(_write_gtf(tmp_path))
     tx1 = df.filter(pl.col("tran_id") == "TX1").row(0, named=True)
     assert tx1["gene_id"] == "G1"
@@ -429,12 +503,14 @@ def test_build_exon_blocks_includes_utrs_mrna_origin(tmp_path):
     """build_exon_blocks spans full exons (UTR included) with mRNA-5' origin,
     unlike build_cds_blocks which starts at the first CDS base."""
     from TranslonScorer.io.annotation import build_exon_blocks, build_cds_blocks
+
     lines = [
         # + strand transcript: exon 100-160 (incl 5'UTR), CDS only 130-160
         'chr1\tsrc\texon\t101\t160\t.\t+\t.\tgene_id "G"; transcript_id "TX";',
         'chr1\tsrc\tCDS\t131\t160\t.\t+\t0\tgene_id "G"; transcript_id "TX";',
     ]
-    p = tmp_path / "u.gtf"; p.write_text("\n".join(lines) + "\n")
+    p = tmp_path / "u.gtf"
+    p.write_text("\n".join(lines) + "\n")
     ex = build_exon_blocks(str(p)).filter(pl.col("tran_id") == "TX").row(0, named=True)
     cd = build_cds_blocks(str(p)).filter(pl.col("tran_id") == "TX").row(0, named=True)
     # exon block starts at genomic 100 (0-based), tran_start 0 = mRNA 5' end
@@ -446,6 +522,7 @@ def test_build_exon_blocks_includes_utrs_mrna_origin(tmp_path):
 
 def test_build_gene_spans(tmp_path):
     from TranslonScorer.io.annotation import build_cds_blocks, build_gene_spans
+
     spans, id_of = build_gene_spans(build_cds_blocks(_write_gtf(tmp_path)))
     assert ("chr1", "+") in spans
     assert ("chr2", "-") in spans
@@ -458,8 +535,13 @@ def test_build_gene_spans(tmp_path):
 @pytest.mark.skipif(not HAS_MATRIX, reason="matrix partition fixture not in data/")
 def test_matrix_manifest_helpers():
     from TranslonScorer.io.matrix import (
-        _manifest, _count_parquets, _samples_df, _reads_parquet_path, _discover_bam,
+        _manifest,
+        _count_parquets,
+        _samples_df,
+        _reads_parquet_path,
+        _discover_bam,
     )
+
     mp, manifest = _manifest(MATRIX_PART)
     assert mp.exists() and isinstance(manifest, dict)
     assert isinstance(_count_parquets(mp, manifest), list)

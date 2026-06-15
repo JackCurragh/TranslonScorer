@@ -18,19 +18,23 @@ def _metric_value(assignments: pl.DataFrame, name: str) -> float:
 
 
 def test_assignment_frame_likelihood_uses_transcript_signal_frame_not_cds_relative_frame():
-    candidates = pl.DataFrame({
-        "read_key": ["r1"],
-        "tran_id": ["tx_offset"],
-        "tran_start_bam": [31],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1"],
+            "tran_id": ["tx_offset"],
+            "tran_start_bam": [31],
+        }
+    )
     cds = pl.DataFrame({"tran_id": ["tx_offset"], "start": [1], "stop": [91]})
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_offset"],
-        "codon": [10],
-        "p0": [0.02],
-        "p1": [0.96],
-        "p2": [0.02],
-    })
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_offset"],
+            "codon": [10],
+            "p0": [0.02],
+            "p1": [0.96],
+            "p2": [0.02],
+        }
+    )
 
     prepared = prepare_assignment_candidates(candidates, frame_support=frame_support, cds_tran=cds)
 
@@ -40,21 +44,27 @@ def test_assignment_frame_likelihood_uses_transcript_signal_frame_not_cds_relati
 
 
 def test_low_support_frame_evidence_is_neutral_for_read_assignment():
-    candidates = pl.DataFrame({
-        "read_key": ["r1", "r1"],
-        "tran_id": ["tx_supported", "tx_unsupported"],
-        "tran_start_bam": [30, 31],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_supported", "tx_unsupported"],
-        "codon": [10, 10],
-        "p0": [0.96, 0.96],
-        "p1": [0.02, 0.02],
-        "p2": [0.02, 0.02],
-        "support_evidence": [1.0, 0.0],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1", "r1"],
+            "tran_id": ["tx_supported", "tx_unsupported"],
+            "tran_start_bam": [30, 31],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_supported", "tx_unsupported"],
+            "codon": [10, 10],
+            "p0": [0.96, 0.96],
+            "p1": [0.02, 0.02],
+            "p2": [0.02, 0.02],
+            "support_evidence": [1.0, 0.0],
+        }
+    )
 
-    prepared = prepare_assignment_candidates(candidates, frame_support=frame_support).sort("tran_id")
+    prepared = prepare_assignment_candidates(candidates, frame_support=frame_support).sort(
+        "tran_id"
+    )
     unsupported = prepared.filter(pl.col("tran_id") == "tx_unsupported")
 
     assert unsupported["raw_frame_likelihood"][0] == 0.02
@@ -62,20 +72,24 @@ def test_low_support_frame_evidence_is_neutral_for_read_assignment():
 
 
 def test_min_frame_support_count_gates_weak_matched_frame_rows():
-    candidates = pl.DataFrame({
-        "read_key": ["r1", "r1"],
-        "tran_id": ["tx_supported", "tx_low_count"],
-        "tran_start_bam": [30, 31],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_supported", "tx_low_count"],
-        "codon": [10, 10],
-        "p0": [0.96, 0.96],
-        "p1": [0.02, 0.02],
-        "p2": [0.02, 0.02],
-        "support_evidence": [1.0, 1.0],
-        "total_count": [20.0, 2.0],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1", "r1"],
+            "tran_id": ["tx_supported", "tx_low_count"],
+            "tran_start_bam": [30, 31],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_supported", "tx_low_count"],
+            "codon": [10, 10],
+            "p0": [0.96, 0.96],
+            "p1": [0.02, 0.02],
+            "p2": [0.02, 0.02],
+            "support_evidence": [1.0, 1.0],
+            "total_count": [20.0, 2.0],
+        }
+    )
 
     prepared = prepare_assignment_candidates(
         candidates,
@@ -93,20 +107,24 @@ def test_min_frame_support_count_gates_weak_matched_frame_rows():
 
 
 def test_complete_frame_support_gate_prevents_no_support_target_bias():
-    candidates = pl.DataFrame({
-        "read_key": ["r1", "r1"],
-        "tran_id": ["tx_supported", "tx_missing"],
-        "tran_start_bam": [31, 30],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_supported"],
-        "codon": [10],
-        "p0": [0.96],
-        "p1": [0.02],
-        "p2": [0.02],
-        "support_evidence": [1.0],
-        "total_count": [200.0],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1", "r1"],
+            "tran_id": ["tx_supported", "tx_missing"],
+            "tran_start_bam": [31, 30],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_supported"],
+            "codon": [10],
+            "p0": [0.96],
+            "p1": [0.02],
+            "p2": [0.02],
+            "support_evidence": [1.0],
+            "total_count": [200.0],
+        }
+    )
 
     partial = prepare_assignment_candidates(
         candidates,
@@ -129,21 +147,25 @@ def test_complete_frame_support_gate_prevents_no_support_target_bias():
 
 
 def test_single_target_reads_remain_fixed_across_assignment_methods():
-    candidates = pl.DataFrame({
-        "read_key": ["unique", "ambiguous", "ambiguous"],
-        "tran_id": ["tx_fixed", "tx_a", "tx_b"],
-        "tran_start_bam": [30, 30, 31],
-        "count": [2.0, 1.0, 1.0],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_fixed", "tx_a", "tx_b"],
-        "codon": [10, 10, 10],
-        "p0": [0.96, 0.96, 0.02],
-        "p1": [0.02, 0.02, 0.96],
-        "p2": [0.02, 0.02, 0.02],
-        "support_evidence": [1.0, 1.0, 1.0],
-        "total_count": [100.0, 100.0, 100.0],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["unique", "ambiguous", "ambiguous"],
+            "tran_id": ["tx_fixed", "tx_a", "tx_b"],
+            "tran_start_bam": [30, 30, 31],
+            "count": [2.0, 1.0, 1.0],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_fixed", "tx_a", "tx_b"],
+            "codon": [10, 10, 10],
+            "p0": [0.96, 0.96, 0.02],
+            "p1": [0.02, 0.02, 0.96],
+            "p2": [0.02, 0.02, 0.02],
+            "support_evidence": [1.0, 1.0, 1.0],
+            "total_count": [100.0, 100.0, 100.0],
+        }
+    )
 
     for method in ["fractional", "em", "frame_em", "rdg_gated_frame_em"]:
         result = assign_reads(
@@ -162,17 +184,33 @@ def test_single_target_reads_remain_fixed_across_assignment_methods():
 def test_frame_aware_em_beats_frame_blind_em_for_frame_discordant_isoform_candidates():
     rows = []
     for idx in range(25):
-        rows.append({"read_key": f"amb:{idx}", "tran_id": "tx_in_frame", "tran_start_bam": 30, "is_true": True})
-        rows.append({"read_key": f"amb:{idx}", "tran_id": "tx_shifted", "tran_start_bam": 31, "is_true": False})
+        rows.append(
+            {
+                "read_key": f"amb:{idx}",
+                "tran_id": "tx_in_frame",
+                "tran_start_bam": 30,
+                "is_true": True,
+            }
+        )
+        rows.append(
+            {
+                "read_key": f"amb:{idx}",
+                "tran_id": "tx_shifted",
+                "tran_start_bam": 31,
+                "is_true": False,
+            }
+        )
 
     candidates = pl.DataFrame(rows)
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_in_frame", "tx_shifted"],
-        "codon": [10, 10],
-        "p0": [0.96, 0.96],
-        "p1": [0.02, 0.02],
-        "p2": [0.02, 0.02],
-    })
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_in_frame", "tx_shifted"],
+            "codon": [10, 10],
+            "p0": [0.96, 0.96],
+            "p1": [0.02, 0.02],
+            "p2": [0.02, 0.02],
+        }
+    )
 
     blind = assign_reads(candidates, method="em", frame_support=frame_support)
     aware = assign_reads(candidates, method="frame_em", frame_support=frame_support)
@@ -182,42 +220,54 @@ def test_frame_aware_em_beats_frame_blind_em_for_frame_discordant_isoform_candid
 
 
 def test_frame_aware_em_matches_frame_blind_em_when_frame_is_uninformative():
-    candidates = pl.DataFrame({
-        "read_key": ["r1", "r1", "r2", "r2"],
-        "tran_id": ["tx_a", "tx_b", "tx_a", "tx_b"],
-        "tran_start_bam": [30, 31, 33, 34],
-        "is_true": [True, False, True, False],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_a", "tx_a", "tx_b", "tx_b"],
-        "codon": [10, 11, 10, 11],
-        "p0": [1 / 3, 1 / 3, 1 / 3, 1 / 3],
-        "p1": [1 / 3, 1 / 3, 1 / 3, 1 / 3],
-        "p2": [1 / 3, 1 / 3, 1 / 3, 1 / 3],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1", "r1", "r2", "r2"],
+            "tran_id": ["tx_a", "tx_b", "tx_a", "tx_b"],
+            "tran_start_bam": [30, 31, 33, 34],
+            "is_true": [True, False, True, False],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_a", "tx_a", "tx_b", "tx_b"],
+            "codon": [10, 11, 10, 11],
+            "p0": [1 / 3, 1 / 3, 1 / 3, 1 / 3],
+            "p1": [1 / 3, 1 / 3, 1 / 3, 1 / 3],
+            "p2": [1 / 3, 1 / 3, 1 / 3, 1 / 3],
+        }
+    )
 
-    blind = assign_reads(candidates, method="em", frame_support=frame_support).assignments.sort(["read_key", "tran_id"])
-    aware = assign_reads(candidates, method="frame_em", frame_support=frame_support).assignments.sort(["read_key", "tran_id"])
+    blind = assign_reads(candidates, method="em", frame_support=frame_support).assignments.sort(
+        ["read_key", "tran_id"]
+    )
+    aware = assign_reads(
+        candidates, method="frame_em", frame_support=frame_support
+    ).assignments.sort(["read_key", "tran_id"])
 
     assert np.allclose(blind["posterior"].to_numpy(), aware["posterior"].to_numpy())
 
 
 def test_frame_aware_em_does_not_resolve_same_frame_isoform_aliases():
-    candidates = pl.DataFrame({
-        "read_key": ["r1", "r1", "r2", "r2"],
-        "tran_id": ["tx_true", "tx_same_frame", "tx_true", "tx_same_frame"],
-        "tran_start_bam": [30, 60, 33, 63],
-        "is_true": [True, False, True, False],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_true", "tx_same_frame", "tx_true", "tx_same_frame"],
-        "codon": [10, 20, 11, 21],
-        "p0": [0.96, 0.96, 0.96, 0.96],
-        "p1": [0.02, 0.02, 0.02, 0.02],
-        "p2": [0.02, 0.02, 0.02, 0.02],
-        "support_evidence": [1.0, 1.0, 1.0, 1.0],
-        "total_count": [100.0, 100.0, 100.0, 100.0],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1", "r1", "r2", "r2"],
+            "tran_id": ["tx_true", "tx_same_frame", "tx_true", "tx_same_frame"],
+            "tran_start_bam": [30, 60, 33, 63],
+            "is_true": [True, False, True, False],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_true", "tx_same_frame", "tx_true", "tx_same_frame"],
+            "codon": [10, 20, 11, 21],
+            "p0": [0.96, 0.96, 0.96, 0.96],
+            "p1": [0.02, 0.02, 0.02, 0.02],
+            "p2": [0.02, 0.02, 0.02, 0.02],
+            "support_evidence": [1.0, 1.0, 1.0, 1.0],
+            "total_count": [100.0, 100.0, 100.0, 100.0],
+        }
+    )
 
     blind = assign_reads(candidates, method="em", frame_support=frame_support)
     aware = assign_reads(
@@ -233,21 +283,25 @@ def test_frame_aware_em_does_not_resolve_same_frame_isoform_aliases():
 
 
 def test_dual_frame_support_keeps_frame_discordant_candidates_ambiguous():
-    candidates = pl.DataFrame({
-        "read_key": ["r1", "r1"],
-        "tran_id": ["tx_true", "tx_overlap"],
-        "tran_start_bam": [30, 31],
-        "is_true": [True, False],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_true", "tx_overlap"],
-        "codon": [10, 10],
-        "p0": [0.49, 0.49],
-        "p1": [0.49, 0.49],
-        "p2": [0.02, 0.02],
-        "support_evidence": [1.0, 1.0],
-        "total_count": [100.0, 100.0],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1", "r1"],
+            "tran_id": ["tx_true", "tx_overlap"],
+            "tran_start_bam": [30, 31],
+            "is_true": [True, False],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_true", "tx_overlap"],
+            "codon": [10, 10],
+            "p0": [0.49, 0.49],
+            "p1": [0.49, 0.49],
+            "p2": [0.02, 0.02],
+            "support_evidence": [1.0, 1.0],
+            "total_count": [100.0, 100.0],
+        }
+    )
 
     blind = assign_reads(candidates, method="em", frame_support=frame_support)
     aware = assign_reads(
@@ -265,12 +319,44 @@ def test_dual_frame_support_keeps_frame_discordant_candidates_ambiguous():
 def test_locus_em_uses_unique_reads_to_resolve_genomic_multimappers():
     rows = []
     for idx in range(20):
-        rows.append({"read_key": f"uniq_a:{idx}", "locus_id": "locus_a", "tran_id": "tx_a", "tran_start_bam": 30, "is_true": True})
+        rows.append(
+            {
+                "read_key": f"uniq_a:{idx}",
+                "locus_id": "locus_a",
+                "tran_id": "tx_a",
+                "tran_start_bam": 30,
+                "is_true": True,
+            }
+        )
     for idx in range(2):
-        rows.append({"read_key": f"uniq_b:{idx}", "locus_id": "locus_b", "tran_id": "tx_b", "tran_start_bam": 30, "is_true": True})
+        rows.append(
+            {
+                "read_key": f"uniq_b:{idx}",
+                "locus_id": "locus_b",
+                "tran_id": "tx_b",
+                "tran_start_bam": 30,
+                "is_true": True,
+            }
+        )
     for idx in range(20):
-        rows.append({"read_key": f"multi:{idx}", "locus_id": "locus_a", "tran_id": "tx_a", "tran_start_bam": 30, "is_true": True})
-        rows.append({"read_key": f"multi:{idx}", "locus_id": "locus_b", "tran_id": "tx_b", "tran_start_bam": 30, "is_true": False})
+        rows.append(
+            {
+                "read_key": f"multi:{idx}",
+                "locus_id": "locus_a",
+                "tran_id": "tx_a",
+                "tran_start_bam": 30,
+                "is_true": True,
+            }
+        )
+        rows.append(
+            {
+                "read_key": f"multi:{idx}",
+                "locus_id": "locus_b",
+                "tran_id": "tx_b",
+                "tran_start_bam": 30,
+                "is_true": False,
+            }
+        )
 
     candidates = pl.DataFrame(rows)
     fractional = assign_reads(candidates, method="fractional", abundance_key="locus_id")
@@ -278,38 +364,46 @@ def test_locus_em_uses_unique_reads_to_resolve_genomic_multimappers():
 
     fractional_soft = _metric_value(fractional.assignments, "soft_true_posterior")
     em_soft = _metric_value(em.assignments, "soft_true_posterior")
-    ambiguous_em = em.assignments.filter((pl.col("read_key") == "multi:0") & (pl.col("locus_id") == "locus_a"))
+    ambiguous_em = em.assignments.filter(
+        (pl.col("read_key") == "multi:0") & (pl.col("locus_id") == "locus_a")
+    )
 
     assert fractional_soft < em_soft
     assert ambiguous_em["posterior"][0] > 0.85
 
 
 def test_composite_abundance_key_supports_joint_locus_transcript_assignment():
-    candidates = pl.DataFrame({
-        "read_key": ["r1", "r1"],
-        "locus_id": ["locus_a", "locus_b"],
-        "tran_id": ["tx_a", "tx_b"],
-        "tran_start_bam": [30, 30],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1", "r1"],
+            "locus_id": ["locus_a", "locus_b"],
+            "tran_id": ["tx_a", "tx_b"],
+            "tran_start_bam": [30, 30],
+        }
+    )
 
     result = assign_reads(candidates, method="fractional", abundance_key="locus_id,tran_id")
 
-    assert set(result.assignments["assignment_target"].to_list()) == {"locus_a|tx_a", "locus_b|tx_b"}
+    assert set(result.assignments["assignment_target"].to_list()) == {
+        "locus_a|tx_a",
+        "locus_b|tx_b",
+    }
     assert np.allclose(result.assignments["posterior"].to_numpy(), [0.5, 0.5])
 
 
 def test_assignment_collapses_duplicate_targets_before_target_posterior():
-    candidates = pl.DataFrame({
-        "read_key": ["r1", "r1", "r1"],
-        "locus_id": ["locus_a", "locus_a", "locus_b"],
-        "tran_id": ["tx_a1", "tx_a2", "tx_b1"],
-        "tran_start_bam": [30, 30, 30],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1", "r1", "r1"],
+            "locus_id": ["locus_a", "locus_a", "locus_b"],
+            "tran_id": ["tx_a1", "tx_a2", "tx_b1"],
+            "tran_start_bam": [30, 30, 30],
+        }
+    )
 
     result = assign_reads(candidates, method="fractional", abundance_key="locus_id").assignments
     target_mass = (
-        result
-        .group_by("assignment_target")
+        result.group_by("assignment_target")
         .agg(pl.col("posterior").sum().alias("target_posterior"))
         .sort("assignment_target")
     )
@@ -318,18 +412,22 @@ def test_assignment_collapses_duplicate_targets_before_target_posterior():
 
 
 def test_assignment_identifiability_classes_reads_by_target_uncertainty():
-    candidates = pl.DataFrame({
-        "read_key": ["unique", "amb", "amb", "resolved", "resolved"],
-        "tran_id": ["tx_a", "tx_a", "tx_b", "tx_a", "tx_b"],
-        "tran_start_bam": [30, 30, 30, 30, 31],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_a", "tx_b"],
-        "codon": [10, 10],
-        "p0": [0.96, 0.96],
-        "p1": [0.02, 0.02],
-        "p2": [0.02, 0.02],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["unique", "amb", "amb", "resolved", "resolved"],
+            "tran_id": ["tx_a", "tx_a", "tx_b", "tx_a", "tx_b"],
+            "tran_start_bam": [30, 30, 30, 30, 31],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_a", "tx_b"],
+            "codon": [10, 10],
+            "p0": [0.96, 0.96],
+            "p1": [0.02, 0.02],
+            "p2": [0.02, 0.02],
+        }
+    )
 
     result = assign_reads(candidates, method="frame_fractional", frame_support=frame_support)
     classes = assignment_identifiability(result.assignments)
@@ -345,19 +443,30 @@ def test_assignment_identifiability_classes_reads_by_target_uncertainty():
 def test_rdg_gated_frame_em_keeps_clean_frame_disambiguation_gain():
     rows = []
     for idx in range(25):
-        rows.append({"read_key": f"amb:{idx}", "tran_id": "tx_true", "tran_start_bam": 30, "is_true": True})
-        rows.append({"read_key": f"amb:{idx}", "tran_id": "tx_shifted", "tran_start_bam": 31, "is_true": False})
+        rows.append(
+            {"read_key": f"amb:{idx}", "tran_id": "tx_true", "tran_start_bam": 30, "is_true": True}
+        )
+        rows.append(
+            {
+                "read_key": f"amb:{idx}",
+                "tran_id": "tx_shifted",
+                "tran_start_bam": 31,
+                "is_true": False,
+            }
+        )
 
     candidates = pl.DataFrame(rows)
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_true", "tx_shifted"],
-        "codon": [10, 10],
-        "p0": [0.96, 0.96],
-        "p1": [0.02, 0.02],
-        "p2": [0.02, 0.02],
-        "support_evidence": [1.0, 1.0],
-        "total_count": [100.0, 100.0],
-    })
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_true", "tx_shifted"],
+            "codon": [10, 10],
+            "p0": [0.96, 0.96],
+            "p1": [0.02, 0.02],
+            "p2": [0.02, 0.02],
+            "support_evidence": [1.0, 1.0],
+            "total_count": [100.0, 100.0],
+        }
+    )
 
     blind = assign_reads(candidates, method="em", frame_support=frame_support)
     gated = assign_reads(
@@ -376,21 +485,25 @@ def test_rdg_gated_frame_em_keeps_clean_frame_disambiguation_gain():
 
 
 def test_rdg_gated_frame_em_reports_alias_group_and_falls_back_to_em():
-    candidates = pl.DataFrame({
-        "read_key": ["r1", "r1", "r1"],
-        "tran_id": ["tx_true", "tx_same_frame", "tx_shifted"],
-        "tran_start_bam": [30, 60, 31],
-        "is_true": [True, False, False],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_true", "tx_same_frame", "tx_shifted"],
-        "codon": [10, 20, 10],
-        "p0": [0.96, 0.96, 0.96],
-        "p1": [0.02, 0.02, 0.02],
-        "p2": [0.02, 0.02, 0.02],
-        "support_evidence": [1.0, 1.0, 1.0],
-        "total_count": [100.0, 100.0, 100.0],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1", "r1", "r1"],
+            "tran_id": ["tx_true", "tx_same_frame", "tx_shifted"],
+            "tran_start_bam": [30, 60, 31],
+            "is_true": [True, False, False],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_true", "tx_same_frame", "tx_shifted"],
+            "codon": [10, 20, 10],
+            "p0": [0.96, 0.96, 0.96],
+            "p1": [0.02, 0.02, 0.02],
+            "p2": [0.02, 0.02, 0.02],
+            "support_evidence": [1.0, 1.0, 1.0],
+            "total_count": [100.0, 100.0, 100.0],
+        }
+    )
     prepared = prepare_assignment_candidates(
         candidates,
         frame_support=frame_support,
@@ -419,26 +532,60 @@ def test_rdg_gated_frame_em_reports_alias_group_and_falls_back_to_em():
 def test_rdg_consensus_gate_blocks_sparse_misleading_frame_signal():
     rows = []
     for idx in range(99):
-        rows.append({"read_key": f"alias:{idx}", "tran_id": "tx_true", "tran_start_bam": 30, "is_true": True})
-        rows.append({"read_key": f"alias:{idx}", "tran_id": "tx_wrong_a", "tran_start_bam": 31, "is_true": False})
-        rows.append({"read_key": f"alias:{idx}", "tran_id": "tx_wrong_b", "tran_start_bam": 34, "is_true": False})
-    rows.append({"read_key": "sparse_unique", "tran_id": "tx_true", "tran_start_bam": 30, "is_true": True})
-    rows.append({"read_key": "sparse_unique", "tran_id": "tx_wrong_unique", "tran_start_bam": 31, "is_true": False})
+        rows.append(
+            {
+                "read_key": f"alias:{idx}",
+                "tran_id": "tx_true",
+                "tran_start_bam": 30,
+                "is_true": True,
+            }
+        )
+        rows.append(
+            {
+                "read_key": f"alias:{idx}",
+                "tran_id": "tx_wrong_a",
+                "tran_start_bam": 31,
+                "is_true": False,
+            }
+        )
+        rows.append(
+            {
+                "read_key": f"alias:{idx}",
+                "tran_id": "tx_wrong_b",
+                "tran_start_bam": 34,
+                "is_true": False,
+            }
+        )
+    rows.append(
+        {"read_key": "sparse_unique", "tran_id": "tx_true", "tran_start_bam": 30, "is_true": True}
+    )
+    rows.append(
+        {
+            "read_key": "sparse_unique",
+            "tran_id": "tx_wrong_unique",
+            "tran_start_bam": 31,
+            "is_true": False,
+        }
+    )
 
     candidates = pl.DataFrame(rows)
     support_rows = (
-        candidates.select([
-            "tran_id",
-            (pl.col("tran_start_bam") // 3).alias("codon"),
-        ])
+        candidates.select(
+            [
+                "tran_id",
+                (pl.col("tran_start_bam") // 3).alias("codon"),
+            ]
+        )
         .unique()
-        .with_columns([
-            pl.lit(0.02).alias("p0"),
-            pl.lit(0.96).alias("p1"),
-            pl.lit(0.02).alias("p2"),
-            pl.lit(1.0).alias("support_evidence"),
-            pl.lit(100.0).alias("total_count"),
-        ])
+        .with_columns(
+            [
+                pl.lit(0.02).alias("p0"),
+                pl.lit(0.96).alias("p1"),
+                pl.lit(0.02).alias("p2"),
+                pl.lit(1.0).alias("support_evidence"),
+                pl.lit(100.0).alias("total_count"),
+            ]
+        )
     )
 
     blind = assign_reads(candidates, method="em", frame_support=support_rows)
@@ -475,21 +622,25 @@ def test_rdg_consensus_gate_blocks_sparse_misleading_frame_signal():
 
 
 def test_compare_read_assignment_writes_rdg_gate_diagnostics(tmp_path):
-    candidates = pl.DataFrame({
-        "read_key": ["r1", "r1"],
-        "tran_id": ["tx_true", "tx_shifted"],
-        "tran_start_bam": [30, 31],
-        "is_true": [True, False],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx_true", "tx_shifted"],
-        "codon": [10, 10],
-        "p0": [0.96, 0.96],
-        "p1": [0.02, 0.02],
-        "p2": [0.02, 0.02],
-        "support_evidence": [1.0, 1.0],
-        "total_count": [100.0, 100.0],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1", "r1"],
+            "tran_id": ["tx_true", "tx_shifted"],
+            "tran_start_bam": [30, 31],
+            "is_true": [True, False],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx_true", "tx_shifted"],
+            "codon": [10, 10],
+            "p0": [0.96, 0.96],
+            "p1": [0.02, 0.02],
+            "p2": [0.02, 0.02],
+            "support_evidence": [1.0, 1.0],
+            "total_count": [100.0, 100.0],
+        }
+    )
     candidates_path = tmp_path / "candidates.csv"
     frame_support_path = tmp_path / "frame_support.csv"
     out_prefix = tmp_path / "assignment"

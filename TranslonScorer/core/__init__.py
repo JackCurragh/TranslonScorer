@@ -14,40 +14,29 @@ from .scoring import (
     newscoring,
     globalscores,
     existingscore,
-    assigningscore
+    assigningscore,
 )
 
-from .coordinates import (
-    classify_orf,
-    orfrelativeposition,
-    change_point_analysis
-)
+from .coordinates import classify_orf, orfrelativeposition, change_point_analysis
 
-from .orffinder import (
-    find_orfs,
-    preporfs,
-    find_all_positions,
-    build_codon_automaton
-)
+from .orffinder import find_orfs, preporfs, find_all_positions, build_codon_automaton
 
 __all__ = [
     # Scoring functions
-    'sru_score',
-    'calculate_scores',
-    'oldscoring',
-    'newscoring',
-    'globalscores',
-    'existingscore',
-    'assigningscore',
-    
+    "sru_score",
+    "calculate_scores",
+    "oldscoring",
+    "newscoring",
+    "globalscores",
+    "existingscore",
+    "assigningscore",
     # Coordinate functions
-    'classify_orf',
-    'orfrelativeposition',
-    'change_point_analysis',
-    
+    "classify_orf",
+    "orfrelativeposition",
+    "change_point_analysis",
     # ORF finding functions
-    'find_orfs',
-    'preporfs',
-    'find_all_positions',
-    'build_codon_automaton'
-] 
+    "find_orfs",
+    "preporfs",
+    "find_all_positions",
+    "build_codon_automaton",
+]

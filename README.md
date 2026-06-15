@@ -46,10 +46,22 @@ provider** changes:
 All three feed one scoring core and produce the same `fact_event_score` store
 and per-translon report.
 
+**You do not need a pre-built annotation database.** `extract-events` builds the
+features to score from whatever you have — a GTF/GFF (score annotated CDSs), a
+BED12/bigBed (your own ORF set), a FASTA (de-novo ORF finding), or the
+annotation sqlite:
+
+```sh
+translonscorer extract-events --gtf anno.gtf --feature-type CDS --out-dir run/events  # annotated CDSs
+translonscorer extract-events --bed12 orfs.bed                   --out-dir run/events  # your ORFs
+translonscorer extract-events --fasta contigs.fa --start-codons ATG,CTG --out-dir run/events  # de-novo
+translonscorer extract-events --sqlite anno.translons.sqlite     --out-dir run/events  # annotation DB
+```
+
 The end-to-end flow is four steps:
 
 ```
-extract-events        annotation (sqlite) ─► genomic event store
+extract-events        feature source (GTF/BED/FASTA/sqlite) ─► genomic event store
    │
 score-bams / score-matrix   events + coverage ─► append-only score store
    │

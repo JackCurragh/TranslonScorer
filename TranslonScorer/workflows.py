@@ -50,23 +50,60 @@ from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS, score_events_vectoris
 
 
 def extract_events_workflow(
-    sqlite_path: str,
     out_dir: str,
     *,
+    sqlite_path: Optional[str] = None,
+    gtf_path: Optional[str] = None,
+    feature_type: str = "CDS",
+    bed12_path: Optional[str] = None,
+    bigbed_path: Optional[str] = None,
+    fasta_path: Optional[str] = None,
+    start_codons: Optional[List[str]] = None,
+    stop_codons: Optional[List[str]] = None,
+    min_len: int = 0,
+    max_len: int = 1_000_000,
     annotation_version: str = "",
     chroms: Optional[List[str]] = None,
 ) -> dict:
-    """Extract deduplicated genomic events from an annotation sqlite db.
+    """Extract deduplicated genomic events from any feature source.
 
-    Thin shell over ``events.run_extract``; writes events/, feature_event/ and
-    event_overlap/ Parquet trees under ``out_dir`` and returns a summary dict.
-    ``chroms`` optionally restricts extraction to specific chromosomes.
+    Exactly one source must be given: ``sqlite_path`` (annotation DB),
+    ``gtf_path`` (GTF/GFF, scoring ``feature_type``), ``bed12_path``,
+    ``bigbed_path``, or ``fasta_path`` (de-novo ORF finding). Writes events/,
+    feature_event/, event_overlap/ Parquet trees under ``out_dir``.
     """
-    return run_extract(
-        sqlite_path,
-        out_dir,
-        annotation_version=annotation_version,
-        chroms=chroms,
+    from TranslonScorer.events import write_events
+    from TranslonScorer.io import feature_sources as fs
+
+    sources = [sqlite_path, gtf_path, bed12_path, bigbed_path, fasta_path]
+    if sum(s is not None for s in sources) != 1:
+        raise ValueError(
+            "provide exactly one feature source: sqlite_path | gtf_path | "
+            "bed12_path | bigbed_path | fasta_path"
+        )
+
+    # sqlite keeps its streaming per-chrom reader (the 8.85M-translon scale).
+    if sqlite_path is not None:
+        return run_extract(
+            sqlite_path, out_dir, annotation_version=annotation_version, chroms=chroms
+        )
+
+    if gtf_path is not None:
+        blocks, translons = fs.from_gtf(gtf_path, feature_type=feature_type)
+    elif bed12_path is not None:
+        blocks, translons = fs.from_bed12(bed12_path)
+    elif bigbed_path is not None:
+        blocks, translons = fs.from_bigbed(bigbed_path)
+    else:
+        blocks, translons = fs.from_fasta(
+            fasta_path,
+            start_codons=start_codons,
+            stop_codons=stop_codons,
+            min_len=min_len,
+            max_len=max_len,
+        )
+    return write_events(
+        blocks, translons, out_dir, annotation_version=annotation_version, chroms=chroms
     )
 
 
@@ -259,7 +296,6 @@ def report_workflow(
 
 
 def pipeline_workflow(
-    sqlite_path: str,
     out_dir: str,
     *,
     partition_dirs: Optional[Sequence[Union[str, Path]]] = None,
@@ -274,13 +310,16 @@ def pipeline_workflow(
     transcriptome: bool = False,
     exon_df: Optional[pl.DataFrame] = None,
     policy: Optional[ConsequentialityPolicy] = None,
+    # feature source for extract-events (exactly one; forwarded verbatim)
+    **source_kwargs,
 ) -> Dict[str, str]:
     """Run the whole event-scoring path in one call.
 
     extract-events → score (matrix *or* BAMs) → report. Writes
     ``out_dir/{events,scores}`` and ``out_dir/report.parquet``; returns the
-    paths produced. Exactly one of ``partition_dirs`` (matrix) or ``bams`` must
-    be given.
+    paths produced. Exactly one of ``partition_dirs`` (matrix) or ``bams`` is the
+    coverage source; ``source_kwargs`` selects the feature source for
+    extract-events (sqlite_path | gtf_path | bed12_path | bigbed_path | fasta_path).
     """
     if bool(partition_dirs) == bool(bams):
         raise ValueError("provide exactly one of partition_dirs (matrix) or bams")
@@ -291,10 +330,10 @@ def pipeline_workflow(
     report_path = str(out / "report.parquet")
 
     extract_events_workflow(
-        sqlite_path,
         events_dir,
         annotation_version=annotation_version,
         chroms=chroms,
+        **source_kwargs,
     )
     if partition_dirs:
         score_matrix_workflow(

@@ -24,12 +24,11 @@ from TranslonScorer.cli import cli
 def test_pipeline_workflow_requires_exactly_one_mode(tmp_path: Path):
     from TranslonScorer.workflows import pipeline_workflow
 
+    out = str(tmp_path / "out")
     with pytest.raises(ValueError):
-        pipeline_workflow(str(tmp_path / "x.sqlite"), str(tmp_path / "out"))  # neither
+        pipeline_workflow(out)  # neither matrix nor bams
     with pytest.raises(ValueError):
-        pipeline_workflow(
-            str(tmp_path / "x.sqlite"), str(tmp_path / "out"), partition_dirs=["p"], bams=["b"]
-        )  # both
+        pipeline_workflow(out, partition_dirs=["p"], bams=["b"])  # both coverage modes
 
 
 @pytest.mark.parametrize(

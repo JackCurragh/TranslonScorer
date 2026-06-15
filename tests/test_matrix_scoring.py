@@ -616,7 +616,7 @@ class TestM5MatrixQC:
     """
 
     def test_periodicity_perfect_frame0(self):
-        from TranslonScorer.pipeline.matrix_qc import _compute_periodicity_from_frames
+        from TranslonScorer.matrix_qc import _compute_periodicity_from_frames
 
         # All counts in frame 0
         frames = {0: 100.0, 1: 0.0, 2: 0.0}
@@ -628,7 +628,7 @@ class TestM5MatrixQC:
         assert result["f0"] == pytest.approx(1.0, abs=1e-9)
 
     def test_periodicity_uniform_is_low(self):
-        from TranslonScorer.pipeline.matrix_qc import _compute_periodicity_from_frames
+        from TranslonScorer.matrix_qc import _compute_periodicity_from_frames
 
         # Equal counts in each frame
         frames = {0: 30.0, 1: 30.0, 2: 30.0}
@@ -641,7 +641,7 @@ class TestM5MatrixQC:
         assert result["f0"] == pytest.approx(1/3, rel=0.02)
 
     def test_periodicity_empty_returns_zero(self):
-        from TranslonScorer.pipeline.matrix_qc import _compute_periodicity_from_frames
+        from TranslonScorer.matrix_qc import _compute_periodicity_from_frames
 
         result = _compute_periodicity_from_frames({})
         assert result["periodicity_score"] == pytest.approx(0.0)

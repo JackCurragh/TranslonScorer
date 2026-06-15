@@ -29,6 +29,14 @@ gate:
 	python3 -m pytest tests/test_golden.py tests/test_bam_provider.py -q
 
 lint:
+	ruff check TranslonScorer tests
+	black --check TranslonScorer tests
+
+format:
+	black TranslonScorer tests
+	ruff check --fix TranslonScorer tests
+
+typecheck:
 	mypy --config-file mypy.ini TranslonScorer
 
 test:

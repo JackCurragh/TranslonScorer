@@ -69,7 +69,6 @@ def _scan_gtf_exons(
         "Frame",
         "Attributes",
     ]
-    usecols = [0, 2, 3, 4, 6, 8]
     log_info("Scanning GTF exons (chunked pandas)…")
     tx_re = re.compile(r'(?:^|;)\s*transcript_id\s+"?([^";]+)"?')
     gene_re = re.compile(r'(?:^|;)\s*gene_id\s+"?([^";]+)"?')

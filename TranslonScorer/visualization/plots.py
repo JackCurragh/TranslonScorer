@@ -5,7 +5,6 @@ This module contains functions for generating plots and visualizations
 of TranslonScorer results, including metagene profiles and transcript-specific plots.
 """
 
-
 import plotly.express as px
 import plotly.graph_objects as go
 import polars as pl

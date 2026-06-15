@@ -50,7 +50,7 @@ def _slice_orf_chain(
     while i < n:
         ts, te = tr_starts[i], tr_ends[i]
         pos = tr_pos[i]
-        fid = path[i]
+        path[i]
         # Range feature
         if ts is not None and te is not None:
             if not (te <= orf_start or ts >= orf_end):
@@ -88,7 +88,7 @@ def _build_composites(
     chain = fr["feature_chain"]
     trs = fr["tran_ranges_start"]
     tre = fr["tran_ranges_end"]
-    tpos = fr.get("tran_pos") or [None] * len(chain)
+    fr.get("tran_pos") or [None] * len(chain)
 
     def find_chunk_at(pos: int, right_edge: bool = False) -> Optional[int]:
         for i, (a, b) in enumerate(zip(trs, tre)):

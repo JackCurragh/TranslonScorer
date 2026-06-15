@@ -276,7 +276,7 @@ def normalise_and_cluster_locus(
     random_state: Optional[int] = 42,
 ) -> NormalisationResult:
     """Compatibility wrapper: normalise, cluster, and aggregate a locus."""
-    from ..clustering import aggregate_score_profiles_by_cluster, cluster_locus_profiles
+    from .clustering import aggregate_score_profiles_by_cluster, cluster_locus_profiles
 
     prepared = normalise_locus_matrices(
         raw_matrix,

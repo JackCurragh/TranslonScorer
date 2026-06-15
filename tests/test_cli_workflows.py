@@ -83,6 +83,51 @@ def test_score_events_over_provider_matches_direct():
     assert via_helper.height == events.height
 
 
+def test_per_event_regions_match_whole_span():
+    """Padded per-event windows give IDENTICAL scores to a whole-span fetch.
+
+    A region-respecting provider returns coverage only within the requested
+    regions; scoring through it must equal scoring against the full coverage,
+    proving the flank pad covers every position the scorers read.
+    """
+    from tests.test_golden import _gapdh_coverage, _gapdh_events
+    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
+    from TranslonScorer.workflows import _score_events_over_provider
+
+    events = _gapdh_events().with_columns(pl.lit("chr12").alias("chrom"))
+    cov = _gapdh_coverage()
+    full = pl.DataFrame({"pos": list(cov.keys()), "count": [float(v) for v in cov.values()]})
+
+    class _WholeSpan:
+        def coverage(self, regions, *, site="A"):
+            return full
+
+    class _RegionRespecting:
+        # only returns coverage at positions inside the requested regions
+        def coverage(self, regions, *, site="A"):
+            keep = full
+            mask = pl.lit(False)
+            for r in regions:
+                mask = mask | ((pl.col("pos") >= r.start) & (pl.col("pos") < r.end))
+            return keep.filter(mask)
+
+    kw = dict(site="A", group="gapdh", tier="aggregate", thr=DEFAULT_THRESHOLDS)
+    whole = _score_events_over_provider(events, _WholeSpan(), **kw)
+    windowed = _score_events_over_provider(events, _RegionRespecting(), **kw)
+    assert windowed.sort("event_id").equals(whole.sort("event_id"))
+
+
+def test_merge_event_regions_merges_and_pads():
+    from TranslonScorer.workflows import _EVENT_FLANK_PAD, _merge_event_regions
+
+    # two close events merge into one padded interval; a far one stays separate
+    regs = _merge_event_regions("chr1", [1000, 1010, 50000], [1001, 1011, 50001])
+    assert len(regs) == 2
+    assert regs[0].start == 1000 - _EVENT_FLANK_PAD
+    assert regs[0].end == 1011 + _EVENT_FLANK_PAD
+    assert regs[1].start == 50000 - _EVENT_FLANK_PAD
+
+
 def test_score_events_over_provider_empty():
     from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
     from TranslonScorer.workflows import _score_events_over_provider

@@ -27,12 +27,7 @@ from typing import Dict, List, Optional, Sequence, Union, cast
 
 import polars as pl
 
-from TranslonScorer.model import (
-    ConsequentialityPolicy,
-    OffsetParams,
-    Region,
-    ScoreThresholds,
-)
+from TranslonScorer.consequential import apply_policy
 from TranslonScorer.events import run_extract
 from TranslonScorer.io.store import (
     persist_scores,
@@ -40,10 +35,14 @@ from TranslonScorer.io.store import (
     read_feature_event,
     read_scores,
 )
-from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS, score_events_vectorised
-from TranslonScorer.consequential import apply_policy
+from TranslonScorer.model import (
+    ConsequentialityPolicy,
+    OffsetParams,
+    Region,
+    ScoreThresholds,
+)
 from TranslonScorer.report import compose_report
-
+from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS, score_events_vectorised
 
 # ---------------------------------------------------------------------------
 # extract-events

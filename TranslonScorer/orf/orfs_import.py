@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
-from typing import List, Tuple, Dict, Optional, Iterable, Set
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
+import click
 import pandas as pd
 import polars as pl
+
 from ..utils.logging import log_info
-import click
-import re
-import os
 
 
 @dataclass

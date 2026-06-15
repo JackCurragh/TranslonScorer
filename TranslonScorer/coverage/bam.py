@@ -25,11 +25,10 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import polars as pl
 
-from TranslonScorer.model import OffsetParams, Region
-from TranslonScorer.offsets import make_offset_table, metagene_offsets, global_offsets
 from TranslonScorer.coverage.base import MAPPABILITY_LEDGER_SCHEMA
 from TranslonScorer.coverage.profile import site_position
-
+from TranslonScorer.model import OffsetParams, Region
+from TranslonScorer.offsets import global_offsets, make_offset_table, metagene_offsets
 
 PathLike = Union[str, Path]
 
@@ -288,6 +287,7 @@ class BamSetProvider:
         multimap="unique" or split fractionally under "all".
         """
         from collections import defaultdict
+
         from TranslonScorer.coverage.transcriptome import (
             build_exon_index,
             project_to_genome,

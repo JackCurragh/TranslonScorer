@@ -12,10 +12,9 @@ Outputs a Parquet file with columns: read_id, chr, start, stop, strand, length
 Optionally can produce a splits index (per-read junctions) in a follow-up.
 """
 
-from typing import Dict, Optional, Tuple, Iterable
-import os
-import io
 import hashlib
+import os
+from typing import Dict, Iterable, Optional, Tuple
 
 import polars as pl
 
@@ -151,7 +150,6 @@ def build_read_index_from_bam(
     Returns the path to the written Parquet file.
     """
     import pysam
-    from pyarrow import Table as _ArrowTable
     from pyarrow import parquet as pq
 
     # Determine Zarr mapping key -> row_id

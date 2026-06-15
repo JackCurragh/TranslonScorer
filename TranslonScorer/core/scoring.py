@@ -1,6 +1,8 @@
-import polars as pl
 import gc
-from ..utils.logging import log_info, log_warning, log_error
+
+import polars as pl
+
+from ..utils.logging import log_error, log_info
 
 try:
     # Avoid importing heavy dependencies at module import unless needed

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import Optional, Iterable
 import os
+from typing import Iterable, Optional
+
 import click
 import polars as pl
 

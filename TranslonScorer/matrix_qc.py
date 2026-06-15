@@ -31,22 +31,15 @@ and exon_df are supplied) and returns a joined DataFrame.
 
 from __future__ import annotations
 
-import collections
-import heapq
 import json
-import math
 import multiprocessing as mp
 import os
-import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import polars as pl
 import pysam
-
-from .utils.logging import log_info, log_warning
-
 
 # ---------------------------------------------------------------------------
 # Manifest + lookup helpers  [shim — moved to io/matrix.py]
@@ -60,6 +53,7 @@ from TranslonScorer.io.matrix import (  # noqa: F401, E402
     _samples_df,
 )
 
+from .utils.logging import log_info, log_warning
 
 # ---------------------------------------------------------------------------
 # Tier 1: length distribution QC (no BAM)
@@ -162,18 +156,18 @@ def _bam_chroms(bam_path: str | Path) -> set:
         return set(bam.references)
 
 
+from TranslonScorer.events import (  # noqa: F401, E402
+    _build_frame_intervals,
+    _deconflict_intervals,
+)
 from TranslonScorer.io.bam import normalise_chrom as _normalise_chrom  # noqa: F401
 
 # Re-export shims — implementations live in TranslonScorer.qc / TranslonScorer.events
 from TranslonScorer.qc import (  # noqa: F401, E402
-    _compute_periodicity_from_frames,
-    _ribometric_frame_scores,
-    _nudge_to_frame0,
     _assign_frames_sweep,
-)
-from TranslonScorer.events import (  # noqa: F401, E402
-    _build_frame_intervals,
-    _deconflict_intervals,
+    _compute_periodicity_from_frames,
+    _nudge_to_frame0,
+    _ribometric_frame_scores,
 )
 
 
@@ -381,7 +375,6 @@ from TranslonScorer.qc import (  # noqa: F401, E402
     _empty_periodicity_schema,
     frame_dominance_matrix,
 )
-
 
 # ===========================================================================
 # Two-phase fast path: cached read-locus index  +  vectorised tabulation

@@ -23,9 +23,8 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import polars as pl
 
-from TranslonScorer.model import Region
 from TranslonScorer.coverage.base import MAPPABILITY_LEDGER_SCHEMA
-
+from TranslonScorer.model import Region
 
 PathLike = Union[str, Path]
 

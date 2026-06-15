@@ -5,9 +5,11 @@ This module handles the generation of HTML reports from analysis results,
 using Jinja2 templates to create interactive visualizations.
 """
 
-from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
-from ..utils.logging import log_info, log_warning
+
+from jinja2 import Environment, FileSystemLoader
+
+from ..utils.logging import log_info
 
 
 def getparameters(vardict):

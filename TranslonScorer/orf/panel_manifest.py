@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any
 
 import polars as pl
 
 from .score_schema import ensure_orf_id
-
 
 RECOMMENDED_PANEL_COLUMNS = [
     "panel_id",

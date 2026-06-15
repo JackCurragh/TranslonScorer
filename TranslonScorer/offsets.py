@@ -30,7 +30,6 @@ import polars as pl
 
 from TranslonScorer.model import OffsetParams
 
-
 # ---------------------------------------------------------------------------
 # Plausibility guard
 # ---------------------------------------------------------------------------

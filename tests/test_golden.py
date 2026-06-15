@@ -390,6 +390,7 @@ def test_qc_nudge_to_frame0():
 def test_qc_assign_frames_sweep_smoke():
     """_assign_frames_sweep returns a dict keyed by read_ids."""
     import numpy as np
+
     from TranslonScorer.qc import _assign_frames_sweep
 
     rids = [1, 2, 3]
@@ -415,6 +416,7 @@ def test_frame_support_none_method():
 def test_clustering_normalise_profiles():
     """normalise_profiles total_count method: each row sums to ~1e6."""
     import numpy as np
+
     from TranslonScorer.clustering import normalise_profiles
 
     mat = np.array([[10.0, 20.0, 30.0], [5.0, 5.0, 5.0]])
@@ -427,6 +429,7 @@ def test_clustering_normalise_profiles():
 def test_clustering_cluster_profiles_smoke():
     """cluster_profiles: 4 samples → 2 clusters, none excluded."""
     import numpy as np
+
     from TranslonScorer.clustering import cluster_profiles
 
     mat = np.array(
@@ -445,7 +448,6 @@ def test_clustering_cluster_profiles_smoke():
 
 def test_clustering_build_profile_matrix_smoke():
     """build_profile_matrix round-trips a tidy profile DataFrame."""
-    import numpy as np
     from TranslonScorer.clustering import build_profile_matrix
 
     profiles = pl.DataFrame(
@@ -494,11 +496,8 @@ def test_matrix_qc_public_surface_importable():
     """TranslonScorer.matrix_qc re-exports the periodicity/frame helpers."""
     from TranslonScorer.matrix_qc import (
         _compute_periodicity_from_frames,
-        _ribometric_frame_scores,
-        _nudge_to_frame0,
-        _assign_frames_sweep,
-        frame_dominance_matrix,
         _empty_periodicity_schema,
+        frame_dominance_matrix,
     )
 
     assert callable(_compute_periodicity_from_frames)
@@ -510,11 +509,8 @@ def test_matrix_qc_public_surface_importable():
 def test_pipeline_shim_clustering_importable():
     """pipeline/profile_clustering.py shim: public API importable from old path."""
     from TranslonScorer.clustering import (
-        normalise_profiles,
         cluster_profiles,
-        cluster_locus_profiles,
-        build_profile_matrix,
-        ProfileClusteringResult,
+        normalise_profiles,
     )
 
     assert callable(normalise_profiles)
@@ -528,14 +524,12 @@ def test_pipeline_shim_clustering_importable():
 
 def test_coverage_base_protocols_importable():
     """coverage/base.py: all four protocols importable and runtime-checkable."""
-    from TranslonScorer.coverage.base import (
-        CoverageProvider,
-        SupportsSites,
-        SupportsJunctions,
-        SupportsMappability,
-        MAPPABILITY_LEDGER_SCHEMA,
-    )
     import polars as pl
+
+    from TranslonScorer.coverage.base import (
+        MAPPABILITY_LEDGER_SCHEMA,
+        CoverageProvider,
+    )
 
     assert "event_id" in MAPPABILITY_LEDGER_SCHEMA
 
@@ -553,7 +547,6 @@ def test_coverage_base_protocols_importable():
 
 def test_coverage_profile_apply_offsets_psite():
     """apply_offsets with site='P' adds P-site offset to tran_start_bam."""
-    import numpy as np
     from TranslonScorer.coverage.profile import apply_offsets
 
     reads = pl.DataFrame(
@@ -610,8 +603,11 @@ def test_coverage_profile_prefix_sums_bit_identical():
     """_prefix_sums/_range_sums in coverage/profile.py produce same results
     as the re-exported versions in scoring/run.py (bit-identical after migration)."""
     import numpy as np
-    from TranslonScorer.coverage.profile import _prefix_sums as prof_ps, _range_sums as prof_rs
-    from TranslonScorer.scoring.run import _prefix_sums as run_ps, _range_sums as run_rs
+
+    from TranslonScorer.coverage.profile import _prefix_sums as prof_ps
+    from TranslonScorer.coverage.profile import _range_sums as prof_rs
+    from TranslonScorer.scoring.run import _prefix_sums as run_ps
+    from TranslonScorer.scoring.run import _range_sums as run_rs
 
     # They should be the same function object after the re-import
     assert prof_ps is run_ps
@@ -633,7 +629,6 @@ def test_coverage_profile_prefix_sums_bit_identical():
 
 import pytest  # noqa: E402 — needed for approx above
 
-
 # ---------------------------------------------------------------------------
 # T11 — GAPDH golden through the provider path (Δ=0)
 # ---------------------------------------------------------------------------
@@ -647,8 +642,8 @@ def test_gapdh_golden_via_provider():
     dict-based scoring path.  This proves the provider interface does not
     alter the scoring arithmetic.
     """
-    from TranslonScorer.coverage.matrix import DictCoverageProvider
     from TranslonScorer.coverage.base import CoverageProvider
+    from TranslonScorer.coverage.matrix import DictCoverageProvider
 
     provider = DictCoverageProvider(_gapdh_coverage())
     assert isinstance(provider, CoverageProvider)
@@ -681,13 +676,13 @@ def test_gapdh_golden_via_provider():
 
 def test_provider_protocol_compliance():
     """DictCoverageProvider and MatrixProvider satisfy the expected protocols."""
-    from TranslonScorer.coverage.matrix import DictCoverageProvider, MatrixProvider
     from TranslonScorer.coverage.base import (
         CoverageProvider,
-        SupportsSites,
         SupportsJunctions,
         SupportsMappability,
+        SupportsSites,
     )
+    from TranslonScorer.coverage.matrix import DictCoverageProvider, MatrixProvider
 
     provider = DictCoverageProvider({})
     assert isinstance(provider, CoverageProvider)
@@ -709,9 +704,9 @@ def test_bam_provider_importable_and_protocols():
     from TranslonScorer.coverage.bam import BamSetProvider
     from TranslonScorer.coverage.base import (
         CoverageProvider,
-        SupportsSites,
         SupportsJunctions,
         SupportsMappability,
+        SupportsSites,
     )
 
     provider = BamSetProvider([])
@@ -723,8 +718,8 @@ def test_bam_provider_importable_and_protocols():
 
 def test_bigwig_provider_importable_and_protocol():
     """BigwigSetProvider satisfies CoverageProvider; junction/mappability raise."""
-    from TranslonScorer.coverage.bigwig import BigwigSetProvider
     from TranslonScorer.coverage.base import CoverageProvider
+    from TranslonScorer.coverage.bigwig import BigwigSetProvider
 
     provider = BigwigSetProvider([])
     assert isinstance(provider, CoverageProvider)

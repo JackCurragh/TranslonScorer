@@ -21,18 +21,16 @@ BigWig-based scoring runs.
 from __future__ import annotations
 
 import gc
-from collections import defaultdict
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 import numpy as np
 import polars as pl
 
-from .utils.logging import log_info, log_warning, log_error
+from .coverage.profiles import _compute_asite_profiles
 from .file_handlers import bam as bam_handlers
 from .file_handlers.bigwig import score_transcript
-from .coverage.profiles import _compute_asite_profiles
 from .orf.score_schema import ensure_score_schema
-
+from .utils.logging import log_info
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -394,11 +392,11 @@ def score_locus_matrix_levels(
     old_scoring: bool = False,
 ) -> Tuple[Dict[str, pl.DataFrame], pl.DataFrame, pl.DataFrame]:
     """Normalise once, then score sample, cluster, and whole aggregate levels."""
-    from .matrix_normalisation import normalise_locus_matrices
     from .clustering import (
         aggregate_score_profiles_by_cluster,
         cluster_locus_profiles,
     )
+    from .matrix_normalisation import normalise_locus_matrices
 
     wanted = set(levels)
     unknown = wanted - {"sample", "cluster", "aggregate"}

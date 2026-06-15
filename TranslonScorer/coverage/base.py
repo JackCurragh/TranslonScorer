@@ -20,12 +20,11 @@ isinstance(provider, SupportsJunctions)   # runtime capability check
 from __future__ import annotations
 
 from typing import Dict, List, Tuple
-from typing_extensions import Protocol, runtime_checkable
 
 import polars as pl
+from typing_extensions import Protocol, runtime_checkable
 
 from TranslonScorer.model import Region
-
 
 # ---------------------------------------------------------------------------
 # Mappability ledger schema

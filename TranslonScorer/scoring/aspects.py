@@ -23,7 +23,6 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from TranslonScorer.model import ScoreThresholds
 from TranslonScorer.scoring.evidence import _decide_step, _elong_evidence
 
-
 # ---------------------------------------------------------------------------
 # Frame utility
 # ---------------------------------------------------------------------------

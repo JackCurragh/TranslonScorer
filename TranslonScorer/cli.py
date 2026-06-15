@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import os
-import click
 from typing import Optional
+
+import click
 import polars as pl
+
 from .config import Config
-from .utils.logging import setup_logging, log_info
 from .file_handlers import bam as bam_handlers
+from .utils.logging import log_info, setup_logging
 
 
 def _build_and_write_frame_support(profiles, cds_df, cfg):
     """Shell adapter: Config → FrameSupportParams, build frame support (pure),
     write to cfg.frame_support_out if set. Returns the support DataFrame."""
-    from .model import FrameSupportParams
     from .frame_support import build_frame_support
+    from .model import FrameSupportParams
 
     params = FrameSupportParams(
         frame_method=getattr(cfg, "frame_method", "none"),
@@ -393,6 +395,7 @@ def profiles(**kwargs):
     else:
         cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
 
+    from .coverage.locus_profiles import build_locus_profiles_zarr
     from .coverage.profiles import (
         gene_expression_matrix_from_profiles,
         profiles_from_bam,
@@ -401,7 +404,6 @@ def profiles(**kwargs):
         profiles_from_zarr,
         write_profiles_parquet,
     )
-    from .coverage.locus_profiles import build_locus_profiles_zarr
     from .coverage.transcript_coords import cds_to_transcript_space
 
     log_info(
@@ -536,7 +538,9 @@ def profiles(**kwargs):
                 # Discover sample names from Zarr store (v2/v3; group/array roots)
                 try:
                     # Reuse robust opener to locate counts array
-                    from .file_handlers.zarr import _open_counts as _open_counts_helper  # type: ignore
+                    from .file_handlers.zarr import (
+                        _open_counts as _open_counts_helper,  # type: ignore
+                    )
                 except Exception:
                     _open_counts_helper = None
                 names: list[str] | None = None

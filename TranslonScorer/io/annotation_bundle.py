@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 from datetime import datetime
-from typing import Tuple, Optional, Dict, Any
+from typing import Any, Dict, Optional, Tuple
 
 import polars as pl
 
-from ..utils import log_info
+from ..coverage.locus_features import build_locus_features  # reuse existing parsers
 from ..file_handlers import bam as bam_handlers
-from ..coverage.locus_features import build_locus_features, _read_gtf  # reuse existing parsers
+from ..utils import log_info
 
 
 def _write_json(path: str, obj: Dict[str, Any]) -> None:

@@ -4,7 +4,6 @@ from typing import Any
 
 import polars as pl
 
-
 RAW_SCORE_COLUMNS = ["rise_up", "step_down", "hrf", "avg", "nzc", "score"]
 
 FRAME_SCORE_COLUMNS = [

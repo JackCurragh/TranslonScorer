@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Dict, Tuple, Union
 
 import polars as pl
 
-from .utils import log_info, log_warning
 from .config import Config
+from .core import coordinates, orffinder
+from .coverage.transcript_coords import cds_to_transcript_space
 from .file_handlers import bam as bam_handlers
 from .file_handlers import bed as bed_handlers
 from .file_handlers import bigwig as bw_handlers
 from .file_handlers import zarr as zarr_handlers
-from .core import coordinates, orffinder
+from .utils import log_info, log_warning
 from .visualization import plots
-from .coverage.transcript_coords import cds_to_transcript_space
 
 
 def process_bam_workflow(

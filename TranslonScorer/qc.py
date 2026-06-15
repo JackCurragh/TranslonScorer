@@ -19,11 +19,10 @@ from __future__ import annotations
 import heapq
 import json
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import polars as pl
-
 
 # ---------------------------------------------------------------------------
 # Periodicity score (RiboMetric formula)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import List
 
 import polars as pl
 
@@ -11,8 +11,9 @@ try:
 except Exception:
     HAVE_PULP = False
 
-from ..utils.logging import log_info
 import click
+
+from ..utils.logging import log_info
 
 
 def overlap_penalty(orf_i: dict, orf_j: dict) -> float:

@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Tuple
-
 import polars as pl
-import numpy as np
-from ..utils.logging import log_info
 
 
 def estimate_junction_expectation(

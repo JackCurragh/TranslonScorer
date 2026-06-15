@@ -1,10 +1,9 @@
 """Configuration handler for TranslonScorer."""
 
-import os
 import logging
+import os
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Optional, Union, Any
+from typing import Any, Dict, List, Optional, Union
 
 
 @dataclass

@@ -22,11 +22,10 @@ _range_sums(pos_arr, cum_all, cum_f, starts, ends) → (total, frames, covered)
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import polars as pl
-
 
 # ---------------------------------------------------------------------------
 # Strand-aware genomic site placement (pure)

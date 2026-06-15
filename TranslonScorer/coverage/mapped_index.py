@@ -9,8 +9,8 @@ Output: Parquet with columns [read_id, tran_id, tran_start_bam, length, strand]
 The mapping is sample-independent and can be reused across runs.
 """
 
-from typing import Optional
 import os
+
 import polars as pl
 
 from ..file_handlers import bam as bam_handlers

@@ -17,7 +17,6 @@ from typing import Iterable, Optional
 import polars as pl
 import pysam
 
-
 READ_NAME_RE = re.compile(r"(?:^|[^\w])read_(\d+)(?:$|[^\d])")
 
 

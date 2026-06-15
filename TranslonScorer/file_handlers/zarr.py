@@ -15,10 +15,10 @@ These helpers are intentionally simple and functional; they stream in chunks and
 avoid materializing the full matrix.
 """
 
-from typing import Iterator, List, Tuple, Optional, Dict
+import importlib
+from typing import Iterator, List, Tuple
 
 import polars as pl
-import importlib
 
 _zarr_mod = None
 _zarr_err = None

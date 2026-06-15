@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import polars as pl
 
-from TranslonScorer.report import compose_report
 from TranslonScorer.consequential import apply_policy
 from TranslonScorer.model import ConsequentialityPolicy
+from TranslonScorer.report import compose_report
 
 
 def _scores() -> pl.DataFrame:

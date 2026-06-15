@@ -181,7 +181,6 @@ class TestM1ProfilesToScoredOrfs:
 
     def test_aggregate_sums_across_samples(self):
         """aggregate_profiles_from_genomic_counts must sum sample counts per position."""
-        from TranslonScorer.matrix_scoring import aggregate_profiles_from_genomic_counts
 
         # Two samples, same (tran_id, pos) after mapping; counts 1 and 2
         # We mock the genomic-to-transcript step by using a profile-like input
@@ -316,8 +315,8 @@ class TestM2PerSampleProfiles:
         """Sum of per-sample profile counts at each transcript position
         should equal aggregate profile counts."""
         from TranslonScorer.matrix_scoring import (
-            per_sample_profiles_from_genomic_counts,
             aggregate_profiles_from_genomic_counts,
+            per_sample_profiles_from_genomic_counts,
         )
 
         genomic = pl.DataFrame(
@@ -557,8 +556,8 @@ class TestM4Clustering:
         assert "cluster_id" in labels_df.columns
 
     def test_hierarchical_cosine_threshold_recovers_two_shapes(self):
-        from TranslonScorer.matrix_normalisation import normalise_locus_matrices
         from TranslonScorer.clustering import cluster_locus_profiles
+        from TranslonScorer.matrix_normalisation import normalise_locus_matrices
 
         matrix = self._two_group_matrix()
         names = ["A1", "A2", "A3", "B1", "B2"]
@@ -578,8 +577,8 @@ class TestM4Clustering:
         assert clustered.cluster_summary.height == 2
 
     def test_one_shape_locus_returns_one_cluster(self):
-        from TranslonScorer.matrix_normalisation import normalise_locus_matrices
         from TranslonScorer.clustering import cluster_locus_profiles
+        from TranslonScorer.matrix_normalisation import normalise_locus_matrices
 
         matrix = np.zeros((4, 20))
         matrix[:, 5:10] = np.array([[5.0], [10.0], [20.0], [40.0]])
@@ -598,8 +597,8 @@ class TestM4Clustering:
         assert clustered.cluster_summary.height == 1
 
     def test_weak_cluster_smaller_than_min_size_is_pruned(self):
-        from TranslonScorer.matrix_normalisation import normalise_locus_matrices
         from TranslonScorer.clustering import cluster_locus_profiles
+        from TranslonScorer.matrix_normalisation import normalise_locus_matrices
 
         matrix = self._two_group_matrix()
         names = ["A1", "A2", "A3", "B1", "B2"]

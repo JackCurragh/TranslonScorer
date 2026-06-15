@@ -6,7 +6,6 @@ from typing import Any
 import numpy as np
 from matplotlib.patches import Patch
 
-
 FRAME_COLORS = {
     0: "#4C78A8",
     1: "#F58518",

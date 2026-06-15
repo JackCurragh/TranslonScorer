@@ -14,19 +14,19 @@ Optionally include a 'sample' column for multi-sample sources.
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, Iterator, Optional, Tuple
 import os
+from typing import Dict, Iterator, Optional, Tuple
 
 import polars as pl
 
+from ..core import coordinates
 from ..file_handlers import bam as bam_handlers
+from ..file_handlers import bigwig as bigwig_handlers
 from ..file_handlers import sparse_parquet as sparse_parquet_handlers
 from ..file_handlers import zarr as zarr_handlers
-from .mapped_index import build_mapped_index
-from ..file_handlers import bigwig as bigwig_handlers
-from ..core import coordinates
 from ..utils import log_info, log_warning
 from ..utils.io import write_parquet_safe
+from .mapped_index import build_mapped_index
 from .transcript_coords import cds_to_transcript_space
 
 

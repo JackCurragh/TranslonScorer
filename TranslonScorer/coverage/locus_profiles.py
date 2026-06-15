@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import os
-from typing import Dict, Iterable, Iterator, List, Tuple, Optional
+import importlib
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import polars as pl
-import importlib
 
 from ..utils import log_info, log_warning
 

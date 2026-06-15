@@ -1,9 +1,10 @@
 import json
+
 import numpy as np
 import polars as pl
 
+from TranslonScorer.coverage.transcript_coords import cds_to_transcript_space
 from TranslonScorer.frame.bleed import apply_confusion, apply_confusion_counts, learn_confusion
-from TranslonScorer.frame.latent import fit_latent
 from TranslonScorer.frame.frame_disambiguation import (
     candidate_frame_table,
     summarize_frame_disambiguation,
@@ -12,17 +13,17 @@ from TranslonScorer.frame.frame_method_compare import (
     compare_frame_support_tables,
     validate_frame_support_on_cds,
 )
+from TranslonScorer.frame.latent import fit_latent
 from TranslonScorer.frame_support import build_frame_support
 from TranslonScorer.model import FrameSupportParams
-from TranslonScorer.orf.profile_compare import compare_profiles
 from TranslonScorer.orf.panel_manifest import merge_panel_manifest, validate_panel_manifest
+from TranslonScorer.orf.profile_compare import compare_profiles
+from TranslonScorer.orf.rdg_flux_export import export_rdg_flux_v1, rdg_flux_position_table
 from TranslonScorer.orf.score_schema import (
     add_frame_score_columns,
     compare_score_tables,
     ensure_score_schema,
 )
-from TranslonScorer.orf.rdg_flux_export import export_rdg_flux_v1, rdg_flux_position_table
-from TranslonScorer.coverage.transcript_coords import cds_to_transcript_space
 
 
 def test_cds_to_transcript_space_maps_minus_strand():

@@ -6,10 +6,10 @@ This package contains utility functions and configurations:
 """
 
 from .logging import (
-    setup_logging,
+    log_error,
     log_info,
     log_warning,
-    log_error,
+    setup_logging,
 )
 
 __all__ = [

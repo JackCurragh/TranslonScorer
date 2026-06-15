@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import List, Dict, Any, Tuple, Optional
-import click
+from typing import Any, Dict, List, Optional, Tuple
 
+import click
 import polars as pl
 
 

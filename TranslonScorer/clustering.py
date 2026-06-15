@@ -146,7 +146,7 @@ def _kmeans_cosine(
 
 def _agglomerative_cosine(X: np.ndarray, k: int) -> np.ndarray:
     try:
-        from scipy.cluster.hierarchy import linkage, fcluster
+        from scipy.cluster.hierarchy import fcluster, linkage
         from scipy.spatial.distance import pdist
     except ImportError as exc:
         raise ImportError(
@@ -260,7 +260,7 @@ def _agglomerative_precomputed(
     distance_threshold: float = 0.12,
 ) -> np.ndarray:
     try:
-        from scipy.cluster.hierarchy import linkage, fcluster
+        from scipy.cluster.hierarchy import fcluster, linkage
         from scipy.spatial.distance import squareform
     except ImportError as exc:
         raise ImportError(
@@ -284,7 +284,7 @@ def _agglomerative_distance(
     distance_threshold: Optional[float] = None,
 ) -> np.ndarray:
     try:
-        from scipy.cluster.hierarchy import linkage, fcluster
+        from scipy.cluster.hierarchy import fcluster, linkage
         from scipy.spatial.distance import pdist
     except ImportError as exc:
         raise ImportError(

@@ -7,7 +7,8 @@ them to other formats, including coordinate transformations.
 
 import polars as pl
 import pyBigWig as bw
-from ..utils.logging import log_info, log_warning, log_error
+
+from ..utils.logging import log_error, log_info, log_warning
 
 
 def saveorfsandexons(orf_df, exon_df, filename):

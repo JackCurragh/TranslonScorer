@@ -6,9 +6,8 @@ using Aho-Corasick pattern matching for efficient codon identification.
 """
 
 import ahocorasick
-from ..utils.logging import log_info, log_warning
-from pyfaidx import Fasta
 import polars as pl
+from pyfaidx import Fasta
 
 
 def find_all_positions(sequence, automaton):

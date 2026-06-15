@@ -5,18 +5,16 @@ readbam() has moved to io/bam.py; re-exported here for backward compatibility.
 All other helpers remain here until the full pipeline/ cleanup (T14).
 """
 
-import pysam
 import polars as pl
 
 try:
     import oxbow as ox  # optional fast BAM reader
 except Exception:
     ox = None
-from ..utils.logging import log_info, log_error, log_warning
-from ..io.bam import readbam  # noqa: F401 — re-export
-from typing import Optional
 import os
-import sys
+
+from ..io.bam import readbam  # noqa: F401 — re-export
+from ..utils.logging import log_error, log_info
 
 # Only import memory_profiler if PROFILE environment variable is set
 PROFILE = os.environ.get("PROFILE", "0") == "1"

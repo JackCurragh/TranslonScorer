@@ -5,15 +5,15 @@ This module contains functions for generating plots and visualizations
 of TranslonScorer results, including metagene profiles and transcript-specific plots.
 """
 
-import polars as pl
+
 import plotly.express as px
-import plotly.subplots as sp
-import pyBigWig as bw
 import plotly.graph_objects as go
-from pathlib import Path
-from ..utils.logging import log_info, log_warning, log_error
-from .report import generate_report
+import polars as pl
+import pyBigWig as bw
+
 from ..file_handlers.bigwig import transcriptreads
+from ..utils.logging import log_info
+from .report import generate_report
 
 
 def pertranscriptplot(df, exon_df, bwfile):

@@ -13,8 +13,7 @@ _build_frame_intervals — per-(chrom,strand) CDS exon intervals with phase
 from __future__ import annotations
 
 import collections
-import heapq
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import polars as pl
 

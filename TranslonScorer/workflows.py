@@ -23,7 +23,7 @@ across chromosomes.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union, cast
+from typing import Dict, List, Optional, Sequence, Union
 
 import polars as pl
 
@@ -112,6 +112,32 @@ def extract_events_workflow(
 # ---------------------------------------------------------------------------
 
 
+# Flank pad (nt) around each event when fetching coverage. The init/term
+# scorers read at most ±60 nt (flanks 9/18/30/60); 128 covers that plus the
+# P/A-site offset with margin, so scores are identical to a whole-chromosome
+# fetch while pulling only reads near events.
+_EVENT_FLANK_PAD = 128
+
+
+def _merge_event_regions(
+    chrom: str, starts: List[int], ends: List[int], pad: int = _EVENT_FLANK_PAD
+) -> List[Region]:
+    """Padded, merged genomic intervals covering every event's scoring window.
+
+    Querying these instead of one chromosome-spanning region pulls only reads
+    near events — orders of magnitude less on a sparse event set over a deep
+    matrix — without changing any score (scorers read within ±60 nt of an event).
+    """
+    ivs = sorted((max(0, s - pad), e + pad) for s, e in zip(starts, ends))
+    merged: List[Region] = []
+    for s, e in ivs:
+        if merged and s <= merged[-1].end:
+            merged[-1] = Region(chrom, merged[-1].start, max(merged[-1].end, e))
+        else:
+            merged.append(Region(chrom, s, e))
+    return merged
+
+
 def _score_events_over_provider(
     events: pl.DataFrame,
     provider,
@@ -123,8 +149,9 @@ def _score_events_over_provider(
 ) -> pl.DataFrame:
     """Score every event by querying ``provider`` per chromosome.
 
-    Coverage is fetched one chromosome at a time (one spanning Region per chrom)
-    so genomic positions are unambiguous; the per-chrom score tables are stacked.
+    Coverage is fetched as padded per-event windows (merged), not one
+    chromosome-spanning region: identical scores, but only reads near events are
+    pulled — critical on a deep matrix where a whole-chromosome span is enormous.
     """
     if events.is_empty():
         from TranslonScorer.scoring.evidence import _RECORD_SCHEMA
@@ -134,10 +161,12 @@ def _score_events_over_provider(
     parts: List[pl.DataFrame] = []
     for chrom in events["chrom"].unique().sort().to_list():
         ev_chrom = events.filter(pl.col("chrom") == chrom)
-        start = int(cast(int, ev_chrom["start"].min()))
-        end = int(cast(int, ev_chrom["end"].max()))
-        region = Region(str(chrom), start, end + 1)
-        cov_df = provider.coverage([region], site=site)
+        regions = _merge_event_regions(
+            str(chrom),
+            ev_chrom["start"].to_list(),
+            ev_chrom["end"].to_list(),
+        )
+        cov_df = provider.coverage(regions, site=site)
         if cov_df.is_empty():
             continue
         cov_df = cov_df.select(["pos", "count"])

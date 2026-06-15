@@ -231,7 +231,7 @@ def process_batch(batch_data):
 
             for start, stop in regions:
                 try:
-                    region_size = stop - start
+                    stop - start
                     raw_values = bw_cache.get_values(chrom, start, stop)
 
                     if raw_values is None:
@@ -430,7 +430,6 @@ def transcriptreads(bigwig_file, exon_df, transcript_id=None):
     """
     bw_module = _require_pybigwig()
     import polars as pl
-
 
     # Open BigWig file if a path was given
     if isinstance(bigwig_file, str):
@@ -679,8 +678,6 @@ def process_transcriptomic_bigwig(bw_handle, exon_df):
         return pl.DataFrame({"tran_id": [], "tran_start": [], "counts": []})
 
 
-
-
 def scoring(
     bigwig,
     exon,
@@ -714,12 +711,12 @@ def scoring(
 
     import polars as pl
 
-    bw_module = _require_pybigwig()
+    _require_pybigwig()
     import time
 
     from ..utils.logging import log_info
 
-    start_time = time.time()
+    time.time()
 
     # Handle different bigwig input formats
     if isinstance(bigwig, dict) and "forward" in bigwig and "reverse" in bigwig:

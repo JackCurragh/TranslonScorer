@@ -652,7 +652,7 @@ def orfrelativeposition(annotation, df, cds_df):
                             }
                         )
                     )
-                except:
+                except Exception:
                     type_values.append("Non Coding")
             else:
                 type_values.append("Non Coding")
@@ -672,6 +672,6 @@ def orfrelativeposition(annotation, df, cds_df):
         df = pl.concat(result_chunks)
 
     # Filter CDS more efficiently
-    cdslist = df.filter(pl.col("type") == "CDS")["tran_id"].unique().to_list()
+    df.filter(pl.col("type") == "CDS")["tran_id"].unique().to_list()
 
     return df, exon_coords

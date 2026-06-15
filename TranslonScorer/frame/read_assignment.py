@@ -658,7 +658,7 @@ def _run_em(
         if rows
         else pl.DataFrame(schema={"iteration": pl.Int64, "theta_l1_delta": pl.Float64})
     )
-    abundance = pl.DataFrame({"assignment_target": target_labels, "abundance": theta})
+    pl.DataFrame({"assignment_target": target_labels, "abundance": theta})
     return posterior, theta, convergence.with_columns(pl.lit("em").alias("estimator"))
 
 

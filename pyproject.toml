@@ -102,4 +102,7 @@ extend-exclude = ["build", "dist"]
 # Formatting (line length etc.) is black's job; ruff handles correctness +
 # imports. E501 off (black wraps); F catches unused imports / undefined names.
 select = ["E", "F", "W", "I"]
-ignore = ["E501", "E741"]
+# E501 line length (black's job); E741 ambiguous names; E402 deliberate
+# imports-after-code in re-export / conditional-import modules; E712 is a polars
+# idiom (`pl.col(x) == True` is a boolean mask — `is True` would break it).
+ignore = ["E501", "E741", "E402", "E712"]

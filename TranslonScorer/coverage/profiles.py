@@ -308,7 +308,6 @@ def profiles_from_zarr(
     log_info("Streaming Zarr + index for profiles…")
     cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
     offsets_by_sample: Dict[str, Dict[int, int]] = {}
-    sampled_by_sample_len: Dict[tuple[str, int], int] = {}
 
     mapped_path: str | None = None
     if mapped_index_parquet:

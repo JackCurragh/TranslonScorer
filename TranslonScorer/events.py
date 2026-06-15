@@ -213,6 +213,63 @@ def extract_events(
     return events, feature_event, overlap
 
 
+def write_events(
+    blocks: pl.DataFrame,
+    translons: pl.DataFrame,
+    out_dir: str,
+    *,
+    annotation_version: str = "",
+    chroms: Optional[List[str]] = None,
+) -> dict:
+    """Extract events per chromosome from in-memory blocks/translons and write Parquet.
+
+    Source-agnostic: ``blocks``/``translons`` may come from any feature source
+    (GTF/GFF, BED12, FASTA ORFs, the annotation sqlite, …) as long as they carry
+    the canonical columns expected by :func:`extract_events`. Writes
+    events/, feature_event/, event_overlap/ Parquet shards (one per chrom).
+    """
+    from pathlib import Path
+
+    out = Path(out_dir)
+    (out / "events").mkdir(parents=True, exist_ok=True)
+    (out / "feature_event").mkdir(parents=True, exist_ok=True)
+    (out / "event_overlap").mkdir(parents=True, exist_ok=True)
+
+    all_chroms = (
+        translons["bed_chrom"].drop_nulls().unique().sort().to_list()
+        if not translons.is_empty()
+        else []
+    )
+    if chroms:
+        wanted = set(chroms)
+        all_chroms = [c for c in all_chroms if c in wanted]
+
+    n_ev = n_fe = n_ov = 0
+    by_type: dict = {}
+    for chrom in all_chroms:
+        b = blocks.filter(pl.col("bed_chrom") == chrom)
+        t = translons.filter(pl.col("bed_chrom") == chrom)
+        if b.is_empty():
+            continue
+        events, fe, overlap = extract_events(b, t, annotation_version=annotation_version)
+        safe = str(chrom).replace("/", "_")
+        events.write_parquet(out / "events" / f"{safe}.parquet")
+        fe.write_parquet(out / "feature_event" / f"{safe}.parquet")
+        overlap.write_parquet(out / "event_overlap" / f"{safe}.parquet")
+        n_ev += events.height
+        n_fe += fe.height
+        n_ov += overlap.height
+        for t_type, c in events.group_by("type").len().iter_rows():
+            by_type[t_type] = by_type.get(t_type, 0) + c
+    return {
+        "events": n_ev,
+        "feature_event": n_fe,
+        "event_overlap": n_ov,
+        "by_type": by_type,
+        "chroms": len(all_chroms),
+    }
+
+
 def run_extract(
     sqlite_path: str,
     out_dir: str,

@@ -1447,15 +1447,48 @@ def inspect_cmd(parquet_path: str, limit: int, expand: bool, out_csv: Optional[s
 
 @cli.command("extract-events")
 @click.option(
-    "--sqlite",
-    "sqlite_path",
-    required=True,
-    help="Annotation sqlite database with translons + translon_blocks tables.",
-)
-@click.option(
     "--out-dir",
     required=True,
     help="Output directory for events/, feature_event/, event_overlap/ Parquet trees.",
+)
+# --- feature source (exactly one) ---
+@click.option("--gtf", "gtf_path", help="GTF/GFF annotation; scores --feature-type features.")
+@click.option(
+    "--feature-type",
+    default="CDS",
+    show_default=True,
+    help="GTF feature type to score (e.g. CDS, exon).",
+)
+@click.option(
+    "--bed12", "bed12_path", help="BED12 file (blockSizes/blockStarts give exon structure)."
+)
+@click.option("--bigbed", "bigbed_path", help="bigBed (BED12) file.")
+@click.option(
+    "--fasta", "fasta_path", help="FASTA for de-novo ORF finding (genome/contig records)."
+)
+@click.option("--sqlite", "sqlite_path", help="Annotation sqlite (translons + translon_blocks).")
+# --- de-novo ORF options (with --fasta) ---
+@click.option(
+    "--start-codons",
+    default="ATG",
+    show_default=True,
+    help="Comma-separated start codons (--fasta).",
+)
+@click.option(
+    "--stop-codons",
+    default="TAA,TAG,TGA",
+    show_default=True,
+    help="Comma-separated stop codons (--fasta).",
+)
+@click.option(
+    "--min-len", type=int, default=0, show_default=True, help="Minimum ORF length nt (--fasta)."
+)
+@click.option(
+    "--max-len",
+    type=int,
+    default=1_000_000,
+    show_default=True,
+    help="Maximum ORF length nt (--fasta).",
 )
 @click.option(
     "--annotation-version",
@@ -1468,14 +1501,47 @@ def inspect_cmd(parquet_path: str, limit: int, expand: bool, out_csv: Optional[s
     multiple=True,
     help="Restrict extraction to these chromosome(s) (repeatable; default: all).",
 )
-def extract_events_cmd(sqlite_path: str, out_dir: str, annotation_version: str, chroms):
-    """Extract deduplicated genomic events from an annotation database."""
+def extract_events_cmd(
+    out_dir,
+    gtf_path,
+    feature_type,
+    bed12_path,
+    bigbed_path,
+    fasta_path,
+    sqlite_path,
+    start_codons,
+    stop_codons,
+    min_len,
+    max_len,
+    annotation_version,
+    chroms,
+):
+    """Extract deduplicated genomic events from a feature source.
+
+    Exactly one of --gtf / --bed12 / --bigbed / --fasta / --sqlite. No annotation
+    database is required: score annotated CDSs from a GTF, your own ORFs from a
+    BED12/bigBed, or find ORFs de-novo in a FASTA.
+    """
     setup_logging()
     from .workflows import extract_events_workflow
 
+    n_src = sum(bool(x) for x in (gtf_path, bed12_path, bigbed_path, fasta_path, sqlite_path))
+    if n_src != 1:
+        raise click.BadParameter(
+            "provide exactly one source: --gtf | --bed12 | --bigbed | --fasta | --sqlite"
+        )
     summary = extract_events_workflow(
-        sqlite_path,
         out_dir,
+        sqlite_path=sqlite_path or None,
+        gtf_path=gtf_path or None,
+        feature_type=feature_type,
+        bed12_path=bed12_path or None,
+        bigbed_path=bigbed_path or None,
+        fasta_path=fasta_path or None,
+        start_codons=[c.strip() for c in start_codons.split(",") if c.strip()],
+        stop_codons=[c.strip() for c in stop_codons.split(",") if c.strip()],
+        min_len=min_len,
+        max_len=max_len,
         annotation_version=annotation_version,
         chroms=list(chroms) or None,
     )
@@ -1810,13 +1876,18 @@ def consequential_cmd(
 
 @cli.command("pipeline")
 @click.option(
-    "--sqlite",
-    "sqlite_path",
-    required=True,
-    help="Annotation sqlite database (translons + translon_blocks).",
-)
-@click.option(
     "--out-dir", required=True, help="Output directory; writes events/, scores/, report.parquet."
+)
+# --- feature source for extract-events (exactly one) ---
+@click.option("--gtf", "gtf_path", help="GTF/GFF; scores --feature-type features.")
+@click.option("--feature-type", default="CDS", show_default=True, help="GTF feature type to score.")
+@click.option("--bed12", "bed12_path", help="BED12 feature file.")
+@click.option("--bigbed", "bigbed_path", help="bigBed (BED12) feature file.")
+@click.option("--fasta", "fasta_path", help="FASTA for de-novo ORF finding.")
+@click.option("--sqlite", "sqlite_path", help="Annotation sqlite (translons + translon_blocks).")
+@click.option("--start-codons", default="ATG", show_default=True, help="Start codons for --fasta.")
+@click.option(
+    "--stop-codons", default="TAA,TAG,TGA", show_default=True, help="Stop codons for --fasta."
 )
 @click.option(
     "--matrix-dir",
@@ -1886,8 +1957,15 @@ def consequential_cmd(
     help="Consequential expression-percentile floor.",
 )
 def pipeline_cmd(
-    sqlite_path,
     out_dir,
+    gtf_path,
+    feature_type,
+    bed12_path,
+    bigbed_path,
+    fasta_path,
+    sqlite_path,
+    start_codons,
+    stop_codons,
     matrix_dir,
     bams,
     chroms,
@@ -1905,10 +1983,10 @@ def pipeline_cmd(
 ):
     """One-shot event-scoring run: extract-events → score (matrix or BAMs) → report.
 
-    Use --matrix-dir for the sparse annotation-scale matrix (the whole matrix is
-    used; it is sharded by read sequence and has no valid subset), or --bam for
-    1-20 BAMs (exactly one mode). Equivalent to running extract-events,
-    score-matrix/score-bams and report in sequence, into one output directory.
+    Feature source (exactly one): --gtf / --bed12 / --bigbed / --fasta / --sqlite.
+    Coverage source (exactly one): --matrix-dir (whole sharded matrix) or --bam
+    (1-20 BAMs). Equivalent to running extract-events, score-matrix/score-bams and
+    report in sequence, into one output directory.
     """
     setup_logging()
     from .io.matrix import discover_partitions
@@ -1918,6 +1996,11 @@ def pipeline_cmd(
     if bool(matrix_dir) == bool(bams):
         raise click.BadParameter(
             "provide exactly one of --matrix-dir (matrix mode) or --bam (BAM mode)"
+        )
+    n_src = sum(bool(x) for x in (gtf_path, bed12_path, bigbed_path, fasta_path, sqlite_path))
+    if n_src != 1:
+        raise click.BadParameter(
+            "provide exactly one feature source: --gtf | --bed12 | --bigbed | --fasta | --sqlite"
         )
     partition_dirs = [str(p) for p in discover_partitions(matrix_dir)] if matrix_dir else None
     if partition_dirs:
@@ -1934,7 +2017,6 @@ def pipeline_cmd(
         min_expression_percentile=min_expression_percentile,
     )
     paths = pipeline_workflow(
-        sqlite_path,
         out_dir,
         partition_dirs=partition_dirs,
         bams=list(bams) or None,
@@ -1949,6 +2031,15 @@ def pipeline_cmd(
         transcriptome=transcriptome,
         exon_df=exon_df,
         policy=policy,
+        # feature source forwarded to extract-events
+        sqlite_path=sqlite_path or None,
+        gtf_path=gtf_path or None,
+        feature_type=feature_type,
+        bed12_path=bed12_path or None,
+        bigbed_path=bigbed_path or None,
+        fasta_path=fasta_path or None,
+        start_codons=[c.strip() for c in start_codons.split(",") if c.strip()],
+        stop_codons=[c.strip() for c in stop_codons.split(",") if c.strip()],
     )
     log_info(f"Pipeline complete: {paths['report']}")
 

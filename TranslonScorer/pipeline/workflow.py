@@ -296,7 +296,8 @@ def all_workflow(config: Config) -> None:
         # Optional: build frame support from BigWig-derived profiles
         if getattr(config, 'frame_method', 'none') != 'none':
             from .profiles import profiles_from_bigwig
-            from .frame_support import build_frame_support
+            from ..frame_support import build_frame_support
+            from ..model import FrameSupportParams
             from ..utils import log_info
             log_info("Computing transcript profiles from BigWig for frame support…")
             prof = profiles_from_bigwig(config.bigwig_paths, exon_df, stranded=config.stranded)
@@ -304,7 +305,14 @@ def all_workflow(config: Config) -> None:
                 base = (config.output or 'output').rstrip('/') or 'output'
                 config.frame_support_out = f"{base}_frame_support.parquet"
             cds_tran_df = cds_to_transcript_space(cds_df2, exon_df)
-            build_frame_support(prof, cds_tran_df, config)
+            _fs = build_frame_support(prof, cds_tran_df, FrameSupportParams(
+                frame_method=getattr(config, "frame_method", "none"),
+                frame_by_length=bool(getattr(config, "frame_by_length", False)),
+                frame_background=getattr(config, "frame_background", "uniform"),
+                frame_hmm_lambda=float(getattr(config, "frame_hmm_lambda", 1.0)),
+            ))
+            if config.frame_support_out and not _fs.is_empty():
+                _fs.write_parquet(config.frame_support_out)
     elif config.bam:
         # BAM lane (classic or collapsed)
         if not config.bam:

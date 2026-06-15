@@ -11,6 +11,24 @@ from .utils.logging import setup_logging, log_info
 from .file_handlers import bam as bam_handlers
 
 
+def _build_and_write_frame_support(profiles, cds_df, cfg):
+    """Shell adapter: Config → FrameSupportParams, build frame support (pure),
+    write to cfg.frame_support_out if set. Returns the support DataFrame."""
+    from .model import FrameSupportParams
+    from .frame_support import build_frame_support
+    params = FrameSupportParams(
+        frame_method=getattr(cfg, "frame_method", "none"),
+        frame_by_length=bool(getattr(cfg, "frame_by_length", False)),
+        frame_background=getattr(cfg, "frame_background", "uniform"),
+        frame_hmm_lambda=float(getattr(cfg, "frame_hmm_lambda", 1.0)),
+    )
+    out = build_frame_support(profiles, cds_df, params)
+    out_path = getattr(cfg, "frame_support_out", None)
+    if out_path and not out.is_empty():
+        out.write_parquet(out_path)
+    return out
+
+
 def _warn_deprecated(name: str, replacement: str) -> None:
     """Emit a deprecation notice for legacy ORF-composite era commands."""
     click.echo(
@@ -225,7 +243,6 @@ def profiles(**kwargs):
         profiles_from_zarr,
         write_profiles_parquet,
     )
-    from .pipeline.frame_support import build_frame_support
     from .pipeline.locus_profiles import build_locus_profiles_zarr
     from .pipeline.transcript_coords import cds_to_transcript_space
 
@@ -271,7 +288,7 @@ def profiles(**kwargs):
             cfg.frame_support_out = frame_support_out
             cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
             log_info(f"Building frame support with method={frame_method}...")
-            build_frame_support(prof, cds_tran_df, cfg)
+            _build_and_write_frame_support(prof, cds_tran_df, cfg)
             log_info(f"Frame support written to: {cfg.frame_support_out}")
     # BAM lane
     elif config.bam and not config.zarr_root:
@@ -314,7 +331,7 @@ def profiles(**kwargs):
             cfg.frame_support_out = frame_support_out
             cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
             log_info(f"Building frame support with method={frame_method}…")
-            build_frame_support(prof, cds_tran_df, cfg)
+            _build_and_write_frame_support(prof, cds_tran_df, cfg)
             log_info(f"Frame support written to: {cfg.frame_support_out}")
     # Zarr lane (with optional index build from BAM)
     elif config.zarr_root:
@@ -445,7 +462,7 @@ def profiles(**kwargs):
             cfg.frame_support_out = frame_support_out
             cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
             log_info(f"Building frame support with method={frame_method} (BigWig lane)…")
-            build_frame_support(prof, cds_tran_df, cfg)
+            _build_and_write_frame_support(prof, cds_tran_df, cfg)
             log_info(f"Frame support written to: {cfg.frame_support_out}")
 
 @cli.command("score-orfs")

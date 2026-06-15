@@ -4,8 +4,8 @@ from typing import Sequence
 
 import polars as pl
 
-from .config import Config
-from .frame_support import build_frame_support
+from ..frame_support import build_frame_support
+from ..model import FrameSupportParams
 from ..utils.io import write_csv_safe, write_parquet_safe
 
 
@@ -183,13 +183,13 @@ def build_frame_support_for_method(
     method = method.lower()
     if method not in SUPPORTED_FRAME_METHODS:
         raise ValueError(f"Unsupported frame method: {method}")
-    cfg = Config(
+    params = FrameSupportParams(
         frame_method=method,
         frame_by_length=frame_by_length,
         frame_hmm_lambda=hmm_lambda,
         frame_background=background,
     )
-    return build_frame_support(profiles, cds, cfg)
+    return build_frame_support(profiles, cds, params)
 
 
 def compare_frame_support_tables(

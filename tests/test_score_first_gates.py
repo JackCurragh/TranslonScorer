@@ -4,13 +4,13 @@ import polars as pl
 
 from TranslonScorer.frame.bleed import apply_confusion, apply_confusion_counts, learn_confusion
 from TranslonScorer.frame.latent import fit_latent
-from TranslonScorer.pipeline.config import Config
 from TranslonScorer.pipeline.frame_disambiguation import (
     candidate_frame_table,
     summarize_frame_disambiguation,
 )
 from TranslonScorer.pipeline.frame_method_compare import compare_frame_support_tables, validate_frame_support_on_cds
-from TranslonScorer.pipeline.frame_support import build_frame_support
+from TranslonScorer.frame_support import build_frame_support
+from TranslonScorer.model import FrameSupportParams
 from TranslonScorer.pipeline.profile_compare import compare_profiles
 from TranslonScorer.pipeline.panel_manifest import merge_panel_manifest, validate_panel_manifest
 from TranslonScorer.pipeline.score_schema import (
@@ -212,8 +212,8 @@ def test_frame_support_outputs_adjusted_counts_for_linear_and_latent():
     })
     cds = pl.DataFrame({"tran_id": ["tx1"], "start": [0], "stop": [90]})
 
-    linear = build_frame_support(profiles, cds, Config(frame_method="linear", frame_by_length=False))
-    latent = build_frame_support(profiles, cds, Config(frame_method="latent", frame_by_length=False))
+    linear = build_frame_support(profiles, cds, FrameSupportParams(frame_method="linear", frame_by_length=False))
+    latent = build_frame_support(profiles, cds, FrameSupportParams(frame_method="latent", frame_by_length=False))
 
     for support in (linear, latent):
         assert "observed_f0" in support.columns

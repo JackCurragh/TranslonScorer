@@ -10,8 +10,8 @@ import polars as pl
 
 from TranslonScorer import __version__
 
-from .config import Config
-from .frame_support import build_frame_support
+from ..frame_support import build_frame_support
+from ..model import FrameSupportParams
 from .transcript_coords import cds_to_transcript_space
 from ..file_handlers import bam as bam_handlers
 from ..utils.io import ensure_dir_for_file, write_parquet_safe
@@ -543,8 +543,8 @@ def _build_frame_support_from_annotation(
     else:
         raise ValueError("Provide --frame-support, or provide --cds/--annotation/--annotation-dir to build frame support")
 
-    cfg = Config(frame_method=frame_method, frame_by_length=frame_by_length)
-    return build_frame_support(profiles, cds_tran, cfg)
+    params = FrameSupportParams(frame_method=frame_method, frame_by_length=frame_by_length)
+    return build_frame_support(profiles, cds_tran, params)
 
 
 def export_rdg_flux_v1(

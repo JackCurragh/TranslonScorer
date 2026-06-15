@@ -19,7 +19,7 @@ from TranslonScorer.pipeline.score_schema import (
     ensure_score_schema,
 )
 from TranslonScorer.pipeline.rdg_flux_export import export_rdg_flux_v1, rdg_flux_position_table
-from TranslonScorer.pipeline.transcript_coords import cds_to_transcript_space
+from TranslonScorer.coverage.transcript_coords import cds_to_transcript_space
 
 
 def test_cds_to_transcript_space_maps_minus_strand():

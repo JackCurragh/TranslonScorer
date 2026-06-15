@@ -167,12 +167,16 @@ def score_bams_workflow(
     group: str = "aggregate",
     tier: str = "aggregate",
     annotation_version: str = "",
+    transcriptome: bool = False,
+    exon_df: Optional[pl.DataFrame] = None,
     thr: ScoreThresholds = DEFAULT_THRESHOLDS,
 ) -> str:
-    """Score events against a set of genome-aligned BAMs; persist results.
+    """Score events against a set of genome- (or transcriptome-) aligned BAMs.
 
     Offsets are calibrated once per BAM/read-length before any locus query
-    (handled inside BamSetProvider). Returns the written store path(s).
+    (handled inside BamSetProvider). When ``transcriptome=True`` reads are
+    projected to genome coordinates via ``exon_df`` (required). Returns the
+    written store path(s).
     """
     from TranslonScorer.coverage.bam import BamSetProvider
 
@@ -182,6 +186,8 @@ def score_bams_workflow(
         offsets=offsets,
         multimap=multimap,
         sample_names=sample_names,
+        transcriptome=transcriptome,
+        exon_df=exon_df,
     )
     scored = _score_events_over_provider(
         events, provider, site=site, group=group, tier=tier, thr=thr

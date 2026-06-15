@@ -112,7 +112,7 @@ Current violations to remove during the refactor:
 ### Phase 3 follow-ups (BAM-provider correctness — surfaced in real-data testing)
 - [x] **T12.a** Strand-aware P/A placement (`-` strand used `reference_start`) + emit `strand` column; NH-based unique filter (was `MAPQ==0`, kept 2–4-locus multimappers). Tests + GAPDH genome fixture (`data/gapdh_cohort_genome.bam`). STATUS: 38 passed — commit (strand/unique).
 - [x] **T12.b** Implement metagene P-site offset calibration (5′ pile-up at start codons), pure `metagene_offsets` + provider `_build_metagene_histogram`. Unit + real-data tests. STATUS: 40 passed — commit (metagene). Real GAPDH offsets 9–12 for 25–32mers.
-- [ ] **T12.1** Transcriptome→genome read projection + isoform-multimapper resolution (the largest; needs inverse exon mapping + validation against the SRR transcriptome BAM). For now `transcriptome=True` raises `NotImplementedError` (no silent wrong coords). STATUS: guarded + tracked.
+- [x] **T12.1** Transcriptome→genome read projection + isoform-multimapper resolution. Pure `coverage/transcriptome.py` (`build_exon_index`, `project_to_genome` — strand-aware exon walk). `BamSetProvider(transcriptome=True, exon_df=...)` projects each read's alignments to genomic P/A-sites; isoform multimappers that converge on a shared-exon genomic site count once, divergent ones drop under `multimap="unique"` (or split 1/n under "all"). Wired through `score_bams_workflow` + CLI `score-bams --transcriptome --annotation`. Tests: `tests/test_transcriptome_projection.py` (8: pure projection both strands, convergent + divergent multimappers, P/A). STATUS: gate 40 passed; full 168 passed; new code mypy-clean — commit pending.
 
 `=== PHASE 3 complete — report ===`
 

@@ -1060,17 +1060,26 @@ def score_matrix_cmd(events_dir, partitions, store_dir, data_version, annotation
 @click.option('--offsets-file', help='CSV with read_length,offset for --offset-method file.')
 @click.option('--multimap', type=click.Choice(['unique']), default='unique', show_default=True, help='Multimapper policy (unique only for now).')
 @click.option('--site', type=click.Choice(['A', 'P']), default='A', show_default=True, help='Coverage site to query.')
-def score_bams_cmd(events_dir, bams, store_dir, data_version, annotation_version, sample_names, offset_method, global_offset, offsets_file, multimap, site):
-    """Score extracted events against 1-20 genome-aligned BAMs."""
+@click.option('--transcriptome', is_flag=True, default=False, help='BAMs are transcriptome-aligned; project reads to genome via --annotation.')
+@click.option('--annotation', '-a', help='GTF annotation for transcriptome→genome projection (required with --transcriptome).')
+def score_bams_cmd(events_dir, bams, store_dir, data_version, annotation_version, sample_names, offset_method, global_offset, offsets_file, multimap, site, transcriptome, annotation):
+    """Score extracted events against 1-20 genome- or transcriptome-aligned BAMs."""
     setup_logging()
     from .model import OffsetParams
     from .workflows import score_bams_workflow
+    exon_df = None
+    if transcriptome:
+        if not annotation:
+            raise click.BadParameter('--transcriptome requires --annotation (GTF) for projection.')
+        from .io.annotation import build_cds_blocks
+        exon_df = build_cds_blocks(annotation)
     offsets = OffsetParams(method=offset_method, global_offset=global_offset, offsets_file=offsets_file)
     written = score_bams_workflow(
         events_dir, list(bams), store_dir,
         data_version=data_version, annotation_version=annotation_version,
         offsets=offsets, sample_names=list(sample_names) or None,
         multimap=multimap, site=site,
+        transcriptome=transcriptome, exon_df=exon_df,
     )
     log_info(f"Scores written: {written or '(no events scored)'}")
 

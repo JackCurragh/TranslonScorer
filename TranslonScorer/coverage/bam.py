@@ -75,14 +75,13 @@ class BamSetProvider:
         # whole-sample evidence for metagene offset calibration. Required only
         # when offsets.method == "metagene".
         self._start_codons = start_codons or []
-        if transcriptome:
-            # Inverse (transcript→genome) read projection with isoform-multimapper
-            # resolution is not implemented yet. Fail loudly rather than silently
-            # treating transcript references as genomic (which would be wrong).
-            raise NotImplementedError(
-                "transcriptome→genome projection not implemented (REFACTOR_TASKS T12.1). "
-                "Provide genome-aligned BAMs, or wait for the projection feature."
+        if transcriptome and exon_df is None:
+            raise ValueError(
+                "transcriptome=True requires exon_df (transcript→genome exon "
+                "structure with columns tran_id, chr, strand, start, stop, tran_start)."
             )
+        # Lazily-built {tran_id: ExonModel} for transcriptome→genome projection.
+        self._exon_index: Optional[dict] = None
         self._sample_names = sample_names or [
             Path(b).stem for b in bams
         ]
@@ -218,6 +217,10 @@ class BamSetProvider:
 
         for bam_path, sample_id in zip(self._bams, self._sample_names):
             table = offset_tables[bam_path]
+            if self._transcriptome:
+                rows.extend(self._transcriptome_rows(
+                    pysam, bam_path, sample_id, table, regions, site))
+                continue
             bam_rows: List[dict] = []
             try:
                 with pysam.AlignmentFile(str(bam_path), "rb") as bam:
@@ -254,6 +257,79 @@ class BamSetProvider:
                                         "pos": pl.Int64, "count": pl.Float64})
         keys = (["sample_id", "strand", "pos"] if by_sample else ["strand", "pos"])
         return df.group_by(keys).agg(pl.col("count").sum()).sort(keys)
+
+    def _transcriptome_rows(
+        self, pysam, bam_path, sample_id, table, regions, site,
+    ) -> List[dict]:
+        """Project transcriptome-aligned reads to genome P/A-site rows.
+
+        Each read's alignments (one per isoform hit) are projected to genomic
+        coordinates; isoform multimappers that converge on a single genomic site
+        (shared exon) count once, divergent ones are dropped under
+        multimap="unique" or split fractionally under "all".
+        """
+        from collections import defaultdict
+        from TranslonScorer.coverage.transcriptome import (
+            build_exon_index, project_to_genome,
+        )
+        if self._exon_index is None:
+            assert self._exon_df is not None  # guaranteed by __init__ guard
+            self._exon_index = build_exon_index(self._exon_df)
+        index = self._exon_index
+        a_shift = 3 if site == "A" else 0
+
+        # Collect per-read alignments: qname -> list of (tran_id, tran_start, length)
+        per_read: Dict[str, list] = defaultdict(list)
+        try:
+            with pysam.AlignmentFile(str(bam_path), "rb") as bam:
+                for rec in bam.fetch(until_eof=True):
+                    if rec.is_unmapped or rec.is_secondary or rec.is_supplementary:
+                        continue
+                    tran_id = rec.reference_name
+                    if tran_id not in index:
+                        continue
+                    length = rec.query_length or 0
+                    if length == 0:
+                        continue
+                    per_read[rec.query_name].append(
+                        (tran_id, int(rec.reference_start), length))
+        except (OSError, ValueError):
+            return []
+
+        # Region membership test (genomic span, chrom-aware).
+        def _in_regions(chrom: str, pos: int) -> bool:
+            for r in regions:
+                if r.chrom == chrom and r.start <= pos < r.end:
+                    return True
+            return False
+
+        out: List[dict] = []
+        for _qname, aligns in per_read.items():
+            # Project EVERY alignment first; multimapper resolution must see all
+            # genomic destinations, not just those inside the requested regions.
+            sites: Dict[Tuple[str, int, int], None] = {}
+            for tran_id, tstart, length in aligns:
+                model = index[tran_id]
+                p_offset = table.get(length, self._offset_params.global_offset)
+                tc = tstart + p_offset + a_shift
+                proj = project_to_genome(model, tc)
+                if proj is None:
+                    continue
+                strand, gpos = proj
+                sites[(model.chrom, strand, gpos)] = None
+            if not sites:
+                continue
+            if len(sites) == 1:
+                weight = 1.0
+            elif self._multimap == "unique":
+                continue  # genuine genomic multimapper
+            else:
+                weight = 1.0 / len(sites)
+            for (chrom, strand, gpos) in sites:
+                if _in_regions(chrom, gpos):
+                    out.append({"sample_id": sample_id, "strand": strand,
+                                "pos": gpos, "count": weight})
+        return out
 
     def size_factors(self) -> Dict[str, float]:
         """Library-size normalisation factors (median-ratio; 1.0 per sample until computed)."""

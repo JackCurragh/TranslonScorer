@@ -621,7 +621,7 @@ def compare_frame_methods_cmd(
 ):
     """Compare frame-only correction methods, e.g. linear versus latent EM."""
     setup_logging()
-    from .pipeline.frame_method_compare import compare_frame_methods
+    from .frame.frame_method_compare import compare_frame_methods
     method_list = [m.strip().lower() for m in methods.split(',') if m.strip()]
     paths = compare_frame_methods(
         profiles_path=profiles,
@@ -730,7 +730,7 @@ def frame_disambiguation_cmd(
 ):
     """Gate 3: quantify frame-discordant ambiguous read assignments."""
     setup_logging()
-    from .pipeline.frame_disambiguation import (
+    from .frame.frame_disambiguation import (
         frame_disambiguation_from_bam,
         frame_disambiguation_from_candidates,
     )
@@ -795,7 +795,7 @@ def compare_read_assignment_cmd(
 ):
     """Compare unique, fractional, EM, and frame-aware read assignment."""
     setup_logging()
-    from .pipeline.read_assignment import compare_read_assignment_methods
+    from .frame.read_assignment import compare_read_assignment_methods
 
     method_list = [m.strip().lower() for m in methods.split(',') if m.strip()]
     paths = compare_read_assignment_methods(

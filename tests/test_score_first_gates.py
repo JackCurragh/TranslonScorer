@@ -11,14 +11,14 @@ from TranslonScorer.frame.frame_disambiguation import (
 from TranslonScorer.frame.frame_method_compare import compare_frame_support_tables, validate_frame_support_on_cds
 from TranslonScorer.frame_support import build_frame_support
 from TranslonScorer.model import FrameSupportParams
-from TranslonScorer.pipeline.profile_compare import compare_profiles
-from TranslonScorer.pipeline.panel_manifest import merge_panel_manifest, validate_panel_manifest
-from TranslonScorer.pipeline.score_schema import (
+from TranslonScorer.orf.profile_compare import compare_profiles
+from TranslonScorer.orf.panel_manifest import merge_panel_manifest, validate_panel_manifest
+from TranslonScorer.orf.score_schema import (
     add_frame_score_columns,
     compare_score_tables,
     ensure_score_schema,
 )
-from TranslonScorer.pipeline.rdg_flux_export import export_rdg_flux_v1, rdg_flux_position_table
+from TranslonScorer.orf.rdg_flux_export import export_rdg_flux_v1, rdg_flux_position_table
 from TranslonScorer.coverage.transcript_coords import cds_to_transcript_space
 
 

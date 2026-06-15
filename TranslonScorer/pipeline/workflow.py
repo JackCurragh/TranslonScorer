@@ -220,7 +220,7 @@ def _load_sample_offsets(config: Config) -> "pl.DataFrame":
 
 def _sparse_matrix_workflow(config: Config) -> None:
     """Dispatch sparse Parquet matrix → scored ORFs via aggregate or per-sample mode."""
-    from .matrix_scoring import score_aggregate, score_per_sample
+    from ..matrix_scoring import score_aggregate, score_per_sample
 
     log_info("Sparse Parquet matrix lane…")
 

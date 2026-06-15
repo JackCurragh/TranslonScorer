@@ -120,7 +120,7 @@ class TestM1ProfilesToScoredOrfs:
     """
 
     def test_schema_contains_raw_score_columns(self, simple_profiles, simple_orf_df):
-        from TranslonScorer.pipeline.matrix_scoring import profiles_to_scored_orfs
+        from TranslonScorer.matrix_scoring import profiles_to_scored_orfs
         from TranslonScorer.pipeline.score_schema import RAW_SCORE_COLUMNS
 
         scored = profiles_to_scored_orfs(simple_profiles, simple_orf_df)
@@ -130,7 +130,7 @@ class TestM1ProfilesToScoredOrfs:
             assert col in scored.columns, f"Missing score column: {col}"
 
     def test_covered_transcripts_have_rows(self, simple_profiles, simple_orf_df):
-        from TranslonScorer.pipeline.matrix_scoring import profiles_to_scored_orfs
+        from TranslonScorer.matrix_scoring import profiles_to_scored_orfs
 
         scored = profiles_to_scored_orfs(simple_profiles, simple_orf_df)
         present = set(scored.get_column("tran_id").to_list())
@@ -139,7 +139,7 @@ class TestM1ProfilesToScoredOrfs:
         assert "T2" in present, "T2 should be scored (has coverage)"
 
     def test_uncovered_transcript_absent(self, simple_profiles, simple_orf_df):
-        from TranslonScorer.pipeline.matrix_scoring import profiles_to_scored_orfs
+        from TranslonScorer.matrix_scoring import profiles_to_scored_orfs
 
         scored = profiles_to_scored_orfs(simple_profiles, simple_orf_df)
         present = set(scored.get_column("tran_id").to_list())
@@ -147,7 +147,7 @@ class TestM1ProfilesToScoredOrfs:
         assert "T3_nocov" not in present, "T3_nocov has no coverage rows; must be absent"
 
     def test_empty_profiles_returns_empty(self, simple_orf_df):
-        from TranslonScorer.pipeline.matrix_scoring import profiles_to_scored_orfs
+        from TranslonScorer.matrix_scoring import profiles_to_scored_orfs
 
         empty_prof = pl.DataFrame(schema={"tran_id": pl.Utf8, "pos": pl.Int64, "count": pl.Float64})
         result = profiles_to_scored_orfs(empty_prof, simple_orf_df)
@@ -155,7 +155,7 @@ class TestM1ProfilesToScoredOrfs:
 
     def test_aggregate_sums_across_samples(self):
         """aggregate_profiles_from_genomic_counts must sum sample counts per position."""
-        from TranslonScorer.pipeline.matrix_scoring import aggregate_profiles_from_genomic_counts
+        from TranslonScorer.matrix_scoring import aggregate_profiles_from_genomic_counts
 
         # Two samples, same (tran_id, pos) after mapping; counts 1 and 2
         # We mock the genomic-to-transcript step by using a profile-like input
@@ -203,7 +203,7 @@ class TestM2PerSampleProfiles:
         })
 
     def test_yields_one_entry_per_sample(self):
-        from TranslonScorer.pipeline.matrix_scoring import per_sample_profiles_from_genomic_counts
+        from TranslonScorer.matrix_scoring import per_sample_profiles_from_genomic_counts
 
         genomic = pl.DataFrame({
             "sample_id": ["S1", "S1", "S2"],
@@ -235,7 +235,7 @@ class TestM2PerSampleProfiles:
     def test_offset_shifts_asite_position(self):
         """Two samples with different offsets should produce different A-site positions
         from the same read start."""
-        from TranslonScorer.pipeline.matrix_scoring import per_sample_profiles_from_genomic_counts
+        from TranslonScorer.matrix_scoring import per_sample_profiles_from_genomic_counts
 
         # Single read at genomic start=100, length=30
         genomic = pl.DataFrame({
@@ -274,7 +274,7 @@ class TestM2PerSampleProfiles:
     def test_per_sample_counts_sum_to_aggregate(self):
         """Sum of per-sample profile counts at each transcript position
         should equal aggregate profile counts."""
-        from TranslonScorer.pipeline.matrix_scoring import (
+        from TranslonScorer.matrix_scoring import (
             per_sample_profiles_from_genomic_counts,
             aggregate_profiles_from_genomic_counts,
         )
@@ -473,7 +473,7 @@ class TestM4Clustering:
 
     def test_score_clustered_returns_tables_per_cluster(self):
         """smoke test: score_clustered on synthetic data should return one table per cluster."""
-        from TranslonScorer.pipeline.matrix_scoring import score_clustered
+        from TranslonScorer.matrix_scoring import score_clustered
 
         n_pos = 60
         pos_vec = np.arange(n_pos)
@@ -506,7 +506,7 @@ class TestM4Clustering:
         assert "cluster_id" in labels_df.columns
 
     def test_hierarchical_cosine_threshold_recovers_two_shapes(self):
-        from TranslonScorer.pipeline.matrix_normalisation import normalise_locus_matrices
+        from TranslonScorer.matrix_normalisation import normalise_locus_matrices
         from TranslonScorer.clustering import cluster_locus_profiles
 
         matrix = self._two_group_matrix()
@@ -527,7 +527,7 @@ class TestM4Clustering:
         assert clustered.cluster_summary.height == 2
 
     def test_one_shape_locus_returns_one_cluster(self):
-        from TranslonScorer.pipeline.matrix_normalisation import normalise_locus_matrices
+        from TranslonScorer.matrix_normalisation import normalise_locus_matrices
         from TranslonScorer.clustering import cluster_locus_profiles
 
         matrix = np.zeros((4, 20))
@@ -547,7 +547,7 @@ class TestM4Clustering:
         assert clustered.cluster_summary.height == 1
 
     def test_weak_cluster_smaller_than_min_size_is_pruned(self):
-        from TranslonScorer.pipeline.matrix_normalisation import normalise_locus_matrices
+        from TranslonScorer.matrix_normalisation import normalise_locus_matrices
         from TranslonScorer.clustering import cluster_locus_profiles
 
         matrix = self._two_group_matrix()
@@ -567,7 +567,7 @@ class TestM4Clustering:
         assert set(b_rows.get_column("clustering_status").to_list()) == {"weak_cluster"}
 
     def test_score_locus_matrix_levels_returns_sample_cluster_and_aggregate(self):
-        from TranslonScorer.pipeline.matrix_scoring import score_locus_matrix_levels
+        from TranslonScorer.matrix_scoring import score_locus_matrix_levels
 
         n_pos = 60
         tran_id = "T_LEVELS"

@@ -1,6 +1,6 @@
 """MatrixProvider — coverage from the sparse annotation-scale matrix.
 
-Wraps `pipeline.matrix_rollup.region_coverage` and `tabulate_junctions` behind
+Wraps `matrix_rollup.region_coverage` and `tabulate_junctions` behind
 the capability-Protocol interface defined in `coverage/base.py`.
 
 The matrix stores pre-computed A-site positions at a configurable offset;
@@ -89,7 +89,7 @@ class MatrixProvider:
         if site not in {"P", "A"}:
             raise ValueError(f"site must be 'P' or 'A', got {site!r}")
 
-        from TranslonScorer.pipeline.matrix_rollup import region_coverage
+        from TranslonScorer.matrix_rollup import region_coverage
 
         a_shift = 3 if site == "A" else 0
         query_regions = [
@@ -141,7 +141,7 @@ class MatrixProvider:
         -------
         DataFrame with columns junction_id, kind, count[, group].
         """
-        from TranslonScorer.pipeline.matrix_rollup import tabulate_junctions
+        from TranslonScorer.matrix_rollup import tabulate_junctions
 
         group_level = "sample" if by_sample else "aggregate"
         return tabulate_junctions(

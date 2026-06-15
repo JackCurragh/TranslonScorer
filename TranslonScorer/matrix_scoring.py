@@ -26,11 +26,11 @@ from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 import numpy as np
 import polars as pl
 
-from ..utils.logging import log_info, log_warning, log_error
-from ..file_handlers import bam as bam_handlers
-from ..file_handlers.bigwig import score_transcript
-from ..pipeline.profiles import _compute_asite_profiles
-from ..pipeline.score_schema import ensure_score_schema
+from .utils.logging import log_info, log_warning, log_error
+from .file_handlers import bam as bam_handlers
+from .file_handlers.bigwig import score_transcript
+from .pipeline.profiles import _compute_asite_profiles
+from .pipeline.score_schema import ensure_score_schema
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ def score_aggregate(
     old_scoring: bool = False,
 ) -> pl.DataFrame:
     """Full aggregate scoring pipeline: sparse Parquet → aggregate profiles → scored ORFs."""
-    from ..file_handlers.sparse_parquet import sparse_matrix_genomic_counts
+    from .file_handlers.sparse_parquet import sparse_matrix_genomic_counts
 
     log_info("Aggregate mode: loading genomic counts from sparse Parquet…")
     genomic_counts = sparse_matrix_genomic_counts(
@@ -254,7 +254,7 @@ def score_per_sample(
     sample_offsets: sample_id, length, offset  (empty → default_offset for all)
     Returns: {sample_id → scored_orf_df}
     """
-    from ..file_handlers.sparse_parquet import sparse_matrix_genomic_counts
+    from .file_handlers.sparse_parquet import sparse_matrix_genomic_counts
 
     log_info("Per-sample mode: loading genomic counts from sparse Parquet…")
     genomic_counts = sparse_matrix_genomic_counts(
@@ -384,7 +384,7 @@ def score_locus_matrix_levels(
 ) -> Tuple[Dict[str, pl.DataFrame], pl.DataFrame, pl.DataFrame]:
     """Normalise once, then score sample, cluster, and whole aggregate levels."""
     from .matrix_normalisation import normalise_locus_matrices
-    from ..clustering import (
+    from .clustering import (
         aggregate_score_profiles_by_cluster,
         cluster_locus_profiles,
     )

@@ -7,7 +7,7 @@ import numpy as np
 
 from ..utils.logging import log_info
 import click
-from .frame_crosstalk import estimate_crosstalk_matrix, invert_and_correct
+from ..frame.frame_crosstalk import estimate_crosstalk_matrix, invert_and_correct
 from .junction_model import estimate_junction_expectation, junction_llr
 
 

@@ -4,11 +4,11 @@ import polars as pl
 
 from TranslonScorer.frame.bleed import apply_confusion, apply_confusion_counts, learn_confusion
 from TranslonScorer.frame.latent import fit_latent
-from TranslonScorer.pipeline.frame_disambiguation import (
+from TranslonScorer.frame.frame_disambiguation import (
     candidate_frame_table,
     summarize_frame_disambiguation,
 )
-from TranslonScorer.pipeline.frame_method_compare import compare_frame_support_tables, validate_frame_support_on_cds
+from TranslonScorer.frame.frame_method_compare import compare_frame_support_tables, validate_frame_support_on_cds
 from TranslonScorer.frame_support import build_frame_support
 from TranslonScorer.model import FrameSupportParams
 from TranslonScorer.pipeline.profile_compare import compare_profiles

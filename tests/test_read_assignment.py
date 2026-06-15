@@ -1,7 +1,7 @@
 import numpy as np
 import polars as pl
 
-from TranslonScorer.pipeline.read_assignment import (
+from TranslonScorer.frame.read_assignment import (
     assign_reads,
     assignment_identifiability,
     compare_read_assignment_methods,

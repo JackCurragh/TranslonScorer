@@ -172,3 +172,6 @@ notebooks/
 *.bigWig
 *.fa
 *.fasta
+
+# Local research notes / internal tracking — not user-facing docs
+/notes/

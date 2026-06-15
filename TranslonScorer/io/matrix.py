@@ -18,6 +18,32 @@ import polars as pl
 # ---------------------------------------------------------------------------
 
 
+def discover_partitions(matrix_dir: "str | Path") -> List[Path]:
+    """Return every partition directory under a matrix root.
+
+    The sparse matrix is sharded by read-sequence prefix; reads for any locus are
+    spread across ALL partitions, so the whole set must always be scanned
+    together — there is no valid single-partition or subset usage. This finds the
+    complete set: immediate subdirectories that contain a matrix manifest.
+    """
+    root = Path(matrix_dir)
+    parts = sorted(
+        p
+        for p in root.iterdir()
+        if p.is_dir()
+        and (
+            any(p.glob("global.*_matrix_manifest.json"))
+            or (p / "global_matrix_manifest.json").exists()
+        )
+    )
+    if not parts:
+        raise FileNotFoundError(
+            f"No matrix partitions found under {root} "
+            "(expected subdirectories each containing a *_matrix_manifest.json)"
+        )
+    return parts
+
+
 def _manifest(partition_dir: "str | Path") -> Tuple[Path, dict]:
     d = Path(partition_dir)
     candidates = sorted(d.glob("global.*_matrix_manifest.json"))

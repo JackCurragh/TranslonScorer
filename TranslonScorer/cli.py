@@ -1491,7 +1491,15 @@ def extract_events_cmd(sqlite_path: str, out_dir: str, annotation_version: str, 
 @cli.command("score-matrix")
 @click.option("--events-dir", required=True, help="Events directory produced by extract-events.")
 @click.option(
-    "--partitions", required=True, multiple=True, help="Matrix partition directory (repeatable)."
+    "--matrix-dir",
+    help="Matrix ROOT directory; ALL partitions under it are scanned together "
+    "(the matrix is sharded by read sequence and must always be used in full).",
+)
+@click.option(
+    "--partitions",
+    multiple=True,
+    help="Explicit partition directories (advanced; normally use --matrix-dir). "
+    "If used you must pass every partition — a subset gives sequence-biased coverage.",
 )
 @click.option("--store-dir", required=True, help="Output fact_event_score store directory.")
 @click.option(
@@ -1523,6 +1531,7 @@ def extract_events_cmd(sqlite_path: str, out_dir: str, annotation_version: str, 
 )
 def score_matrix_cmd(
     events_dir,
+    matrix_dir,
     partitions,
     store_dir,
     data_version,
@@ -1532,13 +1541,27 @@ def score_matrix_cmd(
     site,
     n_workers,
 ):
-    """Score extracted events against the sparse annotation-scale matrix."""
+    """Score extracted events against the sparse annotation-scale matrix.
+
+    The matrix is sharded by read sequence; point --matrix-dir at the root and
+    all partitions are scanned together (there is no valid single-partition use).
+    """
     setup_logging()
+    from .io.matrix import discover_partitions
     from .workflows import score_matrix_workflow
+
+    if bool(matrix_dir) == bool(partitions):
+        raise click.BadParameter(
+            "provide exactly one of --matrix-dir (recommended) or --partitions"
+        )
+    part_dirs = (
+        [str(p) for p in discover_partitions(matrix_dir)] if matrix_dir else list(partitions)
+    )
+    log_info(f"Scoring against {len(part_dirs)} matrix partitions")
 
     written = score_matrix_workflow(
         events_dir,
-        list(partitions),
+        part_dirs,
         store_dir,
         data_version=data_version,
         annotation_version=annotation_version,
@@ -1796,10 +1819,8 @@ def consequential_cmd(
     "--out-dir", required=True, help="Output directory; writes events/, scores/, report.parquet."
 )
 @click.option(
-    "--matrix",
-    "partitions",
-    multiple=True,
-    help="Sparse-matrix partition dir (repeatable) → matrix mode.",
+    "--matrix-dir",
+    help="Sparse-matrix ROOT directory → matrix mode (ALL partitions scanned together).",
 )
 @click.option(
     "--bam", "bams", multiple=True, help="Genome/transcriptome BAM (repeatable) → BAM mode."
@@ -1867,7 +1888,7 @@ def consequential_cmd(
 def pipeline_cmd(
     sqlite_path,
     out_dir,
-    partitions,
+    matrix_dir,
     bams,
     chroms,
     data_version,
@@ -1884,18 +1905,23 @@ def pipeline_cmd(
 ):
     """One-shot event-scoring run: extract-events → score (matrix or BAMs) → report.
 
-    Use --matrix for the sparse annotation-scale matrix, or --bam for 1-20 BAMs
-    (exactly one mode). Equivalent to running extract-events, score-matrix/
-    score-bams and report in sequence, into one output directory.
+    Use --matrix-dir for the sparse annotation-scale matrix (the whole matrix is
+    used; it is sharded by read sequence and has no valid subset), or --bam for
+    1-20 BAMs (exactly one mode). Equivalent to running extract-events,
+    score-matrix/score-bams and report in sequence, into one output directory.
     """
     setup_logging()
+    from .io.matrix import discover_partitions
     from .model import ConsequentialityPolicy, OffsetParams
     from .workflows import pipeline_workflow
 
-    if bool(partitions) == bool(bams):
+    if bool(matrix_dir) == bool(bams):
         raise click.BadParameter(
-            "provide exactly one of --matrix (matrix mode) or --bam (BAM mode)"
+            "provide exactly one of --matrix-dir (matrix mode) or --bam (BAM mode)"
         )
+    partition_dirs = [str(p) for p in discover_partitions(matrix_dir)] if matrix_dir else None
+    if partition_dirs:
+        log_info(f"Scoring against {len(partition_dirs)} matrix partitions")
     exon_df = None
     if transcriptome:
         if not annotation:
@@ -1910,7 +1936,7 @@ def pipeline_cmd(
     paths = pipeline_workflow(
         sqlite_path,
         out_dir,
-        partition_dirs=list(partitions) or None,
+        partition_dirs=partition_dirs,
         bams=list(bams) or None,
         data_version=data_version,
         chroms=list(chroms) or None,

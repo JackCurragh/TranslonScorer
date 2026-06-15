@@ -549,3 +549,31 @@ def test_matrix_manifest_helpers():
     assert _reads_parquet_path(mp, manifest).endswith(".parquet")
     bam = _discover_bam(MATRIX_PART)
     assert bam is None or bam.suffix == ".bam"
+
+
+# ===========================================================================
+# io/matrix.discover_partitions
+# ===========================================================================
+
+
+def test_discover_partitions(tmp_path):
+    from TranslonScorer.io.matrix import discover_partitions
+
+    root = tmp_path / "matrix"
+    for name in ("AAAA", "AAAC", "AAAG"):
+        d = root / name
+        d.mkdir(parents=True)
+        (d / f"global.{name}_matrix_manifest.json").write_text("{}")
+    (root / "not_a_partition").mkdir()  # no manifest -> excluded
+    parts = discover_partitions(root)
+    assert [p.name for p in parts] == ["AAAA", "AAAC", "AAAG"]
+
+
+def test_discover_partitions_empty_raises(tmp_path):
+    from TranslonScorer.io.matrix import discover_partitions
+
+    (tmp_path / "empty").mkdir()
+    import pytest as _pt
+
+    with _pt.raises(FileNotFoundError):
+        discover_partitions(tmp_path / "empty")

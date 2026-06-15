@@ -91,20 +91,25 @@ translonscorer pipeline \
 
 ### B. The matrix (annotation scale)
 
-Score events against the sparse multi-sample matrix (partition directories):
+The sparse matrix is **one logical matrix sharded into partition directories by
+read sequence**. Reads for any locus are spread across *all* partitions, so the
+matrix must **always be used in full** — there is no single-partition or subset
+usage. You point at the matrix **root** and every partition under it is scanned
+together:
 
 ```sh
 translonscorer pipeline \
   --sqlite annotation.translons.sqlite \
-  --matrix matrix/partition_000 --matrix matrix/partition_001 \
+  --matrix-dir matrix/global_partitioned \
   --chrom chr12 \
   --out-dir results_chr12/ \
   --data-version matrix_v1
 ```
 
-`--chrom` restricts extraction (handy for a tractable run); omit it for the
-whole genome. See [`runs/run_matrix_scoring.sh`](runs/run_matrix_scoring.sh) for
-a reproducible matrix run you can copy.
+`--chrom` restricts which **events** are extracted (a tractable scope); it does
+not restrict the matrix — all partitions are still read. Omit it for the whole
+genome. See [`runs/run_matrix_scoring.sh`](runs/run_matrix_scoring.sh) for a
+reproducible matrix run you can copy.
 
 ### C. Step by step (full control)
 
@@ -115,9 +120,9 @@ translonscorer extract-events --sqlite anno.sqlite --out-dir run/events --chrom 
 # 2a. score from BAMs ...
 translonscorer score-bams  --events-dir run/events --bam a.bam --bam b.bam \
     --store-dir run/scores --data-version v1
-# 2b. ... or from the matrix
+# 2b. ... or from the whole matrix (all partitions under the root)
 translonscorer score-matrix --events-dir run/events \
-    --partitions matrix/p0 --partitions matrix/p1 \
+    --matrix-dir matrix/global_partitioned \
     --store-dir run/scores --data-version v1
 
 # 3. compose the per-translon report (+ default consequentiality)
@@ -240,19 +245,16 @@ here.
 
 ## Documentation
 
-Design/reference docs live in [`docs/`](docs/):
+Reference/design docs live in [`docs/`](docs/):
 
 - [`architecture.md`](docs/architecture.md) — functional-core/imperative-shell design + module map.
 - [`event_scoring_model.md`](docs/event_scoring_model.md) — the event model, dedup measurements, scoring spec.
 - [`matrix_query_engine.md`](docs/matrix_query_engine.md) / [`matrix_normalisation_strategy.md`](docs/matrix_normalisation_strategy.md) — matrix querying + normalisation.
-- [`RELEASE.md`](docs/RELEASE.md) — release machinery; [`REFACTOR_TASKS.md`](docs/REFACTOR_TASKS.md) — the migration record.
+- [`rdg_flux_export.md`](docs/rdg_flux_export.md) — RDG-Flux export format.
+- [`RELEASE.md`](docs/RELEASE.md) — release machinery.
 
-> **Housekeeping note:** `docs/` also contains ~35 `read_assignment_*.md` files
-> (most are `read_assignment_ribometric_10pct.*.md` per-locus review notes from a
-> May 2025 investigation). These are **research lab-notes, not user
-> documentation**, and are effectively archival. Consider moving them to an
-> `docs/notes/` or `archive/` subfolder (or pruning) so the docs index reflects
-> only current reference material.
+(Research lab-notes and internal tracking are kept in a git-ignored `notes/`
+directory, not in `docs/`.)
 
 ---
 

@@ -20,7 +20,6 @@ import polars as pl
 
 from TranslonScorer.io.bam import normalise_chrom as _normalise_chrom
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

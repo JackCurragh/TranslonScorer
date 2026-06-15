@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
 import polars as pl
 
+from ..coverage.transcript_coords import cds_to_transcript_space
 from ..file_handlers import bam as bam_handlers
 from ..utils.io import write_csv_safe, write_parquet_safe
 from ..utils.logging import log_info
-from ..coverage.transcript_coords import cds_to_transcript_space
 
 
 def _load_table(path: str) -> pl.DataFrame:

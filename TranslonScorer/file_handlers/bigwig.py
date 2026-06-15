@@ -5,9 +5,10 @@ This module contains optimized functions for reading and processing BigWig files
 including conversion to other formats and coordinate transformations.
 """
 
-from typing import Dict, List, Optional, Union, Tuple, Any, Set
-import polars as pl
 import importlib
+from typing import Any, List, Optional, Tuple
+
+import polars as pl
 
 _bw_mod = None
 _bw_err = None
@@ -30,20 +31,19 @@ def _require_pybigwig():
     return _bw_mod
 
 
-from ..utils.logging import log_info, log_warning, log_error
-from ..core.scoring import oldscoring, newscoring, globalscores, existingscore, assigningscore
-
 import concurrent.futures
-from functools import partial
-import os
-import time
-import numpy as np
-from dataclasses import dataclass, field
-from contextlib import contextmanager
-import tempfile
-import pickle
 import gc
+import os
+import tempfile
+import time
 from collections import defaultdict
+from contextlib import contextmanager
+from dataclasses import dataclass
+
+import numpy as np
+
+from ..core.scoring import assigningscore, existingscore, globalscores, newscoring, oldscoring
+from ..utils.logging import log_error, log_info, log_warning
 
 
 @dataclass
@@ -430,8 +430,7 @@ def transcriptreads(bigwig_file, exon_df, transcript_id=None):
     """
     bw_module = _require_pybigwig()
     import polars as pl
-    from ..utils.logging import log_info, log_warning, log_error
-    import numpy as np
+
 
     # Open BigWig file if a path was given
     if isinstance(bigwig_file, str):
@@ -485,9 +484,10 @@ def process_genomic_bigwig(bw_handle, exon_df):
     polars.DataFrame
         DataFrame with transcript coordinates and coverage values
     """
-    import polars as pl
     import numpy as np
-    from ..utils.logging import log_info, log_warning
+    import polars as pl
+
+    from ..utils.logging import log_warning
 
     # Get chromosomes in BigWig
     bw_chroms = set(bw_handle.chroms().keys())
@@ -634,8 +634,9 @@ def process_transcriptomic_bigwig(bw_handle, exon_df):
     polars.DataFrame
         DataFrame with transcript coordinates and coverage values
     """
-    import polars as pl
     import numpy as np
+    import polars as pl
+
     from ..utils.logging import log_warning
 
     # Get transcripts in BigWig
@@ -678,7 +679,6 @@ def process_transcriptomic_bigwig(bw_handle, exon_df):
         return pl.DataFrame({"tran_id": [], "tran_start": [], "counts": []})
 
 
-from typing import Optional
 
 
 def scoring(
@@ -711,13 +711,13 @@ def scoring(
         DataFrame: Scored ORFs
     """
     import os
+
     import polars as pl
 
     bw_module = _require_pybigwig()
     import time
-    import concurrent.futures
-    import gc
-    from ..utils.logging import log_info, log_warning, log_error
+
+    from ..utils.logging import log_info
 
     start_time = time.time()
 
@@ -962,13 +962,13 @@ def process_strand_orfs(
     Returns:
         DataFrame: Scored ORFs
     """
-    import polars as pl
-    import os
     import gc
+    import os
     import time
-    import tempfile
-    import concurrent.futures
-    from ..utils.logging import log_info, log_error, log_warning
+
+    import polars as pl
+
+    from ..utils.logging import log_error, log_info, log_warning
 
     start_time = time.time()
 
@@ -1091,7 +1091,7 @@ def process_strand_orfs(
             try:
                 os.remove(temp_results_file)
                 log_info(f"Temporary file removed: {temp_results_file}")
-            except Exception as e:
+            except Exception:
                 log_warning(f"Could not remove temporary file: {temp_results_file}")
 
             # Calculate and log performance metrics
@@ -1119,6 +1119,7 @@ def append_to_csv(df, file_path):
         file_path (str): Path to CSV file
     """
     import csv
+
     from ..utils.logging import log_info
 
     try:
@@ -1186,7 +1187,6 @@ def score_single_transcript(
     import polars as pl
 
     bw_module = _require_pybigwig()
-    from ..utils.logging import log_info
 
     try:
         # Get transcript ID (should be the same for all ORFs)
@@ -1240,9 +1240,9 @@ def score_single_transcript(
                     scored_orfs = oldscoring(type_orfs, coverage_df, sru_range, orf_type)
                 else:
                     from ..core.scoring import (
-                        globalscores,
-                        existingscore,
                         assigningscore,
+                        existingscore,
+                        globalscores,
                         newscoring,
                     )
 

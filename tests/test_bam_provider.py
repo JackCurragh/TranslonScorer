@@ -12,12 +12,11 @@ tests the provider-specific behaviour:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Dict
 
-import pytest
 import polars as pl
+import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
 # Real-data fixture: genome-aligned GAPDH-region reads merged from the matrix
@@ -38,9 +37,9 @@ def test_bam_set_provider_protocols():
     from TranslonScorer.coverage.bam import BamSetProvider
     from TranslonScorer.coverage.base import (
         CoverageProvider,
-        SupportsSites,
         SupportsJunctions,
         SupportsMappability,
+        SupportsSites,
     )
 
     provider = BamSetProvider([])
@@ -52,12 +51,10 @@ def test_bam_set_provider_protocols():
 
 def test_bigwig_set_provider_protocols():
     """BigwigSetProvider satisfies only CoverageProvider (no junctions/sites)."""
-    from TranslonScorer.coverage.bigwig import BigwigSetProvider
     from TranslonScorer.coverage.base import (
         CoverageProvider,
-        SupportsJunctions,
-        SupportsMappability,
     )
+    from TranslonScorer.coverage.bigwig import BigwigSetProvider
 
     provider = BigwigSetProvider([])
     assert isinstance(provider, CoverageProvider)
@@ -84,7 +81,7 @@ def test_bam_set_provider_offset_calibration_cached():
 def test_bam_set_provider_coverage_empty():
     """BamSetProvider.coverage() on empty BAM list returns correct schema."""
     from TranslonScorer.coverage.bam import BamSetProvider
-    from TranslonScorer.model import Region, OffsetParams
+    from TranslonScorer.model import OffsetParams, Region
 
     provider = BamSetProvider([], offsets=OffsetParams(method="global"))
     result = provider.coverage([Region("chr12", 1000, 2000)])
@@ -95,8 +92,8 @@ def test_bam_set_provider_coverage_empty():
 
 def test_metagene_offsets_picks_plausible_peak():
     """metagene_offsets picks the max-count rel_pos within the plausible window."""
-    from TranslonScorer.offsets import metagene_offsets
     from TranslonScorer.model import OffsetParams
+    from TranslonScorer.offsets import metagene_offsets
 
     df = pl.DataFrame(
         {
@@ -114,9 +111,10 @@ def test_metagene_offsets_picks_plausible_peak():
 def test_metagene_offsets_on_fixture():
     """Real metagene on the GAPDH start codon yields plausible per-length offsets."""
     from pathlib import Path as _P
+
     from TranslonScorer.coverage.bam import BamSetProvider
-    from TranslonScorer.offsets import metagene_offsets
     from TranslonScorer.model import OffsetParams
+    from TranslonScorer.offsets import metagene_offsets
 
     p = BamSetProvider(
         [str(GENOME_BAM)],
@@ -155,7 +153,7 @@ def test_site_position_strand_aware():
 def test_bam_coverage_emits_strand():
     """coverage() output carries a strand column (protocol contract)."""
     from TranslonScorer.coverage.bam import BamSetProvider
-    from TranslonScorer.model import Region, OffsetParams
+    from TranslonScorer.model import OffsetParams, Region
 
     provider = BamSetProvider([], offsets=OffsetParams(method="global"))
     result = provider.coverage([Region("chr12", 1000, 2000)])
@@ -221,14 +219,11 @@ def test_srr_bam_offsets_calibrated_once():
 @pytest.mark.skipif(not HAS_BAM, reason="genome GAPDH fixture not in data/")
 def test_srr_gapdh_score_sane():
     """Score GAPDH locus from SRR11005875 BAM; assert sane init/elong/term calls."""
-    from TranslonScorer.coverage.bam import BamSetProvider
-    from TranslonScorer.model import OffsetParams, Region
-    from TranslonScorer.model import ScoreThresholds
-    from TranslonScorer.scoring.run import score_events
-    from TranslonScorer.events import extract_events
-
     # Minimal GAPDH annotation (single-exon proxy; real test would use full exon_df)
     from tests.test_golden import _gapdh_events
+    from TranslonScorer.coverage.bam import BamSetProvider
+    from TranslonScorer.model import OffsetParams, Region, ScoreThresholds
+    from TranslonScorer.scoring.run import score_events
 
     provider = BamSetProvider(
         [str(GENOME_BAM)],

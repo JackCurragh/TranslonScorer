@@ -81,11 +81,11 @@ def test_normalise_locus_matrices_does_not_cluster_or_aggregate():
 
 
 def test_cluster_aggregate_uses_score_matrix_not_cluster_matrix():
-    from TranslonScorer.matrix_normalisation import normalise_locus_matrices
     from TranslonScorer.clustering import (
         aggregate_score_profiles_by_cluster,
         cluster_locus_profiles,
     )
+    from TranslonScorer.matrix_normalisation import normalise_locus_matrices
 
     raw = np.array([[10.0, 30.0, 0.0], [100.0, 300.0, 0.0]])
     prepared = normalise_locus_matrices(

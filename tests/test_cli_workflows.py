@@ -16,7 +16,6 @@ from click.testing import CliRunner
 
 from TranslonScorer.cli import cli
 
-
 # ---------------------------------------------------------------------------
 # Command registration + help
 # ---------------------------------------------------------------------------
@@ -58,9 +57,9 @@ def test_deprecated_commands_removed(name):
 
 def test_score_events_over_provider_matches_direct():
     """_score_events_over_provider reproduces a direct vectorised score."""
-    from tests.test_golden import _gapdh_events, _gapdh_coverage
+    from tests.test_golden import _gapdh_coverage, _gapdh_events
+    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS, score_events_vectorised
     from TranslonScorer.workflows import _score_events_over_provider
-    from TranslonScorer.scoring.run import score_events_vectorised, DEFAULT_THRESHOLDS
 
     events = _gapdh_events().with_columns(pl.lit("chr12").alias("chrom"))
     cov = _gapdh_coverage()
@@ -86,8 +85,8 @@ def test_score_events_over_provider_matches_direct():
 
 
 def test_score_events_over_provider_empty():
-    from TranslonScorer.workflows import _score_events_over_provider
     from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
+    from TranslonScorer.workflows import _score_events_over_provider
 
     class _Provider:
         def coverage(self, regions, *, site="A"):

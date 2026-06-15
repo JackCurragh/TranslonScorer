@@ -29,7 +29,8 @@ using Richardson-Lucy (RL):
 where K_flip = K[::-1].  RL is non-negative and mass-preserving.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, Optional
+
 import numpy as np
 import polars as pl
 

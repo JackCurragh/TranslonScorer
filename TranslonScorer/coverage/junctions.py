@@ -3,6 +3,7 @@ from __future__ import annotations
 """Utilities to aggregate splice junction counts from BAM or splits index."""
 
 from typing import Dict, Tuple
+
 import polars as pl
 
 

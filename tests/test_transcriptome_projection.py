@@ -93,7 +93,7 @@ def _write_transcriptome_bam(path, records, refs):
 
 def test_transcriptome_coverage_projects_to_genome(tmp_path):
     from TranslonScorer.coverage.bam import BamSetProvider
-    from TranslonScorer.model import Region, OffsetParams
+    from TranslonScorer.model import OffsetParams, Region
 
     bam = tmp_path / "tx.bam"
     # Read r1 on TX1 at transcript pos 0, length 30. P-site offset 12 ->
@@ -118,7 +118,7 @@ def test_transcriptome_isoform_multimapper_convergence(tmp_path):
     """A read hitting TX1 and TX1b (shared first exon) at the same transcript
     offset projects to ONE genomic site -> counted once (unique)."""
     from TranslonScorer.coverage.bam import BamSetProvider
-    from TranslonScorer.model import Region, OffsetParams
+    from TranslonScorer.model import OffsetParams, Region
 
     bam = tmp_path / "tx2.bam"
     # Same qname aligned to both isoforms at pos 0; first exon is shared
@@ -143,7 +143,7 @@ def test_transcriptome_divergent_multimapper_dropped_when_unique(tmp_path):
     """A read hitting two transcripts that project to DIFFERENT genomic sites is
     dropped under multimap='unique'."""
     from TranslonScorer.coverage.bam import BamSetProvider
-    from TranslonScorer.model import Region, OffsetParams
+    from TranslonScorer.model import OffsetParams, Region
 
     bam = tmp_path / "tx3.bam"
     # r1 on TX1 (->chr1:112) and TX2 (->chr2, different site): divergent.

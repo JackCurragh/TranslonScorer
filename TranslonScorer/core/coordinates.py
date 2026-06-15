@@ -6,9 +6,10 @@ relative to transcript features.
 """
 
 import polars as pl
-from ..utils.logging import log_info, log_warning
-from ..file_handlers.bam import getexons_and_cds
 from pyfaidx import Fasta
+
+from ..file_handlers.bam import getexons_and_cds
+from ..utils.logging import log_info, log_warning
 
 
 def change_point_analysis(offset_df):

@@ -234,8 +234,8 @@ def test_aggregate_junctions_empty(tmp_path):
 
 
 def test_plausible_range_and_usable():
-    from TranslonScorer.offsets import plausible_offset_range, usable_read_length, psite_to_asite
     from TranslonScorer.model import OffsetParams
+    from TranslonScorer.offsets import plausible_offset_range, psite_to_asite, usable_read_length
 
     p = OffsetParams()
     lo, hi = plausible_offset_range(25, p)
@@ -245,8 +245,8 @@ def test_plausible_range_and_usable():
 
 
 def test_global_offsets_and_dispatch():
-    from TranslonScorer.offsets import global_offsets, make_offset_table
     from TranslonScorer.model import OffsetParams
+    from TranslonScorer.offsets import global_offsets, make_offset_table
 
     p = OffsetParams(method="global", global_offset=12)
     table = global_offsets(p)
@@ -257,24 +257,24 @@ def test_global_offsets_and_dispatch():
 
 
 def test_make_offset_table_metagene_raises():
-    from TranslonScorer.offsets import make_offset_table
     from TranslonScorer.model import OffsetParams
+    from TranslonScorer.offsets import make_offset_table
 
     with pytest.raises(NotImplementedError):
         make_offset_table(OffsetParams(method="metagene"))
 
 
 def test_make_offset_table_unknown_raises():
-    from TranslonScorer.offsets import make_offset_table
     from TranslonScorer.model import OffsetParams
+    from TranslonScorer.offsets import make_offset_table
 
     with pytest.raises(ValueError):
         make_offset_table(OffsetParams(method="bogus"))
 
 
 def test_file_offsets_roundtrip_and_clamp(tmp_path):
-    from TranslonScorer.offsets import file_offsets, make_offset_table
     from TranslonScorer.model import OffsetParams
+    from TranslonScorer.offsets import file_offsets, make_offset_table
 
     csv = tmp_path / "offsets.csv"
     pl.DataFrame(
@@ -295,8 +295,8 @@ def test_file_offsets_roundtrip_and_clamp(tmp_path):
 
 
 def test_file_offsets_missing_columns_raises(tmp_path):
-    from TranslonScorer.offsets import file_offsets
     from TranslonScorer.model import OffsetParams
+    from TranslonScorer.offsets import file_offsets
 
     csv = tmp_path / "bad.csv"
     pl.DataFrame({"read_length": [28]}).write_csv(csv)
@@ -305,8 +305,8 @@ def test_file_offsets_missing_columns_raises(tmp_path):
 
 
 def test_make_offset_table_file_requires_path():
-    from TranslonScorer.offsets import make_offset_table
     from TranslonScorer.model import OffsetParams
+    from TranslonScorer.offsets import make_offset_table
 
     with pytest.raises(ValueError):
         make_offset_table(OffsetParams(method="file", offsets_file=None))
@@ -391,9 +391,9 @@ class _FakeProvider:
 
 
 def test_score_events_over_provider_scores_and_skips():
-    from TranslonScorer.workflows import _score_events_over_provider
-    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
     from TranslonScorer.events import extract_events
+    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
+    from TranslonScorer.workflows import _score_events_over_provider
 
     events, _, _ = extract_events(_blocks(), _translons())
     # Dense coverage across the locus so events clear the eligibility floor.
@@ -413,8 +413,8 @@ def test_score_events_over_provider_scores_and_skips():
 
 
 def test_score_events_over_provider_empty_events():
-    from TranslonScorer.workflows import _score_events_over_provider
     from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
+    from TranslonScorer.workflows import _score_events_over_provider
 
     empty = pl.DataFrame(
         schema={
@@ -439,9 +439,9 @@ def test_score_events_over_provider_empty_events():
 
 
 def test_score_events_over_provider_empty_coverage_skips():
-    from TranslonScorer.workflows import _score_events_over_provider
-    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
     from TranslonScorer.events import extract_events
+    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
+    from TranslonScorer.workflows import _score_events_over_provider
 
     events, _, _ = extract_events(_blocks(), _translons())
     empty_cov = pl.DataFrame(schema={"pos": pl.Int64, "count": pl.Float64})
@@ -502,7 +502,7 @@ def test_build_cds_blocks(tmp_path):
 def test_build_exon_blocks_includes_utrs_mrna_origin(tmp_path):
     """build_exon_blocks spans full exons (UTR included) with mRNA-5' origin,
     unlike build_cds_blocks which starts at the first CDS base."""
-    from TranslonScorer.io.annotation import build_exon_blocks, build_cds_blocks
+    from TranslonScorer.io.annotation import build_cds_blocks, build_exon_blocks
 
     lines = [
         # + strand transcript: exon 100-160 (incl 5'UTR), CDS only 130-160
@@ -535,11 +535,11 @@ def test_build_gene_spans(tmp_path):
 @pytest.mark.skipif(not HAS_MATRIX, reason="matrix partition fixture not in data/")
 def test_matrix_manifest_helpers():
     from TranslonScorer.io.matrix import (
-        _manifest,
         _count_parquets,
-        _samples_df,
-        _reads_parquet_path,
         _discover_bam,
+        _manifest,
+        _reads_parquet_path,
+        _samples_df,
     )
 
     mp, manifest = _manifest(MATRIX_PART)

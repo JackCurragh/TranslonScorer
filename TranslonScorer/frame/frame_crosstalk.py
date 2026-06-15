@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Tuple
 
 import numpy as np
 import polars as pl
-from ..utils.logging import log_info
 
 
 def estimate_crosstalk_matrix(

@@ -6,7 +6,7 @@ Append-only, partitioned by data_version / tier.  Pure I/O: no computation.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import polars as pl
 

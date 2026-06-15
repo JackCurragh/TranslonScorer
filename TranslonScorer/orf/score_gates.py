@@ -8,13 +8,13 @@ import polars as pl
 from ..file_handlers import bigwig as bw_handlers
 from ..utils.io import write_csv_safe, write_parquet_safe
 from ..utils.logging import log_info
+from .panel_manifest import load_panel_manifest, merge_panel_manifest
 from .score_schema import (
     add_frame_score_columns,
     compare_score_tables,
     ensure_score_schema,
     load_score_table,
 )
-from .panel_manifest import load_panel_manifest, merge_panel_manifest
 
 
 def _load_orf_or_exon_table(path: str) -> pl.DataFrame:

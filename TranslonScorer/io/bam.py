@@ -18,7 +18,6 @@ except Exception:
 
 from ..utils.logging import log_info, log_warning
 
-
 # ---------------------------------------------------------------------------
 # Read-name parsing (matrix-mode unique-read BAMs: name = "read_<N>[...]")
 # ---------------------------------------------------------------------------
@@ -137,6 +136,7 @@ def readbam(
     Returns DataFrame with columns: chr, start, stop, length, strand, count[, qname]
     """
     import os
+
     import pysam as _pysam
 
     if not (os.path.exists(f"{bampath}.bai") or os.path.exists(bampath.replace(".bam", ".bai"))):

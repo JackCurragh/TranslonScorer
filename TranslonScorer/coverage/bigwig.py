@@ -19,7 +19,6 @@ import polars as pl
 
 from TranslonScorer.model import Region
 
-
 PathLike = Union[str, Path]
 
 

@@ -24,10 +24,10 @@ import polars as pl
 
 from TranslonScorer.model import ScoreThresholds
 from TranslonScorer.scoring.aspects import (
-    score_initiation_event,
-    score_termination_event,
     score_elongation_event,
+    score_initiation_event,
     score_junction_event,
+    score_termination_event,
 )
 from TranslonScorer.scoring.evidence import (
     _RECORD_SCHEMA,
@@ -45,7 +45,6 @@ from TranslonScorer.coverage.profile import (  # noqa: E402, F401
     _prefix_sums,
     _range_sums,
 )
-
 
 # ---------------------------------------------------------------------------
 # Vectorised elongation kernel

@@ -19,18 +19,18 @@ build_frame_support — profiles + cds_df + FrameSupportParams → per-codon pos
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import List
 
 import numpy as np
 import polars as pl
 
-from TranslonScorer.model import FrameSupportParams
-from TranslonScorer.frame.bleed import learn_confusion, apply_confusion_counts
+from TranslonScorer.frame.bleed import apply_confusion_counts, learn_confusion
+from TranslonScorer.frame.deblur import deconvolve
+from TranslonScorer.frame.deblur import learn_kernel as learn_deblur_kernel
 from TranslonScorer.frame.hmm import smooth_posteriors
-from TranslonScorer.frame.deblur import learn_kernel as learn_deblur_kernel, deconvolve
 from TranslonScorer.frame.latent import fit_latent
+from TranslonScorer.model import FrameSupportParams
 from TranslonScorer.utils.logging import log_info, log_warning
-
 
 MAX_FRAME_ENTROPY = float(np.log2(3.0))
 QC_LOW_SUPPORT_HIGH_CONF = 1 << 0

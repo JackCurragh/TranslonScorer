@@ -10,12 +10,11 @@ import polars as pl
 
 from TranslonScorer import __version__
 
-from ..frame_support import build_frame_support
-from ..model import FrameSupportParams
 from ..coverage.transcript_coords import cds_to_transcript_space
 from ..file_handlers import bam as bam_handlers
+from ..frame_support import build_frame_support
+from ..model import FrameSupportParams
 from ..utils.io import ensure_dir_for_file, write_parquet_safe
-
 
 MAX_FRAME_ENTROPY = float(1.584962500721156)
 

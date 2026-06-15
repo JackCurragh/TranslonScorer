@@ -33,7 +33,6 @@ import collections
 import heapq
 import io
 import json
-import math
 import multiprocessing as mp
 import os
 from pathlib import Path
@@ -43,7 +42,6 @@ import numpy as np
 import polars as pl
 import pysam
 
-from .utils.logging import log_info
 from .matrix_qc import (
     _assign_frames_sweep,
     _bam_chroms,
@@ -56,6 +54,7 @@ from .matrix_qc import (
     _ribometric_frame_scores,
     _samples_df,
 )
+from .utils.logging import log_info
 
 _INDEX_SCHEMA = {
     "read_id": pl.UInt64,

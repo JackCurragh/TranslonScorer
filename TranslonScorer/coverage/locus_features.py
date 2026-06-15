@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import time
 from typing import List, Tuple
-import numpy as np
 
+import click
 import pandas as pd
 import polars as pl
 import pyranges as pr
-import click
-import time
+
 from ..utils.logging import log_info
 
 

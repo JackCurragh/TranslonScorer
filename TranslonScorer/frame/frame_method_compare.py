@@ -8,7 +8,6 @@ from ..frame_support import build_frame_support
 from ..model import FrameSupportParams
 from ..utils.io import write_csv_safe, write_parquet_safe
 
-
 SUPPORTED_FRAME_METHODS = {"linear", "linear+hmm", "deblur+linear+hmm", "latent"}
 
 

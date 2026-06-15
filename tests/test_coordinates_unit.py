@@ -1,4 +1,3 @@
-import polars as pl
 from TranslonScorer.core import coordinates
 
 

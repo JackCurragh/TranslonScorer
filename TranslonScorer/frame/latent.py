@@ -41,6 +41,7 @@ After convergence T is row-normalised to posterior probabilities.
 """
 
 from typing import Tuple
+
 import numpy as np
 
 _EPS = 1e-12

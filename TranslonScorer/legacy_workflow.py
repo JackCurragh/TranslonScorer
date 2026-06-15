@@ -6,15 +6,15 @@ from typing import Dict, Tuple, Union
 
 import polars as pl
 
-from ..utils import log_info, log_warning
+from .utils import log_info, log_warning
 from .config import Config
-from ..file_handlers import bam as bam_handlers
-from ..file_handlers import bed as bed_handlers
-from ..file_handlers import bigwig as bw_handlers
-from ..file_handlers import zarr as zarr_handlers
-from ..core import coordinates, orffinder
-from ..visualization import plots
-from ..coverage.transcript_coords import cds_to_transcript_space
+from .file_handlers import bam as bam_handlers
+from .file_handlers import bed as bed_handlers
+from .file_handlers import bigwig as bw_handlers
+from .file_handlers import zarr as zarr_handlers
+from .core import coordinates, orffinder
+from .visualization import plots
+from .coverage.transcript_coords import cds_to_transcript_space
 
 
 def process_bam_workflow(config: Config) -> Tuple[Union[str, Dict[str, str]], pl.DataFrame, pl.DataFrame]:
@@ -157,7 +157,7 @@ def score_orfs_workflow(config: Config, bigwig_paths: Union[str, Dict[str, str]]
         frame_weighted_scoring=bool(getattr(config, 'frame_weighted_scoring', False)),
         frame_support_path=getattr(config, 'frame_support_out', None),
     )
-    from ..orf.score_schema import add_frame_score_columns, ensure_score_schema
+    from .orf.score_schema import add_frame_score_columns, ensure_score_schema
     scored = ensure_score_schema(
         scored,
         score_mode="frame_weighted" if bool(getattr(config, 'frame_weighted_scoring', False)) else "raw",
@@ -220,7 +220,7 @@ def _load_sample_offsets(config: Config) -> "pl.DataFrame":
 
 def _sparse_matrix_workflow(config: Config) -> None:
     """Dispatch sparse Parquet matrix → scored ORFs via aggregate or per-sample mode."""
-    from ..matrix_scoring import score_aggregate, score_per_sample
+    from .matrix_scoring import score_aggregate, score_per_sample
 
     log_info("Sparse Parquet matrix lane…")
 
@@ -295,10 +295,10 @@ def all_workflow(config: Config) -> None:
             config.bigwig_paths = config.bigwig
         # Optional: build frame support from BigWig-derived profiles
         if getattr(config, 'frame_method', 'none') != 'none':
-            from ..coverage.profiles import profiles_from_bigwig
-            from ..frame_support import build_frame_support
-            from ..model import FrameSupportParams
-            from ..utils import log_info
+            from .coverage.profiles import profiles_from_bigwig
+            from .frame_support import build_frame_support
+            from .model import FrameSupportParams
+            from .utils import log_info
             log_info("Computing transcript profiles from BigWig for frame support…")
             prof = profiles_from_bigwig(config.bigwig_paths, exon_df, stranded=config.stranded)
             if not config.frame_support_out:

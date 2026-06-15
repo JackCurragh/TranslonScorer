@@ -249,3 +249,25 @@ class Config:
             config_dict.pop('bigwig_paths')
         
         return config_dict
+
+
+# ---------------------------------------------------------------------------
+# Validation helper (merged from the former pipeline/validator.py)
+# ---------------------------------------------------------------------------
+
+def validate_config(config: "Config") -> bool:
+    """Validate the configuration, logging and re-raising on error.
+
+    Wraps Config.validate() with logging.
+    """
+    from .utils.logging import log_error, log_info
+    try:
+        config.validate()
+        log_info("Configuration validated successfully.")
+        return True
+    except (ValueError, FileNotFoundError) as e:
+        log_error(f"Configuration error: {str(e)}")
+        raise
+    except Exception as e:
+        log_error(f"Unexpected error validating configuration: {str(e)}")
+        raise

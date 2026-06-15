@@ -120,10 +120,10 @@ def test_metagene_offsets_on_fixture():
         assert 8 <= mo[L] <= 20, f"implausible metagene offset {mo[L]} for length {L}"
 
 
-def test_transcriptome_not_yet_supported():
-    """transcriptome=True fails loudly (no silent wrong coords) until projection lands."""
+def test_transcriptome_requires_exon_df():
+    """transcriptome=True without exon_df fails loudly (can't project without structure)."""
     from TranslonScorer.coverage.bam import BamSetProvider
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError):
         BamSetProvider(["t.bam"], transcriptome=True)
 
 

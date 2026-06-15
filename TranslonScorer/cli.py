@@ -1071,8 +1071,10 @@ def score_bams_cmd(events_dir, bams, store_dir, data_version, annotation_version
     if transcriptome:
         if not annotation:
             raise click.BadParameter('--transcriptome requires --annotation (GTF) for projection.')
-        from .io.annotation import build_cds_blocks
-        exon_df = build_cds_blocks(annotation)
+        # Full exon structure (mRNA-origin coords) so UTR reads — 5'UTR uORFs in
+        # particular — project to the correct genomic position, not just CDS.
+        from .io.annotation import build_exon_blocks
+        exon_df = build_exon_blocks(annotation)
     offsets = OffsetParams(method=offset_method, global_offset=global_offset, offsets_file=offsets_file)
     written = score_bams_workflow(
         events_dir, list(bams), store_dir,

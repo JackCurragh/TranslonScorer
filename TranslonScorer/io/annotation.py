@@ -11,12 +11,16 @@ from typing import Dict, List, Tuple
 import polars as pl
 
 
-def build_cds_blocks(gtf_path: str) -> pl.DataFrame:
-    """Per-transcript CDS exon blocks (5'->3') with CDS-relative tran_start.
+def _blocks_from_gtf(gtf_path: str, feature_type: str) -> pl.DataFrame:
+    """Per-transcript blocks of one GTF feature type (5'->3') with cumulative
+    transcript-relative ``tran_start`` measured from the 5' end of the first
+    block of that feature type.
 
-    Returns: tran_id, gene_id, chr, strand, start[list], stop[list], tran_start[list].
+    For ``feature_type="exon"`` the origin is the mRNA 5' end (UTRs included);
+    for ``"CDS"`` it is the first CDS base. Returns:
+    tran_id, gene_id, chr, strand, start[list], stop[list], tran_start[list].
     """
-    cds = (
+    feats = (
         pl.scan_csv(gtf_path, separator="\t", has_header=False, comment_prefix="#",
                     schema_overrides={"column_1": pl.Utf8})
         .select(
@@ -27,7 +31,7 @@ def build_cds_blocks(gtf_path: str) -> pl.DataFrame:
             pl.col("column_7").alias("strand"),
             pl.col("column_9").alias("attributes"),
         )
-        .filter(pl.col("type") == "CDS")
+        .filter(pl.col("type") == feature_type)
         .with_columns(
             (pl.col("start").cast(pl.Int64) - 1).alias("start"),
             pl.col("stop").cast(pl.Int64).alias("stop"),
@@ -37,7 +41,7 @@ def build_cds_blocks(gtf_path: str) -> pl.DataFrame:
         .collect()
     )
     grouped = (
-        cds.group_by("tran_id")
+        feats.group_by("tran_id")
         .agg([
             pl.col("gene_id").first(),
             pl.col("chr").first(),
@@ -62,6 +66,22 @@ def build_cds_blocks(gtf_path: str) -> pl.DataFrame:
     return grouped.with_columns(
         pl.struct(["start", "stop"]).map_elements(_cumstarts, return_dtype=pl.List(pl.Int64)).alias("tran_start")
     )
+
+
+def build_cds_blocks(gtf_path: str) -> pl.DataFrame:
+    """Per-transcript CDS exon blocks (5'->3') with CDS-relative tran_start."""
+    return _blocks_from_gtf(gtf_path, "CDS")
+
+
+def build_exon_blocks(gtf_path: str) -> pl.DataFrame:
+    """Per-transcript full exon blocks (5'->3') with mRNA-relative tran_start.
+
+    Use this (not build_cds_blocks) for transcriptome→genome read projection:
+    transcriptome alignments are positioned from the mRNA 5' end, so UTR reads
+    (e.g. 5'UTR uORFs) must project correctly — CDS-relative coordinates would
+    place the wrong origin.
+    """
+    return _blocks_from_gtf(gtf_path, "exon")
 
 
 def build_gene_spans(

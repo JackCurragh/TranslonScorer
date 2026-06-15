@@ -85,6 +85,15 @@ features/BAMs/bigwigs ─CoverageProvider─▶ P/A-site coverage + junctions + 
 
 ## Migration: where the demoed code goes
 
+> **STATUS — COMPLETE (T15, 2026-06).** `pipeline/` has been fully removed; every
+> module now lives in the new tree. Final homes: matrix engine + QC at top level
+> (`matrix_rollup.py`, `matrix_scoring.py`, `matrix_normalisation.py`,
+> `matrix_qc.py`); frame subsystem in `frame/`; profiles/coords/indexing in
+> `coverage/`; the (deprecated) ORF-composite path + score-table schema in `orf/`;
+> `config.py`/`legacy_workflow.py` at top level; annotation/inspect adapters in
+> `io/`. No re-export shims remain. The table below is kept as historical record
+> of the intended mapping.
+
 | current (demo) | →  target | notes |
 |---|---|---|
 | `pipeline/event_extract.py` | `events.py` + `io/annotation.py` (`build_cds_blocks`, `build_gene_spans`) | already mostly pure |

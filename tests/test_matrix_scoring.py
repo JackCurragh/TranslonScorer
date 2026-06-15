@@ -121,7 +121,7 @@ class TestM1ProfilesToScoredOrfs:
 
     def test_schema_contains_raw_score_columns(self, simple_profiles, simple_orf_df):
         from TranslonScorer.matrix_scoring import profiles_to_scored_orfs
-        from TranslonScorer.pipeline.score_schema import RAW_SCORE_COLUMNS
+        from TranslonScorer.orf.score_schema import RAW_SCORE_COLUMNS
 
         scored = profiles_to_scored_orfs(simple_profiles, simple_orf_df)
 

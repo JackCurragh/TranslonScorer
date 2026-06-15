@@ -522,7 +522,7 @@ def score_compare_frame_cmd(
 ):
     """Gate 1: compare raw ORF scores with frame-weighted scores."""
     setup_logging()
-    from .pipeline.score_gates import compare_raw_frame_scoring
+    from .orf.score_gates import compare_raw_frame_scoring
     paths = compare_raw_frame_scoring(
         orfs_path=orfs,
         exons_path=exons,
@@ -546,7 +546,7 @@ def score_compare_frame_cmd(
 def validate_panel_cmd(panel_manifest: str, out_csv: Optional[str]):
     """Validate a frozen score panel manifest and report its SHA256."""
     setup_logging()
-    from .pipeline.panel_manifest import panel_freeze_report
+    from .orf.panel_manifest import panel_freeze_report
     report = panel_freeze_report(panel_manifest)
     if out_csv:
         from .utils.io import write_csv_safe
@@ -564,7 +564,7 @@ def validate_panel_cmd(panel_manifest: str, out_csv: Optional[str]):
 def score_compare_existing_cmd(raw_scores: str, frame_scores: str, out_prefix: str, label_column: Optional[str]):
     """Compare already generated raw and frame-weighted score tables."""
     setup_logging()
-    from .pipeline.score_gates import summarize_existing_score_pair
+    from .orf.score_gates import summarize_existing_score_pair
     paths = summarize_existing_score_pair(
         raw_scores_path=raw_scores,
         frame_scores_path=frame_scores,
@@ -585,7 +585,7 @@ def score_compare_existing_cmd(raw_scores: str, frame_scores: str, out_prefix: s
 def compare_profiles_cmd(profile_a: str, profile_b: str, out_prefix: str, label_a: str, label_b: str, write_deltas: bool):
     """Gate 2: compare two transcript-space profile tables."""
     setup_logging()
-    from .pipeline.profile_compare import compare_profile_files
+    from .orf.profile_compare import compare_profile_files
     paths = compare_profile_files(
         profile_a_path=profile_a,
         profile_b_path=profile_b,
@@ -681,7 +681,7 @@ def export_rdg_flux_cmd(
 ):
     """Export RDG-Flux v1 per-position frame posterior substrate."""
     setup_logging()
-    from .pipeline.rdg_flux_export import export_rdg_flux_v1
+    from .orf.rdg_flux_export import export_rdg_flux_v1
     paths = export_rdg_flux_v1(
         profiles_path=profiles,
         out_path=out_path,
@@ -868,7 +868,7 @@ def index_from_bam_cmd(bam: str, zarr_root: str, out_index: str, zarr_metadata_p
 def orfs_import_cmd(bed12: str, annotation: str, out_parquet: str, assign_policy: str, require_junction_match: bool, progress: bool):
     """Import ORFs from BED12, map to transcripts, and write canonical ORFs (Parquet)."""
     setup_logging()
-    from .pipeline.orfs_import import import_bed12
+    from .orf.orfs_import import import_bed12
     import_bed12(
         bed12_path=bed12,
         gtf_path=annotation,
@@ -950,7 +950,7 @@ def feature_metrics_cmd(profiles: str, features: str, feature_map: str, splits_c
 def assemble_cmd(orfs_parquet: str, out_parquet: str, solver: str, timeout_sec: int):
     """Assemble a locus translome by selecting a consistent set of ORFs under soft penalties."""
     setup_logging()
-    from .pipeline.assemble import assemble_translome
+    from .orf.assemble import assemble_translome
     assemble_translome(orfs_parquet, out_parquet, solver=solver, timeout_sec=timeout_sec)
     log_info("Translome assembly complete")
 
@@ -967,7 +967,7 @@ def orf_composite_cmd(orfs: str, feature_metrics: str, feature_map: str, out_par
     """
     setup_logging()
     _warn_deprecated("orf-composite", "extract-events + score-bams/score-matrix")
-    from .pipeline.orf_composite import orf_composite
+    from .orf.orf_composite import orf_composite
     orf_composite(orfs, feature_metrics, feature_map, out_parquet)
     log_info("Composite ORF scores written")
 
@@ -982,7 +982,7 @@ def orf_composite_cmd(orfs: str, feature_metrics: str, feature_map: str, out_par
 def map_orfs_cmd(orfs_parquet: str, feature_map_parquet: str, features_parquet: str, out_parquet: str, progress: bool, tis_range: int, flank_nt: int):
     """Slice transcript feature chains into per-ORF chains and ranges."""
     setup_logging()
-    from .pipeline.map_orfs import map_orfs
+    from .orf.map_orfs import map_orfs
     map_orfs(orfs_parquet, feature_map_parquet, features_parquet, out_parquet, progress=progress, tis_range=tis_range, flank_nt=flank_nt)
     log_info("Mapped ORFs to feature chains")
 

@@ -30,7 +30,7 @@ from .utils.logging import log_info, log_warning, log_error
 from .file_handlers import bam as bam_handlers
 from .file_handlers.bigwig import score_transcript
 from .coverage.profiles import _compute_asite_profiles
-from .pipeline.score_schema import ensure_score_schema
+from .orf.score_schema import ensure_score_schema
 
 
 # ---------------------------------------------------------------------------

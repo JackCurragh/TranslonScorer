@@ -157,7 +157,7 @@ def score_orfs_workflow(config: Config, bigwig_paths: Union[str, Dict[str, str]]
         frame_weighted_scoring=bool(getattr(config, 'frame_weighted_scoring', False)),
         frame_support_path=getattr(config, 'frame_support_out', None),
     )
-    from .score_schema import add_frame_score_columns, ensure_score_schema
+    from ..orf.score_schema import add_frame_score_columns, ensure_score_schema
     scored = ensure_score_schema(
         scored,
         score_mode="frame_weighted" if bool(getattr(config, 'frame_weighted_scoring', False)) else "raw",

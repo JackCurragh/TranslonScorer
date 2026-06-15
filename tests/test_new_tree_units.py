@@ -425,6 +425,25 @@ def test_build_cds_blocks(tmp_path):
     assert tx1["tran_start"] == [0, 30]
 
 
+def test_build_exon_blocks_includes_utrs_mrna_origin(tmp_path):
+    """build_exon_blocks spans full exons (UTR included) with mRNA-5' origin,
+    unlike build_cds_blocks which starts at the first CDS base."""
+    from TranslonScorer.io.annotation import build_exon_blocks, build_cds_blocks
+    lines = [
+        # + strand transcript: exon 100-160 (incl 5'UTR), CDS only 130-160
+        'chr1\tsrc\texon\t101\t160\t.\t+\t.\tgene_id "G"; transcript_id "TX";',
+        'chr1\tsrc\tCDS\t131\t160\t.\t+\t0\tgene_id "G"; transcript_id "TX";',
+    ]
+    p = tmp_path / "u.gtf"; p.write_text("\n".join(lines) + "\n")
+    ex = build_exon_blocks(str(p)).filter(pl.col("tran_id") == "TX").row(0, named=True)
+    cd = build_cds_blocks(str(p)).filter(pl.col("tran_id") == "TX").row(0, named=True)
+    # exon block starts at genomic 100 (0-based), tran_start 0 = mRNA 5' end
+    assert ex["start"] == [100] and ex["tran_start"] == [0]
+    # CDS block starts at 130 — so a transcriptome read at mRNA pos 0 would be
+    # mis-placed by ~30nt if CDS blocks were (wrongly) used for projection.
+    assert cd["start"] == [130]
+
+
 def test_build_gene_spans(tmp_path):
     from TranslonScorer.io.annotation import build_cds_blocks, build_gene_spans
     spans, id_of = build_gene_spans(build_cds_blocks(_write_gtf(tmp_path)))

@@ -125,14 +125,14 @@ def fit_latent(
 
     for iteration in range(max_iter):
         # E-step: Lambda[c,i] = sum_j M[i,j]*T[c,j] + B[i]
-        Lambda = T @ M.T + B[np.newaxis, :]   # (N, 3)
+        Lambda = T @ M.T + B[np.newaxis, :]  # (N, 3)
         Lambda[Lambda < _EPS] = _EPS
 
-        ratio  = O_counts / Lambda             # (N, 3)
+        ratio = O_counts / Lambda  # (N, 3)
 
         # T_new[c,j] = T[c,j] * sum_i M[i,j] * ratio[c,i]
         #            = (T * (ratio @ M))
-        T_new  = T * (ratio @ M)               # (N, 3)
+        T_new = T * (ratio @ M)  # (N, 3)
         T_new[T_new < 0] = _EPS
 
         if update_M:
@@ -157,9 +157,9 @@ def fit_latent(
         prev_ll = ll
 
     # Row-normalise T to posterior probabilities
-    P   = T.copy()
+    P = T.copy()
     p_s = P.sum(axis=1, keepdims=True)
     p_s[p_s == 0] = 1.0
-    P  /= p_s
+    P /= p_s
 
     return P, M, B

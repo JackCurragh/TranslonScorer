@@ -17,7 +17,9 @@ from .visualization import plots
 from .coverage.transcript_coords import cds_to_transcript_space
 
 
-def process_bam_workflow(config: Config) -> Tuple[Union[str, Dict[str, str]], pl.DataFrame, pl.DataFrame]:
+def process_bam_workflow(
+    config: Config,
+) -> Tuple[Union[str, Dict[str, str]], pl.DataFrame, pl.DataFrame]:
     """Process BAM -> bedGraph/bigWig and return (bigwig_paths, exon_df, cds_df).
 
     If `config.stranded` is True, returns a dict with forward/reverse bigWig paths.
@@ -32,7 +34,7 @@ def process_bam_workflow(config: Config) -> Tuple[Union[str, Dict[str, str]], pl
         count_from=config.bam_count_from,
         count_pattern=config.bam_count_pattern,
         count_tag=config.bam_count_tag,
-        include_qname=bool(config.bam_count_from in ['name', 'tag'])
+        include_qname=bool(config.bam_count_from in ["name", "tag"]),
     )
     cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
 
@@ -72,7 +74,9 @@ def process_zarr_workflow(config: Config) -> Dict[str, str]:
     log_info("Processing Zarr unique-read matrix → per-sample coverage…")
 
     if not (config.zarr_root and config.read_index_parquet and config.samples):
-        raise ValueError("Zarr lane requires --zarr-root, --read-index-parquet and at least one --sample")
+        raise ValueError(
+            "Zarr lane requires --zarr-root, --read-index-parquet and at least one --sample"
+        )
 
     # Load annotation once
     cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
@@ -107,7 +111,9 @@ def process_zarr_workflow(config: Config) -> Dict[str, str]:
             offsets = _default_offsets_from_lengths(lengths)
 
         # Use bed.asitecalc directly on genomic starts with offsets (consistent with BAM lane)
-        bed_df = bed_handlers.asitecalc(chunk_df.select(["chr", "start", "length", "count"]), offsets)
+        bed_df = bed_handlers.asitecalc(
+            chunk_df.select(["chr", "start", "length", "count"]), offsets
+        )
         if not bed_df.is_empty():
             # Append to per-sample bedGraph
             bed_df.write_csv(tmp_paths[sample], separator="\t", include_header=False, mode="a")
@@ -132,7 +138,9 @@ def find_orfs_workflow(config: Config) -> Tuple[pl.DataFrame, pl.DataFrame]:
     transcript_fasta = config.sequence
     if not transcript_fasta.endswith("_transcripts.fa"):
         log_info("Generating transcript FASTA from genomic sequence and annotation")
-        transcript_fasta = coordinates.gettranscripts(config.sequence, config.annotation, config.output)
+        transcript_fasta = coordinates.gettranscripts(
+            config.sequence, config.annotation, config.output
+        )
 
     # Predict ORFs
     orf_df = orffinder.preporfs(
@@ -148,24 +156,37 @@ def find_orfs_workflow(config: Config) -> Tuple[pl.DataFrame, pl.DataFrame]:
     return orf_df, exon_df
 
 
-def score_orfs_workflow(config: Config, bigwig_paths: Union[str, Dict[str, str]], exon_df: pl.DataFrame, orf_df: pl.DataFrame) -> pl.DataFrame:
+def score_orfs_workflow(
+    config: Config,
+    bigwig_paths: Union[str, Dict[str, str]],
+    exon_df: pl.DataFrame,
+    orf_df: pl.DataFrame,
+) -> pl.DataFrame:
     """Score ORFs using bigWig(s) and return scored DataFrame."""
     log_info("Scoring ORFs…")
-    old_scoring = (config.scoring_method == "classic")
+    old_scoring = config.scoring_method == "classic"
     scored = bw_handlers.scoring(
-        bigwig_paths, exon_df, orf_df, old_scoring, config.sru_range, stranded=config.stranded,
-        frame_weighted_scoring=bool(getattr(config, 'frame_weighted_scoring', False)),
-        frame_support_path=getattr(config, 'frame_support_out', None),
+        bigwig_paths,
+        exon_df,
+        orf_df,
+        old_scoring,
+        config.sru_range,
+        stranded=config.stranded,
+        frame_weighted_scoring=bool(getattr(config, "frame_weighted_scoring", False)),
+        frame_support_path=getattr(config, "frame_support_out", None),
     )
     from .orf.score_schema import add_frame_score_columns, ensure_score_schema
+
     scored = ensure_score_schema(
         scored,
-        score_mode="frame_weighted" if bool(getattr(config, 'frame_weighted_scoring', False)) else "raw",
+        score_mode=(
+            "frame_weighted" if bool(getattr(config, "frame_weighted_scoring", False)) else "raw"
+        ),
         input_type="bigwig",
-        frame_method=getattr(config, 'frame_method', None),
+        frame_method=getattr(config, "frame_method", None),
         assignment_model="none",
     )
-    frame_support_path = getattr(config, 'frame_support_out', None)
+    frame_support_path = getattr(config, "frame_support_out", None)
     if frame_support_path and os.path.exists(frame_support_path):
         try:
             frame_support = pl.read_parquet(frame_support_path)
@@ -184,7 +205,7 @@ def plot_workflow(config: Config, scored_orfs: pl.DataFrame, exon_df: pl.DataFra
 
     # Choose a plotting bigWig: forward if dict provided, else single path
     if isinstance(config.bigwig_paths, dict):
-        plot_bw = config.bigwig_paths.get('forward') or next(iter(config.bigwig_paths.values()))
+        plot_bw = config.bigwig_paths.get("forward") or next(iter(config.bigwig_paths.values()))
     else:
         plot_bw = config.bigwig_paths or ""
 
@@ -197,8 +218,11 @@ def _load_offsets(config: Config) -> dict:
     if getattr(config, "offsets", None):
         try:
             import polars as pl
+
             df = pl.read_csv(config.offsets)
-            return {int(r[0]): int(r[1]) for r in df.select([df.columns[0], df.columns[1]]).iter_rows()}
+            return {
+                int(r[0]): int(r[1]) for r in df.select([df.columns[0], df.columns[1]]).iter_rows()
+            }
         except Exception as e:
             log_warning(f"Could not load offsets file {config.offsets}: {e}")
     return {}
@@ -207,6 +231,7 @@ def _load_offsets(config: Config) -> dict:
 def _load_sample_offsets(config: Config) -> "pl.DataFrame":
     """Load per-sample offsets parquet/CSV if provided, else return empty DataFrame."""
     import polars as pl
+
     path = getattr(config, "sample_offsets_path", None)
     if path and __import__("os").path.isfile(path):
         try:
@@ -289,28 +314,36 @@ def all_workflow(config: Config) -> None:
         # BigWig lane: ensure exon_df and continue
         cds_df2, exon_df = bam_handlers.getexons_and_cds(config.annotation)
         if config.forward_bigwig and config.reverse_bigwig:
-            config.bigwig_paths = {"forward": config.forward_bigwig, "reverse": config.reverse_bigwig}
+            config.bigwig_paths = {
+                "forward": config.forward_bigwig,
+                "reverse": config.reverse_bigwig,
+            }
             config.stranded = True
         else:
             config.bigwig_paths = config.bigwig
         # Optional: build frame support from BigWig-derived profiles
-        if getattr(config, 'frame_method', 'none') != 'none':
+        if getattr(config, "frame_method", "none") != "none":
             from .coverage.profiles import profiles_from_bigwig
             from .frame_support import build_frame_support
             from .model import FrameSupportParams
             from .utils import log_info
+
             log_info("Computing transcript profiles from BigWig for frame support…")
             prof = profiles_from_bigwig(config.bigwig_paths, exon_df, stranded=config.stranded)
             if not config.frame_support_out:
-                base = (config.output or 'output').rstrip('/') or 'output'
+                base = (config.output or "output").rstrip("/") or "output"
                 config.frame_support_out = f"{base}_frame_support.parquet"
             cds_tran_df = cds_to_transcript_space(cds_df2, exon_df)
-            _fs = build_frame_support(prof, cds_tran_df, FrameSupportParams(
-                frame_method=getattr(config, "frame_method", "none"),
-                frame_by_length=bool(getattr(config, "frame_by_length", False)),
-                frame_background=getattr(config, "frame_background", "uniform"),
-                frame_hmm_lambda=float(getattr(config, "frame_hmm_lambda", 1.0)),
-            ))
+            _fs = build_frame_support(
+                prof,
+                cds_tran_df,
+                FrameSupportParams(
+                    frame_method=getattr(config, "frame_method", "none"),
+                    frame_by_length=bool(getattr(config, "frame_by_length", False)),
+                    frame_background=getattr(config, "frame_background", "uniform"),
+                    frame_hmm_lambda=float(getattr(config, "frame_hmm_lambda", 1.0)),
+                ),
+            )
             if config.frame_support_out and not _fs.is_empty():
                 _fs.write_parquet(config.frame_support_out)
     elif config.bam:
@@ -330,7 +363,9 @@ def all_workflow(config: Config) -> None:
             out_base = f"{config.output}_{sample}"
             scored.write_csv(f"{out_base}_orfs_scored.csv")
             # Report
-            plots.plottop10(f"{out_base}_orfs_scored.csv", bw_path, exon_df, config.plot_range, out_base)
+            plots.plottop10(
+                f"{out_base}_orfs_scored.csv", bw_path, exon_df, config.plot_range, out_base
+            )
         log_info("Pipeline completed successfully for Zarr samples.")
         return
 

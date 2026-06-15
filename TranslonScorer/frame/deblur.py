@@ -35,13 +35,14 @@ import polars as pl
 
 from .bleed import _cds_interior
 
-_DEFAULT_HALFWIDTH = 9   # +/-9 nt window around each codon start
-_RL_ITERS = 20           # Richardson-Lucy iterations
+_DEFAULT_HALFWIDTH = 9  # +/-9 nt window around each codon start
+_RL_ITERS = 20  # Richardson-Lucy iterations
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _delta_kernel(W: int) -> np.ndarray:
     k = np.zeros(2 * W + 1, dtype=np.float64)
@@ -70,8 +71,8 @@ def _accumulate_metagene(
         if arr is None:
             continue
         cds_start = int(row["start"])
-        cds_stop  = int(row["stop"])
-        arr_len   = len(arr)
+        cds_stop = int(row["stop"])
+        arr_len = len(arr)
         for anchor in range(cds_start, cds_stop, 3):
             lo = anchor - W
             hi = anchor + W + 1
@@ -90,6 +91,7 @@ def _to_np_kernel(k: object) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def learn_kernel(
     profiles: pl.DataFrame,
@@ -146,7 +148,7 @@ def learn_kernel(
     result: Dict[Optional[int], np.ndarray] = {}
     for L_val in sorted(profiles["length"].unique().to_list()):
         sub_l = profiles.filter(pl.col("length") == L_val)
-        acc   = np.zeros(2 * W + 1, dtype=np.float64)
+        acc = np.zeros(2 * W + 1, dtype=np.float64)
         for key, sub in sub_l.group_by("tran_id"):
             tid = str(key[0] if isinstance(key, tuple) else key)
             if tid not in cds_tran_ids:
@@ -181,26 +183,26 @@ def _rl_deconvolve(
     if orig_sum == 0:
         return signal.copy()
 
-    W   = len(kernel) // 2
+    W = len(kernel) // 2
     pad = W + 2
 
     padded = np.pad(signal, pad, mode="edge").astype(np.float64)
-    T      = padded.copy()
+    T = padded.copy()
     T[T <= 0] = 1e-9
 
-    K      = kernel.astype(np.float64)
+    K = kernel.astype(np.float64)
     K_flip = K[::-1]
 
     for _ in range(n_iter):
         O_hat = np.convolve(T, K, mode="same")
         O_hat[O_hat <= 0] = 1e-12
-        ratio      = padded / O_hat
+        ratio = padded / O_hat
         correction = np.convolve(ratio, K_flip, mode="same")
         correction[correction < 0] = 0.0
         T = T * correction
         T[T < 0] = 0.0
 
-    T_out  = T[pad: pad + len(signal)]
+    T_out = T[pad : pad + len(signal)]
     out_sum = T_out.sum()
     if out_sum > 0:
         T_out *= orig_sum / out_sum
@@ -229,9 +231,7 @@ def deconvolve(
 
     has_length = "length" in profiles.columns
 
-    kernels_np: Dict[Optional[int], np.ndarray] = {
-        k: _to_np_kernel(v) for k, v in kernels.items()
-    }
+    kernels_np: Dict[Optional[int], np.ndarray] = {k: _to_np_kernel(v) for k, v in kernels.items()}
     global_kernel = kernels_np.get(None)
 
     group_cols = ["tran_id"] + (["length"] if has_length else [])
@@ -246,16 +246,16 @@ def deconvolve(
     for key, sub in profiles.group_by(group_cols):
         if isinstance(key, tuple):
             tran_id = key[0]
-            L_val   = int(key[1]) if has_length else None
+            L_val = int(key[1]) if has_length else None
         else:
             tran_id = key
-            L_val   = None
+            L_val = None
 
         K = kernels_np.get(L_val, global_kernel) if has_length else global_kernel
 
-        sub_s     = sub.sort("pos")
+        sub_s = sub.sort("pos")
         positions = sub_s["pos"].to_numpy().astype(int)
-        counts    = sub_s["count"].to_numpy().astype(np.float64)
+        counts = sub_s["count"].to_numpy().astype(np.float64)
 
         if len(positions) == 0:
             continue
@@ -263,18 +263,18 @@ def deconvolve(
         # Delta or missing kernel: pass-through without deconvolution
         if K is None or (len(K) == 1 and float(K[0]) >= 0.99):
             nz_mask = counts > 0
-            nz_pos  = positions[nz_mask]
-            nz_cnt  = counts[nz_mask]
+            nz_pos = positions[nz_mask]
+            nz_cnt = counts[nz_mask]
         else:
             min_p = int(positions.min())
             max_p = int(positions.max())
             dense = np.zeros(max_p - min_p + 1, dtype=np.float64)
             np.add.at(dense, positions - min_p, counts)
 
-            deconv  = _rl_deconvolve(dense, K, n_iter=rl_iters)
-            nz_idx  = np.nonzero(deconv > 0)[0]
-            nz_pos  = nz_idx + min_p
-            nz_cnt  = deconv[nz_idx]
+            deconv = _rl_deconvolve(dense, K, n_iter=rl_iters)
+            nz_idx = np.nonzero(deconv > 0)[0]
+            nz_pos = nz_idx + min_p
+            nz_cnt = deconv[nz_idx]
 
         n = len(nz_pos)
         if n == 0:
@@ -294,8 +294,8 @@ def deconvolve(
 
     cols = {
         "tran_id": out_tran_ids,
-        "pos":     all_pos,
-        "count":   all_cnt,
+        "pos": all_pos,
+        "count": all_cnt,
     }
     if has_length:
         cols["length"] = out_lengths

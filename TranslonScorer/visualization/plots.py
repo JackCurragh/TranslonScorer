@@ -30,54 +30,60 @@ def pertranscriptplot(df, exon_df, bwfile):
     """
     tranlist = []
     dflist = []
-    
+
     for typeorf in df["type"].unique():
         df_type_filtered = df.filter(pl.col("type") == typeorf)
         df_type_filtered = df_type_filtered.sort("score", descending=True).head(10)
-        
+
         for row in range(len(df_type_filtered)):
             tran = df_type_filtered["tran_id"][row]
             exons = exon_df.filter(pl.col("tran_id") == tran)
             if exons.is_empty():
                 continue
-                
+
             tran_reads = transcriptreads(bwfile, exons)
             if not tran_reads.is_empty():
                 coordinates = tran_reads.group_by("tran_start").agg(pl.col("counts").sum())
                 # for summary plot
                 transcriptplot = coordinates.with_columns(
-                    pl.lit(tran).alias("tran_id"),
-                    (pl.col("tran_start") % 3).alias("frame")
+                    pl.lit(tran).alias("tran_id"), (pl.col("tran_start") % 3).alias("frame")
                 )
                 transcriptplot = transcriptplot.to_dict(as_series=False)
                 tranlist.append(transcriptplot)
-                
+
         df_type_filtered = df_type_filtered.to_dict(as_series=False)
         dflist.append(df_type_filtered)
 
-    df_type_filtered = pl.from_dicts(dflist).explode(pl.all()).with_columns(
-        (pl.col("start") % 3).alias("frame"),
-        pl.col("avg").round(2),
-        pl.col("nzc").round(2),
-        pl.col("hrf").round(2),
-        pl.col("rise_up").round(2),
-        pl.col("step_down").round(2),
-        pl.col("score").round(2)
-    ).to_pandas()
+    df_type_filtered = (
+        pl.from_dicts(dflist)
+        .explode(pl.all())
+        .with_columns(
+            (pl.col("start") % 3).alias("frame"),
+            pl.col("avg").round(2),
+            pl.col("nzc").round(2),
+            pl.col("hrf").round(2),
+            pl.col("rise_up").round(2),
+            pl.col("step_down").round(2),
+            pl.col("score").round(2),
+        )
+        .to_pandas()
+    )
 
     # Table generation
-    table = go.Figure(data=[go.Table(
-        header=dict(
-            values=list(df_type_filtered.columns),
-            fill_color="paleturquoise",
-            align="left"
-        ),
-        cells=dict(
-            values=[df_type_filtered[col] for col in df_type_filtered.columns],
-            fill_color="lavender",
-            align="left"
-        )
-    )])
+    table = go.Figure(
+        data=[
+            go.Table(
+                header=dict(
+                    values=list(df_type_filtered.columns), fill_color="paleturquoise", align="left"
+                ),
+                cells=dict(
+                    values=[df_type_filtered[col] for col in df_type_filtered.columns],
+                    fill_color="lavender",
+                    align="left",
+                ),
+            )
+        ]
+    )
     table = table.to_html(full_html=False)
 
     # Summary plot
@@ -100,6 +106,7 @@ def pertranscriptplot(df, exon_df, bwfile):
 
     return summary_plot, table, pertranlist
 
+
 def metageneplot(df, bwfile, exon_df, range_list):
     """
     Generate metagene plots for each type of ORF.
@@ -114,23 +121,23 @@ def metageneplot(df, bwfile, exon_df, range_list):
         list: HTML strings of metagene plots for each ORF type
     """
     plotlist = []
-    
+
     for typeorf in df["type"].unique():
         df_type_filtered = df.filter(pl.col("type") == typeorf)
         metagene_start_dict = {i: 0 for i in range_list}
         metagene_stop_dict = {i: 0 for i in range_list}
-        
+
         for tran in df_type_filtered["tran_id"].unique():
             df_tran = df_type_filtered.filter(pl.col("tran_id") == tran)
             exons = exon_df.filter(pl.col("tran_id") == tran)
             if exons.is_empty():
                 continue
-                
+
             tran_reads = transcriptreads(bwfile, exons)
             if not tran_reads.is_empty():
                 starts = df_tran.get_column("start").to_list()
                 stops = df_tran.get_column("stop").to_list()
-                
+
                 # Start plot per type - transcriptreads returns tran_start
                 startplot = tran_reads.group_by("tran_start").agg(pl.col("counts").sum())
                 for start in starts:
@@ -142,7 +149,9 @@ def metageneplot(df, bwfile, exon_df, range_list):
                         .to_dict(as_series=False)
                     )
                     if startplot_final:
-                        startplot_final = dict(zip(startplot_final["relativeloc"], startplot_final["counts"]))
+                        startplot_final = dict(
+                            zip(startplot_final["relativeloc"], startplot_final["counts"])
+                        )
                         for i in startplot_final:
                             metagene_start_dict[i] += startplot_final[i]
 
@@ -158,18 +167,20 @@ def metageneplot(df, bwfile, exon_df, range_list):
                         .to_dict(as_series=False)
                     )
                     if stopplot_final:
-                        stopplot_final = dict(zip(stopplot_final["relativeloc"], stopplot_final["counts"]))
+                        stopplot_final = dict(
+                            zip(stopplot_final["relativeloc"], stopplot_final["counts"])
+                        )
                         for i in stopplot_final:
                             metagene_stop_dict[i] += stopplot_final[i]
 
         # Create plots
         start_dict = {
             "relativeloc": list(metagene_start_dict.keys()),
-            "counts": list(metagene_start_dict.values())
+            "counts": list(metagene_start_dict.values()),
         }
         stop_dict = {
             "relativeloc": list(metagene_stop_dict.keys()),
-            "counts": list(metagene_stop_dict.values())
+            "counts": list(metagene_stop_dict.values()),
         }
 
         # Plot metagene per type
@@ -182,7 +193,7 @@ def metageneplot(df, bwfile, exon_df, range_list):
         fig_combined.update_xaxes(title_text="Relative coordinates")
         fig_combined.update_yaxes(title_text="Counts")
         metagene_start = fig_combined.to_html(full_html=False)
-        
+
         plotlist.append(metagene_start)
         plotlist.append(metagene_stop)
 
@@ -202,30 +213,32 @@ def plottop10(df, bigwig, exon, range_param, filename, parameters=None):
         parameters (dict, optional): Additional parameters for report generation
     """
     log_info("Generating plots for top 10 ORFs...")
-    
+
     range_list = list(range(-range_param, range_param + 1))
-    
+
     # Read input files if paths are provided, otherwise use the DataFrame directly
     if isinstance(df, str):
         df = pl.read_csv(df, has_header=True, separator=",")
-        
+
     bwfile = bw.open(bigwig)
-    
+
     if isinstance(exon, str):
         exon_df = pl.read_csv(exon, has_header=True, separator=",")
     else:
         exon_df = exon  # Use the DataFrame directly
-        
+
     # Ensure exon_df has the correct column formats
     exon_df = exon_df.with_columns(
-        pl.col("start", "stop", "tran_start", "tran_stop").apply(lambda x: x.split(",") if isinstance(x, str) else x)
+        pl.col("start", "stop", "tran_start", "tran_stop").apply(
+            lambda x: x.split(",") if isinstance(x, str) else x
+        )
     )
 
     # Generate plots
     plotlist = metageneplot(df, bwfile, exon_df, range_list)
     tranplot, table, pertranscript = pertranscriptplot(df, exon_df, bwfile)
-    
+
     # Generate report
     generate_report(plotlist, tranplot, parameters, table, filename, pertranscript)
-    
+
     log_info("Plots generated successfully")

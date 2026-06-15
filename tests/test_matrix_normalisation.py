@@ -143,7 +143,9 @@ def test_homogeneous_shape_clustering_ignores_depth_and_prunes_outliers():
     }
     statuses = {
         row["sample_id"]: row["clustering_status"]
-        for row in result.sample_labels.select(["sample_id", "clustering_status"]).iter_rows(named=True)
+        for row in result.sample_labels.select(["sample_id", "clustering_status"]).iter_rows(
+            named=True
+        )
     }
 
     assert labels["A1"] == labels["A2"] == labels["A3"]
@@ -178,9 +180,7 @@ def test_homogeneous_shape_clustering_rejects_forced_heterogeneous_cluster():
     )
 
     assert result.sample_labels.get_column("cluster_id").to_list() == [-1, -1, -1]
-    assert set(result.sample_labels.get_column("clustering_status").to_list()) == {
-        "shape_outlier"
-    }
+    assert set(result.sample_labels.get_column("clustering_status").to_list()) == {"shape_outlier"}
 
 
 def test_shape_cluster_driver_diagnostics_rank_discriminating_positions():

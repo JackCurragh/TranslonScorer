@@ -4,6 +4,7 @@ This module keeps the clustering geometry separate from evidence-scale scoring:
 ``X_cluster`` is shape-normalised for sample clustering, while ``X_score``
 retains raw/depth-normalised counts for cluster aggregates and event scoring.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -76,9 +77,7 @@ def depth_normalise_counts(
     """Apply global per-sample depth correction for score-scale profiles."""
     arr = _as_float_matrix(matrix)
     if arr.shape[0] != len(sample_names):
-        raise ValueError(
-            f"matrix has {arr.shape[0]} rows but {len(sample_names)} sample names"
-        )
+        raise ValueError(f"matrix has {arr.shape[0]} rows but {len(sample_names)} sample names")
     factors = _size_factor_array(sample_names, size_factors)
     return arr / factors[:, None]
 
@@ -142,8 +141,7 @@ def build_sample_qc_labels(
     score_totals = score_matrix.sum(axis=1)
     included = raw_totals >= min_raw_locus_counts
     reasons = [
-        None if ok else f"locus_total_raw < {min_raw_locus_counts:g}"
-        for ok in included.tolist()
+        None if ok else f"locus_total_raw < {min_raw_locus_counts:g}" for ok in included.tolist()
     ]
     return pl.DataFrame(
         {
@@ -220,9 +218,7 @@ def normalise_locus_matrices(
     """
     raw = _as_float_matrix(raw_matrix)
     if raw.shape[0] != len(sample_names):
-        raise ValueError(
-            f"matrix has {raw.shape[0]} rows but {len(sample_names)} sample names"
-        )
+        raise ValueError(f"matrix has {raw.shape[0]} rows but {len(sample_names)} sample names")
 
     factors = _size_factor_array(sample_names, size_factors)
     X_score = raw / factors[:, None]

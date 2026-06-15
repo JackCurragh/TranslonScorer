@@ -45,15 +45,18 @@ import pytest
 # Fixtures – synthetic profiles and ORF data
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def simple_orf_df():
     """Two ORFs on transcript T1, one on T2, one on a transcript with no coverage."""
-    return pl.DataFrame({
-        "tran_id": ["T1", "T1", "T2", "T3_nocov"],
-        "start":   [10,   40,   5,    0],
-        "stop":    [40,   70,   35,   30],
-        "type":    ["CDS", "uORF", "CDS", "CDS"],
-    })
+    return pl.DataFrame(
+        {
+            "tran_id": ["T1", "T1", "T2", "T3_nocov"],
+            "start": [10, 40, 5, 0],
+            "stop": [40, 70, 35, 30],
+            "type": ["CDS", "uORF", "CDS", "CDS"],
+        }
+    )
 
 
 @pytest.fixture()
@@ -70,11 +73,13 @@ def simple_profiles():
     t2_pos = list(range(5, 35))
     t2_cnt = [3.0] * 30
 
-    return pl.DataFrame({
-        "tran_id": ["T1"] * 80 + ["T2"] * 30,
-        "pos":     t1_pos + t2_pos,
-        "count":   t1_cnt + t2_cnt,
-    })
+    return pl.DataFrame(
+        {
+            "tran_id": ["T1"] * 80 + ["T2"] * 30,
+            "pos": t1_pos + t2_pos,
+            "count": t1_cnt + t2_cnt,
+        }
+    )
 
 
 @pytest.fixture()
@@ -85,30 +90,51 @@ def multi_sample_genomic_counts():
     # Sample B: same positions but twice the counts
     rows = []
     for pos in [100, 110, 120, 200, 210, 220]:
-        rows.append({"sample_id": "sampleA", "chr": "chr1", "start": pos,
-                     "stop": pos + 30, "strand": "+", "length": 30, "count": 1.0})
-        rows.append({"sample_id": "sampleB", "chr": "chr1", "start": pos,
-                     "stop": pos + 30, "strand": "+", "length": 30, "count": 2.0})
+        rows.append(
+            {
+                "sample_id": "sampleA",
+                "chr": "chr1",
+                "start": pos,
+                "stop": pos + 30,
+                "strand": "+",
+                "length": 30,
+                "count": 1.0,
+            }
+        )
+        rows.append(
+            {
+                "sample_id": "sampleB",
+                "chr": "chr1",
+                "start": pos,
+                "stop": pos + 30,
+                "strand": "+",
+                "length": 30,
+                "count": 2.0,
+            }
+        )
     return pl.from_dicts(rows)
 
 
 @pytest.fixture()
 def flat_exon_df():
     """Minimal exon table: one transcript T_GENOMIC covering chr1:95-230."""
-    return pl.DataFrame({
-        "tran_id": ["T_GENOMIC"],
-        "chr":     ["chr1"],
-        "start":   [[95]],
-        "stop":    [[230]],
-        "strand":  ["+"],
-        "tran_start": [[0]],
-        "tran_stop":  [[135]],
-    })
+    return pl.DataFrame(
+        {
+            "tran_id": ["T_GENOMIC"],
+            "chr": ["chr1"],
+            "start": [[95]],
+            "stop": [[230]],
+            "strand": ["+"],
+            "tran_start": [[0]],
+            "tran_stop": [[135]],
+        }
+    )
 
 
 # ===========================================================================
 # M1 — profiles_to_scored_orfs
 # ===========================================================================
+
 
 class TestM1ProfilesToScoredOrfs:
     """
@@ -162,21 +188,21 @@ class TestM1ProfilesToScoredOrfs:
         # and testing the summation logic directly via a monkey-patched exon_df.
         # Use a trivially projectable setup: reads already in transcript space coordinates.
 
-        genomic = pl.DataFrame({
-            "sample_id": ["S1", "S2", "S1", "S2"],
-            "chr":        ["chr1"] * 4,
-            "start":      [10, 10, 20, 20],
-            "stop":       [40, 40, 50, 50],
-            "strand":     ["+"] * 4,
-            "length":     [30] * 4,
-            "count":      [1.0, 2.0, 1.0, 2.0],
-        })
+        genomic = pl.DataFrame(
+            {
+                "sample_id": ["S1", "S2", "S1", "S2"],
+                "chr": ["chr1"] * 4,
+                "start": [10, 10, 20, 20],
+                "stop": [40, 40, 50, 50],
+                "strand": ["+"] * 4,
+                "length": [30] * 4,
+                "count": [1.0, 2.0, 1.0, 2.0],
+            }
+        )
 
         # After aggregate collapse, counts at each (chr, start, ...) should be 3.0
-        agg = (
-            genomic
-            .group_by(["chr", "start", "stop", "strand", "length"])
-            .agg(pl.col("count").sum())
+        agg = genomic.group_by(["chr", "start", "stop", "strand", "length"]).agg(
+            pl.col("count").sum()
         )
         assert agg.filter(pl.col("start") == 10)["count"].to_list()[0] == pytest.approx(3.0)
         assert agg.filter(pl.col("start") == 20)["count"].to_list()[0] == pytest.approx(3.0)
@@ -185,6 +211,7 @@ class TestM1ProfilesToScoredOrfs:
 # ===========================================================================
 # M2 — per_sample_profiles_from_genomic_counts
 # ===========================================================================
+
 
 class TestM2PerSampleProfiles:
     """
@@ -196,33 +223,39 @@ class TestM2PerSampleProfiles:
     """
 
     def _make_sample_offsets(self, sample_ids, length, offset):
-        return pl.DataFrame({
-            "sample_id": sample_ids,
-            "length":    [length] * len(sample_ids),
-            "offset":    [offset] * len(sample_ids),
-        })
+        return pl.DataFrame(
+            {
+                "sample_id": sample_ids,
+                "length": [length] * len(sample_ids),
+                "offset": [offset] * len(sample_ids),
+            }
+        )
 
     def test_yields_one_entry_per_sample(self):
         from TranslonScorer.matrix_scoring import per_sample_profiles_from_genomic_counts
 
-        genomic = pl.DataFrame({
-            "sample_id": ["S1", "S1", "S2"],
-            "chr":       ["chr1", "chr1", "chr1"],
-            "start":     [100, 110, 100],
-            "stop":      [130, 140, 130],
-            "strand":    ["+", "+", "+"],
-            "length":    [30, 30, 30],
-            "count":     [1.0, 1.0, 1.0],
-        })
-        exon_df = pl.DataFrame({
-            "tran_id": ["TX1"],
-            "chr":     ["chr1"],
-            "start":   [[95]],
-            "stop":    [[150]],
-            "strand":  ["+"],
-            "tran_start": [[0]],
-            "tran_stop":  [[55]],
-        })
+        genomic = pl.DataFrame(
+            {
+                "sample_id": ["S1", "S1", "S2"],
+                "chr": ["chr1", "chr1", "chr1"],
+                "start": [100, 110, 100],
+                "stop": [130, 140, 130],
+                "strand": ["+", "+", "+"],
+                "length": [30, 30, 30],
+                "count": [1.0, 1.0, 1.0],
+            }
+        )
+        exon_df = pl.DataFrame(
+            {
+                "tran_id": ["TX1"],
+                "chr": ["chr1"],
+                "start": [[95]],
+                "stop": [[150]],
+                "strand": ["+"],
+                "tran_start": [[0]],
+                "tran_stop": [[55]],
+            }
+        )
         offsets_df = self._make_sample_offsets(["S1", "S2"], 30, 15)
 
         results = list(per_sample_profiles_from_genomic_counts(genomic, exon_df, offsets_df))
@@ -238,32 +271,40 @@ class TestM2PerSampleProfiles:
         from TranslonScorer.matrix_scoring import per_sample_profiles_from_genomic_counts
 
         # Single read at genomic start=100, length=30
-        genomic = pl.DataFrame({
-            "sample_id": ["S_off15", "S_off20"],
-            "chr":       ["chr1", "chr1"],
-            "start":     [100, 100],
-            "stop":      [130, 130],
-            "strand":    ["+", "+"],
-            "length":    [30, 30],
-            "count":     [1.0, 1.0],
-        })
-        exon_df = pl.DataFrame({
-            "tran_id": ["TX1"],
-            "chr":     ["chr1"],
-            "start":   [[90]],
-            "stop":    [[140]],
-            "strand":  ["+"],
-            "tran_start": [[0]],
-            "tran_stop":  [[50]],
-        })
-        offsets_df = pl.DataFrame({
-            "sample_id": ["S_off15", "S_off20"],
-            "length":    [30, 30],
-            "offset":    [15, 20],
-        })
+        genomic = pl.DataFrame(
+            {
+                "sample_id": ["S_off15", "S_off20"],
+                "chr": ["chr1", "chr1"],
+                "start": [100, 100],
+                "stop": [130, 130],
+                "strand": ["+", "+"],
+                "length": [30, 30],
+                "count": [1.0, 1.0],
+            }
+        )
+        exon_df = pl.DataFrame(
+            {
+                "tran_id": ["TX1"],
+                "chr": ["chr1"],
+                "start": [[90]],
+                "stop": [[140]],
+                "strand": ["+"],
+                "tran_start": [[0]],
+                "tran_stop": [[50]],
+            }
+        )
+        offsets_df = pl.DataFrame(
+            {
+                "sample_id": ["S_off15", "S_off20"],
+                "length": [30, 30],
+                "offset": [15, 20],
+            }
+        )
 
-        results = {sid: prof for sid, prof in
-                   per_sample_profiles_from_genomic_counts(genomic, exon_df, offsets_df)}
+        results = {
+            sid: prof
+            for sid, prof in per_sample_profiles_from_genomic_counts(genomic, exon_df, offsets_df)
+        }
 
         if "S_off15" in results and "S_off20" in results:
             pos15 = results["S_off15"].get_column("pos").to_list()
@@ -279,30 +320,36 @@ class TestM2PerSampleProfiles:
             aggregate_profiles_from_genomic_counts,
         )
 
-        genomic = pl.DataFrame({
-            "sample_id": ["S1", "S2", "S1"],
-            "chr":       ["chr1", "chr1", "chr1"],
-            "start":     [100, 100, 110],
-            "stop":      [130, 130, 140],
-            "strand":    ["+", "+", "+"],
-            "length":    [30, 30, 30],
-            "count":     [1.0, 2.0, 1.0],
-        })
-        exon_df = pl.DataFrame({
-            "tran_id": ["TX1"],
-            "chr":     ["chr1"],
-            "start":   [[90]],
-            "stop":    [[150]],
-            "strand":  ["+"],
-            "tran_start": [[0]],
-            "tran_stop":  [[60]],
-        })
+        genomic = pl.DataFrame(
+            {
+                "sample_id": ["S1", "S2", "S1"],
+                "chr": ["chr1", "chr1", "chr1"],
+                "start": [100, 100, 110],
+                "stop": [130, 130, 140],
+                "strand": ["+", "+", "+"],
+                "length": [30, 30, 30],
+                "count": [1.0, 2.0, 1.0],
+            }
+        )
+        exon_df = pl.DataFrame(
+            {
+                "tran_id": ["TX1"],
+                "chr": ["chr1"],
+                "start": [[90]],
+                "stop": [[150]],
+                "strand": ["+"],
+                "tran_start": [[0]],
+                "tran_stop": [[60]],
+            }
+        )
         offsets = {30: 15}
-        offsets_df = pl.DataFrame({
-            "sample_id": ["S1", "S2"],
-            "length":    [30, 30],
-            "offset":    [15, 15],
-        })
+        offsets_df = pl.DataFrame(
+            {
+                "sample_id": ["S1", "S2"],
+                "length": [30, 30],
+                "offset": [15, 15],
+            }
+        )
 
         agg_prof = aggregate_profiles_from_genomic_counts(genomic, exon_df, offsets)
         sample_profs = list(per_sample_profiles_from_genomic_counts(genomic, exon_df, offsets_df))
@@ -312,22 +359,19 @@ class TestM2PerSampleProfiles:
 
         # Sum per-sample counts per position
         all_sample_profs = pl.concat([p for _, p in sample_profs])
-        sum_of_samples = (
-            all_sample_profs
-            .group_by(["tran_id", "pos"])
-            .agg(pl.col("count").sum())
-        )
+        sum_of_samples = all_sample_profs.group_by(["tran_id", "pos"]).agg(pl.col("count").sum())
         agg_total = agg_prof.get_column("count").sum()
         sample_total = sum_of_samples.get_column("count").sum()
 
-        assert sample_total == pytest.approx(agg_total, rel=1e-5), (
-            f"Sum of per-sample counts ({sample_total}) must equal aggregate ({agg_total})"
-        )
+        assert sample_total == pytest.approx(
+            agg_total, rel=1e-5
+        ), f"Sum of per-sample counts ({sample_total}) must equal aggregate ({agg_total})"
 
 
 # ===========================================================================
 # M3 — build_profile_matrix / normalise_profiles
 # ===========================================================================
+
 
 class TestM3ProfileMatrix:
     """
@@ -340,11 +384,13 @@ class TestM3ProfileMatrix:
     """
 
     def _make_profiles(self):
-        return pl.DataFrame({
-            "sample_id": ["S1", "S1", "S1", "S2", "S2"],
-            "pos":       [0,    1,    2,    0,    1],
-            "count":     [1.0,  2.0,  3.0,  4.0,  6.0],
-        })
+        return pl.DataFrame(
+            {
+                "sample_id": ["S1", "S1", "S1", "S2", "S2"],
+                "pos": [0, 1, 2, 0, 1],
+                "count": [1.0, 2.0, 3.0, 4.0, 6.0],
+            }
+        )
 
     def test_shape(self):
         from TranslonScorer.clustering import build_profile_matrix
@@ -373,9 +419,7 @@ class TestM3ProfileMatrix:
     def test_total_count_normalisation(self):
         from TranslonScorer.clustering import normalise_profiles
 
-        matrix = np.array([[1.0, 2.0, 3.0],
-                           [4.0, 6.0, 0.0],
-                           [0.0, 0.0, 0.0]])  # zero row
+        matrix = np.array([[1.0, 2.0, 3.0], [4.0, 6.0, 0.0], [0.0, 0.0, 0.0]])  # zero row
         normed = normalise_profiles(matrix, method="total_count")
 
         # Non-zero rows should sum to 1e6
@@ -406,6 +450,7 @@ class TestM3ProfileMatrix:
 # M4 — cluster_profiles / aggregate_cluster_profiles
 # ===========================================================================
 
+
 @pytest.mark.skipif(
     importlib.util.find_spec("scipy") is None,
     reason="scipy not installed (optional dependency for hierarchical clustering)",
@@ -423,9 +468,9 @@ class TestM4Clustering:
         """5 samples: 3 in group A (high at left), 2 in group B (high at right)."""
         n_pos = 20
         A = np.zeros((3, n_pos))
-        A[:, :5] = 10.0          # high on left
+        A[:, :5] = 10.0  # high on left
         B = np.zeros((2, n_pos))
-        B[:, 15:] = 10.0         # high on right
+        B[:, 15:] = 10.0  # high on right
         return np.vstack([A, B])
 
     def test_two_groups_recovered(self):
@@ -446,11 +491,13 @@ class TestM4Clustering:
     def test_min_coverage_excludes_samples(self):
         from TranslonScorer.clustering import cluster_profiles
 
-        matrix = np.array([
-            [10.0, 10.0],   # S1 – high
-            [10.0, 10.0],   # S2 – high
-            [0.0,  0.0],    # S3 – zero → should be excluded
-        ])
+        matrix = np.array(
+            [
+                [10.0, 10.0],  # S1 – high
+                [10.0, 10.0],  # S2 – high
+                [0.0, 0.0],  # S3 – zero → should be excluded
+            ]
+        )
         labels, included, excluded = cluster_profiles(
             matrix, ["S1", "S2", "S3"], n_clusters=2, min_coverage=1.0
         )
@@ -460,11 +507,13 @@ class TestM4Clustering:
     def test_aggregate_is_mean_of_members(self):
         from TranslonScorer.clustering import aggregate_cluster_profiles
 
-        matrix = np.array([
-            [2.0, 4.0],   # cluster 0
-            [6.0, 8.0],   # cluster 0
-            [1.0, 1.0],   # cluster 1
-        ])
+        matrix = np.array(
+            [
+                [2.0, 4.0],  # cluster 0
+                [6.0, 8.0],  # cluster 0
+                [1.0, 1.0],  # cluster 1
+            ]
+        )
         labels = np.array([0, 0, 1])
         agg = aggregate_cluster_profiles(matrix, labels, method="mean")
 
@@ -481,17 +530,19 @@ class TestM4Clustering:
 
         # Profile matrix: 4 samples, 2 clusters
         matrix = np.zeros((4, n_pos))
-        matrix[0, 10:40] = 5.0    # cluster 0
-        matrix[1, 10:40] = 5.0    # cluster 0
-        matrix[2, 30:60] = 5.0    # cluster 1
-        matrix[3, 30:60] = 5.0    # cluster 1
+        matrix[0, 10:40] = 5.0  # cluster 0
+        matrix[1, 10:40] = 5.0  # cluster 0
+        matrix[2, 30:60] = 5.0  # cluster 1
+        matrix[3, 30:60] = 5.0  # cluster 1
 
-        orf_df = pl.DataFrame({
-            "tran_id": [tran_id, tran_id],
-            "start":   [10, 30],
-            "stop":    [40, 60],
-            "type":    ["CDS", "uORF"],
-        })
+        orf_df = pl.DataFrame(
+            {
+                "tran_id": [tran_id, tran_id],
+                "start": [10, 30],
+                "stop": [40, 60],
+                "type": ["CDS", "uORF"],
+            }
+        )
         sample_names = ["C0_S1", "C0_S2", "C1_S1", "C1_S2"]
 
         scored, labels_df = score_clustered(
@@ -576,12 +627,14 @@ class TestM4Clustering:
         matrix[1, 10:40] = 5.0
         matrix[2, 30:60] = 5.0
         matrix[3, 30:60] = 5.0
-        orf_df = pl.DataFrame({
-            "tran_id": [tran_id, tran_id],
-            "start": [10, 30],
-            "stop": [40, 60],
-            "type": ["CDS", "uORF"],
-        })
+        orf_df = pl.DataFrame(
+            {
+                "tran_id": [tran_id, tran_id],
+                "start": [10, 30],
+                "stop": [40, 60],
+                "type": ["CDS", "uORF"],
+            }
+        )
 
         results, labels, summary = score_locus_matrix_levels(
             matrix,
@@ -606,6 +659,7 @@ class TestM4Clustering:
 # M5 — matrix_qc internals
 # ===========================================================================
 
+
 class TestM5MatrixQC:
     """
     Expectations:
@@ -622,9 +676,9 @@ class TestM5MatrixQC:
         frames = {0: 100.0, 1: 0.0, 2: 0.0}
         result = _compute_periodicity_from_frames(frames)
 
-        assert result["periodicity_score"] > 0.8, (
-            f"Perfect frame-0 signal should have high periodicity, got {result['periodicity_score']}"
-        )
+        assert (
+            result["periodicity_score"] > 0.8
+        ), f"Perfect frame-0 signal should have high periodicity, got {result['periodicity_score']}"
         assert result["f0"] == pytest.approx(1.0, abs=1e-9)
 
     def test_periodicity_uniform_is_low(self):
@@ -638,7 +692,7 @@ class TestM5MatrixQC:
             f"Uniform frame distribution should have near-zero periodicity, "
             f"got {result['periodicity_score']}"
         )
-        assert result["f0"] == pytest.approx(1/3, rel=0.02)
+        assert result["f0"] == pytest.approx(1 / 3, rel=0.02)
 
     def test_periodicity_empty_returns_zero(self):
         from TranslonScorer.matrix_qc import _compute_periodicity_from_frames
@@ -654,5 +708,5 @@ class TestM5MatrixQC:
         matrix = np.array([[100.0, 200.0, 200.0]])  # total = 500
         normed = normalise_profiles(matrix, method="total_count")
 
-        expected = np.array([[100/500 * 1e6, 200/500 * 1e6, 200/500 * 1e6]])
+        expected = np.array([[100 / 500 * 1e6, 200 / 500 * 1e6, 200 / 500 * 1e6]])
         np.testing.assert_allclose(normed, expected, rtol=1e-5)

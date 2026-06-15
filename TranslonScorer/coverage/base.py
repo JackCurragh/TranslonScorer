@@ -16,6 +16,7 @@ from TranslonScorer.coverage.base import (
 
 isinstance(provider, SupportsJunctions)   # runtime capability check
 """
+
 from __future__ import annotations
 
 from typing import Dict, List, Tuple
@@ -42,6 +43,7 @@ MAPPABILITY_LEDGER_SCHEMA: Dict[str, type] = {
 # ---------------------------------------------------------------------------
 # Capability Protocols
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class CoverageProvider(Protocol):

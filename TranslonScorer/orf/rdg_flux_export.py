@@ -58,7 +58,9 @@ def _normalise_profile_schema(profiles: pl.DataFrame, sample_id: str | None) -> 
         elif sample_id:
             df = df.with_columns(pl.lit(sample_id).alias("sample_id"))
         else:
-            raise ValueError("profiles must contain sample_id/sample, or --sample-id must be provided")
+            raise ValueError(
+                "profiles must contain sample_id/sample, or --sample-id must be provided"
+            )
     required = {"sample_id", "tran_id", "pos", "count"}
     missing = required - set(df.columns)
     if missing:
@@ -66,7 +68,9 @@ def _normalise_profile_schema(profiles: pl.DataFrame, sample_id: str | None) -> 
     return df
 
 
-def _normalise_profile_lazy(profiles_path: str, sample_id: str | None) -> tuple[pl.LazyFrame, list[str], set[str]]:
+def _normalise_profile_lazy(
+    profiles_path: str, sample_id: str | None
+) -> tuple[pl.LazyFrame, list[str], set[str]]:
     lf, cols = _scan_parquet_with_schema(profiles_path)
     if "transcript_id" in cols and "tran_id" not in cols:
         lf = lf.rename({"transcript_id": "tran_id"})
@@ -79,12 +83,17 @@ def _normalise_profile_lazy(profiles_path: str, sample_id: str | None) -> tuple[
             lf = lf.with_columns(pl.lit(sample_id).alias("sample_id"))
             cols = cols | {"sample_id"}
         else:
-            raise ValueError("profiles must contain sample_id/sample, or --sample-id must be provided")
+            raise ValueError(
+                "profiles must contain sample_id/sample, or --sample-id must be provided"
+            )
     required = {"sample_id", "tran_id", "pos", "count"}
     missing = required - cols
     if missing:
         raise ValueError(f"profiles missing required columns: {sorted(missing)}")
-    sample_ids = sorted(str(x) for x in lf.select(pl.col("sample_id").unique()).collect().get_column("sample_id").to_list())
+    sample_ids = sorted(
+        str(x)
+        for x in lf.select(pl.col("sample_id").unique()).collect().get_column("sample_id").to_list()
+    )
     return lf, sample_ids, cols
 
 
@@ -98,7 +107,9 @@ def _normalise_frame_schema(frame_support: pl.DataFrame, sample_ids: list[str]) 
         elif len(sample_ids) == 1:
             df = df.with_columns(pl.lit(sample_ids[0]).alias("sample_id"))
         else:
-            raise ValueError("frame support lacks sample_id/sample but profiles contain multiple samples")
+            raise ValueError(
+                "frame support lacks sample_id/sample but profiles contain multiple samples"
+            )
     required = {"sample_id", "tran_id", "codon", "p0", "p1", "p2"}
     missing = required - set(df.columns)
     if missing:
@@ -106,7 +117,9 @@ def _normalise_frame_schema(frame_support: pl.DataFrame, sample_ids: list[str]) 
     return df
 
 
-def _normalise_frame_lazy(frame_support_path: str, sample_ids: list[str]) -> tuple[pl.LazyFrame, set[str]]:
+def _normalise_frame_lazy(
+    frame_support_path: str, sample_ids: list[str]
+) -> tuple[pl.LazyFrame, set[str]]:
     lf, cols = _scan_parquet_with_schema(frame_support_path)
     if "transcript_id" in cols and "tran_id" not in cols:
         lf = lf.rename({"transcript_id": "tran_id"})
@@ -119,7 +132,9 @@ def _normalise_frame_lazy(frame_support_path: str, sample_ids: list[str]) -> tup
             lf = lf.with_columns(pl.lit(sample_ids[0]).alias("sample_id"))
             cols = cols | {"sample_id"}
         else:
-            raise ValueError("frame support lacks sample_id/sample but profiles contain multiple samples")
+            raise ValueError(
+                "frame support lacks sample_id/sample but profiles contain multiple samples"
+            )
     required = {"sample_id", "tran_id", "codon", "p0", "p1", "p2"}
     missing = required - cols
     if missing:
@@ -138,34 +153,40 @@ def _collapse_profiles(profiles: pl.DataFrame, preserve_read_length: bool) -> pl
     keep_length = preserve_read_length and "length" in profiles.columns
     groups = ["sample_id", "tran_id", "pos"] + (["length"] if keep_length else [])
     return (
-        profiles
-        .with_columns([
-            pl.col("pos").cast(pl.Int64),
-            pl.col("count").cast(pl.Float64),
-            (pl.col("pos").cast(pl.Int64) // 3).alias("codon"),
-        ])
+        profiles.with_columns(
+            [
+                pl.col("pos").cast(pl.Int64),
+                pl.col("count").cast(pl.Float64),
+                (pl.col("pos").cast(pl.Int64) // 3).alias("codon"),
+            ]
+        )
         .group_by(groups + ["codon"])
         .agg(pl.col("count").sum().alias("count"))
         .sort(groups)
     )
 
 
-def _collapse_profiles_lazy(profiles: pl.LazyFrame, cols: set[str], preserve_read_length: bool) -> pl.LazyFrame:
+def _collapse_profiles_lazy(
+    profiles: pl.LazyFrame, cols: set[str], preserve_read_length: bool
+) -> pl.LazyFrame:
     keep_length = preserve_read_length and "length" in cols
     groups = ["sample_id", "tran_id", "pos"] + (["length"] if keep_length else [])
     return (
-        profiles
-        .with_columns([
-            pl.col("pos").cast(pl.Int64),
-            pl.col("count").cast(pl.Float64),
-            (pl.col("pos").cast(pl.Int64) // 3).alias("codon"),
-        ])
+        profiles.with_columns(
+            [
+                pl.col("pos").cast(pl.Int64),
+                pl.col("count").cast(pl.Float64),
+                (pl.col("pos").cast(pl.Int64) // 3).alias("codon"),
+            ]
+        )
         .group_by(groups + ["codon"])
         .agg(pl.col("count").sum().alias("count"))
     )
 
 
-def _collapse_frame_support(frame_support: pl.DataFrame, preserve_read_length: bool) -> pl.DataFrame:
+def _collapse_frame_support(
+    frame_support: pl.DataFrame, preserve_read_length: bool
+) -> pl.DataFrame:
     keep_length = preserve_read_length and "length" in frame_support.columns
     groups = ["sample_id", "tran_id", "codon"] + (["length"] if keep_length else [])
     cols = set(frame_support.columns)
@@ -175,30 +196,50 @@ def _collapse_frame_support(frame_support: pl.DataFrame, preserve_read_length: b
             pl.col("adjusted_f0").sum().alias("adjusted_f0"),
             pl.col("adjusted_f1").sum().alias("adjusted_f1"),
             pl.col("adjusted_f2").sum().alias("adjusted_f2"),
-            pl.col("total_count").sum().alias("frame_total_count") if "total_count" in cols else pl.len().cast(pl.Float64).alias("frame_total_count"),
+            (
+                pl.col("total_count").sum().alias("frame_total_count")
+                if "total_count" in cols
+                else pl.len().cast(pl.Float64).alias("frame_total_count")
+            ),
         ]
         if "support_evidence" in cols:
             agg_exprs.append(pl.col("support_evidence").mean().alias("support_evidence"))
         if "frame_periodicity_score" in cols:
-            agg_exprs.append(pl.col("frame_periodicity_score").mean().alias("frame_periodicity_score"))
+            agg_exprs.append(
+                pl.col("frame_periodicity_score").mean().alias("frame_periodicity_score")
+            )
         collapsed = (
-            frame_support
-            .group_by(groups)
+            frame_support.group_by(groups)
             .agg(agg_exprs)
             .with_columns(
-                (pl.col("adjusted_f0") + pl.col("adjusted_f1") + pl.col("adjusted_f2")).alias("_adjusted_total")
+                (pl.col("adjusted_f0") + pl.col("adjusted_f1") + pl.col("adjusted_f2")).alias(
+                    "_adjusted_total"
+                )
             )
-            .with_columns([
-                pl.when(pl.col("_adjusted_total") > 0).then(pl.col("adjusted_f0") / pl.col("_adjusted_total")).otherwise(1.0 / 3.0).alias("p0"),
-                pl.when(pl.col("_adjusted_total") > 0).then(pl.col("adjusted_f1") / pl.col("_adjusted_total")).otherwise(1.0 / 3.0).alias("p1"),
-                pl.when(pl.col("_adjusted_total") > 0).then(pl.col("adjusted_f2") / pl.col("_adjusted_total")).otherwise(1.0 / 3.0).alias("p2"),
-            ])
+            .with_columns(
+                [
+                    pl.when(pl.col("_adjusted_total") > 0)
+                    .then(pl.col("adjusted_f0") / pl.col("_adjusted_total"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p0"),
+                    pl.when(pl.col("_adjusted_total") > 0)
+                    .then(pl.col("adjusted_f1") / pl.col("_adjusted_total"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p1"),
+                    pl.when(pl.col("_adjusted_total") > 0)
+                    .then(pl.col("adjusted_f2") / pl.col("_adjusted_total"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p2"),
+                ]
+            )
             .drop("_adjusted_total")
         )
     else:
         weight_col = "_frame_weight"
         weighted = frame_support.with_columns(
-            (pl.col("total_count").cast(pl.Float64) if "total_count" in cols else pl.lit(1.0)).alias(weight_col)
+            (
+                pl.col("total_count").cast(pl.Float64) if "total_count" in cols else pl.lit(1.0)
+            ).alias(weight_col)
         )
         agg_exprs = [
             (pl.col("p0") * pl.col(weight_col)).sum().alias("_p0w"),
@@ -209,23 +250,39 @@ def _collapse_frame_support(frame_support: pl.DataFrame, preserve_read_length: b
         if "support_evidence" in cols:
             agg_exprs.append(pl.col("support_evidence").mean().alias("support_evidence"))
         if "frame_periodicity_score" in cols:
-            agg_exprs.append(pl.col("frame_periodicity_score").mean().alias("frame_periodicity_score"))
+            agg_exprs.append(
+                pl.col("frame_periodicity_score").mean().alias("frame_periodicity_score")
+            )
         collapsed = (
-            weighted
-            .group_by(groups)
+            weighted.group_by(groups)
             .agg(agg_exprs)
-            .with_columns([
-                pl.when(pl.col("frame_total_count") > 0).then(pl.col("_p0w") / pl.col("frame_total_count")).otherwise(1.0 / 3.0).alias("p0"),
-                pl.when(pl.col("frame_total_count") > 0).then(pl.col("_p1w") / pl.col("frame_total_count")).otherwise(1.0 / 3.0).alias("p1"),
-                pl.when(pl.col("frame_total_count") > 0).then(pl.col("_p2w") / pl.col("frame_total_count")).otherwise(1.0 / 3.0).alias("p2"),
-            ])
+            .with_columns(
+                [
+                    pl.when(pl.col("frame_total_count") > 0)
+                    .then(pl.col("_p0w") / pl.col("frame_total_count"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p0"),
+                    pl.when(pl.col("frame_total_count") > 0)
+                    .then(pl.col("_p1w") / pl.col("frame_total_count"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p1"),
+                    pl.when(pl.col("frame_total_count") > 0)
+                    .then(pl.col("_p2w") / pl.col("frame_total_count"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p2"),
+                ]
+            )
             .drop(["_p0w", "_p1w", "_p2w"])
         )
 
-    return collapsed.with_columns(_entropy_expr(pl.col("p0"), pl.col("p1"), pl.col("p2"))).sort(groups)
+    return collapsed.with_columns(_entropy_expr(pl.col("p0"), pl.col("p1"), pl.col("p2"))).sort(
+        groups
+    )
 
 
-def _collapse_frame_support_lazy(frame_support: pl.LazyFrame, cols: set[str], preserve_read_length: bool) -> pl.LazyFrame:
+def _collapse_frame_support_lazy(
+    frame_support: pl.LazyFrame, cols: set[str], preserve_read_length: bool
+) -> pl.LazyFrame:
     keep_length = preserve_read_length and "length" in cols
     groups = ["sample_id", "tran_id", "codon"] + (["length"] if keep_length else [])
 
@@ -244,25 +301,41 @@ def _collapse_frame_support_lazy(frame_support: pl.LazyFrame, cols: set[str], pr
         if "support_evidence" in cols:
             agg_exprs.append(pl.col("support_evidence").mean().alias("support_evidence"))
         if "frame_periodicity_score" in cols:
-            agg_exprs.append(pl.col("frame_periodicity_score").mean().alias("frame_periodicity_score"))
+            agg_exprs.append(
+                pl.col("frame_periodicity_score").mean().alias("frame_periodicity_score")
+            )
         collapsed = (
-            frame_support
-            .group_by(groups)
+            frame_support.group_by(groups)
             .agg(agg_exprs)
             .with_columns(
-                (pl.col("adjusted_f0") + pl.col("adjusted_f1") + pl.col("adjusted_f2")).alias("_adjusted_total")
+                (pl.col("adjusted_f0") + pl.col("adjusted_f1") + pl.col("adjusted_f2")).alias(
+                    "_adjusted_total"
+                )
             )
-            .with_columns([
-                pl.when(pl.col("_adjusted_total") > 0).then(pl.col("adjusted_f0") / pl.col("_adjusted_total")).otherwise(1.0 / 3.0).alias("p0"),
-                pl.when(pl.col("_adjusted_total") > 0).then(pl.col("adjusted_f1") / pl.col("_adjusted_total")).otherwise(1.0 / 3.0).alias("p1"),
-                pl.when(pl.col("_adjusted_total") > 0).then(pl.col("adjusted_f2") / pl.col("_adjusted_total")).otherwise(1.0 / 3.0).alias("p2"),
-            ])
+            .with_columns(
+                [
+                    pl.when(pl.col("_adjusted_total") > 0)
+                    .then(pl.col("adjusted_f0") / pl.col("_adjusted_total"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p0"),
+                    pl.when(pl.col("_adjusted_total") > 0)
+                    .then(pl.col("adjusted_f1") / pl.col("_adjusted_total"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p1"),
+                    pl.when(pl.col("_adjusted_total") > 0)
+                    .then(pl.col("adjusted_f2") / pl.col("_adjusted_total"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p2"),
+                ]
+            )
             .drop("_adjusted_total")
         )
     else:
         weight_col = "_frame_weight"
         weighted = frame_support.with_columns(
-            (pl.col("total_count").cast(pl.Float64) if "total_count" in cols else pl.lit(1.0)).alias(weight_col)
+            (
+                pl.col("total_count").cast(pl.Float64) if "total_count" in cols else pl.lit(1.0)
+            ).alias(weight_col)
         )
         agg_exprs = [
             (pl.col("p0") * pl.col(weight_col)).sum().alias("_p0w"),
@@ -273,16 +346,28 @@ def _collapse_frame_support_lazy(frame_support: pl.LazyFrame, cols: set[str], pr
         if "support_evidence" in cols:
             agg_exprs.append(pl.col("support_evidence").mean().alias("support_evidence"))
         if "frame_periodicity_score" in cols:
-            agg_exprs.append(pl.col("frame_periodicity_score").mean().alias("frame_periodicity_score"))
+            agg_exprs.append(
+                pl.col("frame_periodicity_score").mean().alias("frame_periodicity_score")
+            )
         collapsed = (
-            weighted
-            .group_by(groups)
+            weighted.group_by(groups)
             .agg(agg_exprs)
-            .with_columns([
-                pl.when(pl.col("frame_total_count") > 0).then(pl.col("_p0w") / pl.col("frame_total_count")).otherwise(1.0 / 3.0).alias("p0"),
-                pl.when(pl.col("frame_total_count") > 0).then(pl.col("_p1w") / pl.col("frame_total_count")).otherwise(1.0 / 3.0).alias("p1"),
-                pl.when(pl.col("frame_total_count") > 0).then(pl.col("_p2w") / pl.col("frame_total_count")).otherwise(1.0 / 3.0).alias("p2"),
-            ])
+            .with_columns(
+                [
+                    pl.when(pl.col("frame_total_count") > 0)
+                    .then(pl.col("_p0w") / pl.col("frame_total_count"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p0"),
+                    pl.when(pl.col("frame_total_count") > 0)
+                    .then(pl.col("_p1w") / pl.col("frame_total_count"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p1"),
+                    pl.when(pl.col("frame_total_count") > 0)
+                    .then(pl.col("_p2w") / pl.col("frame_total_count"))
+                    .otherwise(1.0 / 3.0)
+                    .alias("p2"),
+                ]
+            )
             .drop(["_p0w", "_p1w", "_p2w"])
         )
 
@@ -324,25 +409,35 @@ def _rdg_flux_position_lazy(
     )
     out = (
         prof.join(fs, on=join_keys, how="left")
-        .with_columns([
-            pl.col("p0").fill_null(1.0 / 3.0),
-            pl.col("p1").fill_null(1.0 / 3.0),
-            pl.col("p2").fill_null(1.0 / 3.0),
-            pl.col("frame_entropy").fill_null(MAX_FRAME_ENTROPY),
-            pl.col("frame_total_count").fill_null(0.0),
-        ])
-        .with_columns([
-            support_expr.alias("_support_evidence_for_export"),
-            periodicity_expr.alias("local_periodicity_score"),
-        ])
-        .with_columns((pl.lit(translated_floor) * pl.col("_support_evidence_for_export")).alias("p_translated"))
-        .with_columns([
-            (pl.col("p0") * pl.col("p_translated")).alias("p_frame0"),
-            (pl.col("p1") * pl.col("p_translated")).alias("p_frame1"),
-            (pl.col("p2") * pl.col("p_translated")).alias("p_frame2"),
-            (1.0 - pl.col("p_translated")).alias("p_background"),
-            (pl.col("count") * pl.col("p_translated")).alias("effective_depth"),
-        ])
+        .with_columns(
+            [
+                pl.col("p0").fill_null(1.0 / 3.0),
+                pl.col("p1").fill_null(1.0 / 3.0),
+                pl.col("p2").fill_null(1.0 / 3.0),
+                pl.col("frame_entropy").fill_null(MAX_FRAME_ENTROPY),
+                pl.col("frame_total_count").fill_null(0.0),
+            ]
+        )
+        .with_columns(
+            [
+                support_expr.alias("_support_evidence_for_export"),
+                periodicity_expr.alias("local_periodicity_score"),
+            ]
+        )
+        .with_columns(
+            (pl.lit(translated_floor) * pl.col("_support_evidence_for_export")).alias(
+                "p_translated"
+            )
+        )
+        .with_columns(
+            [
+                (pl.col("p0") * pl.col("p_translated")).alias("p_frame0"),
+                (pl.col("p1") * pl.col("p_translated")).alias("p_frame1"),
+                (pl.col("p2") * pl.col("p_translated")).alias("p_frame2"),
+                (1.0 - pl.col("p_translated")).alias("p_background"),
+                (pl.col("count") * pl.col("p_translated")).alias("effective_depth"),
+            ]
+        )
         .rename({"tran_id": "transcript_id"})
     )
 
@@ -351,7 +446,10 @@ def _rdg_flux_position_lazy(
         out = out.with_columns(pl.col("length").alias("read_length_bin"))
         columns.append("read_length_bin")
 
-    return out.select(columns).sort(["sample_id", "transcript_id", "pos"] + (["read_length_bin"] if "read_length_bin" in columns else []))
+    return out.select(columns).sort(
+        ["sample_id", "transcript_id", "pos"]
+        + (["read_length_bin"] if "read_length_bin" in columns else [])
+    )
 
 
 def rdg_flux_position_table(
@@ -395,26 +493,35 @@ def rdg_flux_position_table(
     joined = prof.join(fs, on=join_keys, how="left")
 
     out = (
-        joined
-        .with_columns([
-            pl.col("p0").fill_null(1.0 / 3.0),
-            pl.col("p1").fill_null(1.0 / 3.0),
-            pl.col("p2").fill_null(1.0 / 3.0),
-            pl.col("frame_entropy").fill_null(MAX_FRAME_ENTROPY),
-            pl.col("frame_total_count").fill_null(0.0),
-        ])
-        .with_columns([
-            support_expr.alias("_support_evidence_for_export"),
-            periodicity_expr.alias("local_periodicity_score"),
-        ])
-        .with_columns((pl.lit(translated_floor) * pl.col("_support_evidence_for_export")).alias("p_translated"))
-        .with_columns([
-            (pl.col("p0") * pl.col("p_translated")).alias("p_frame0"),
-            (pl.col("p1") * pl.col("p_translated")).alias("p_frame1"),
-            (pl.col("p2") * pl.col("p_translated")).alias("p_frame2"),
-            (1.0 - pl.col("p_translated")).alias("p_background"),
-            (pl.col("count") * pl.col("p_translated")).alias("effective_depth"),
-        ])
+        joined.with_columns(
+            [
+                pl.col("p0").fill_null(1.0 / 3.0),
+                pl.col("p1").fill_null(1.0 / 3.0),
+                pl.col("p2").fill_null(1.0 / 3.0),
+                pl.col("frame_entropy").fill_null(MAX_FRAME_ENTROPY),
+                pl.col("frame_total_count").fill_null(0.0),
+            ]
+        )
+        .with_columns(
+            [
+                support_expr.alias("_support_evidence_for_export"),
+                periodicity_expr.alias("local_periodicity_score"),
+            ]
+        )
+        .with_columns(
+            (pl.lit(translated_floor) * pl.col("_support_evidence_for_export")).alias(
+                "p_translated"
+            )
+        )
+        .with_columns(
+            [
+                (pl.col("p0") * pl.col("p_translated")).alias("p_frame0"),
+                (pl.col("p1") * pl.col("p_translated")).alias("p_frame1"),
+                (pl.col("p2") * pl.col("p_translated")).alias("p_frame2"),
+                (1.0 - pl.col("p_translated")).alias("p_background"),
+                (pl.col("count") * pl.col("p_translated")).alias("effective_depth"),
+            ]
+        )
         .rename({"tran_id": "transcript_id"})
     )
 
@@ -423,7 +530,10 @@ def rdg_flux_position_table(
         out = out.with_columns(pl.col("length").alias("read_length_bin"))
         columns.append("read_length_bin")
 
-    return out.select(columns).sort(["sample_id", "transcript_id", "pos"] + (["read_length_bin"] if "read_length_bin" in columns else []))
+    return out.select(columns).sort(
+        ["sample_id", "transcript_id", "pos"]
+        + (["read_length_bin"] if "read_length_bin" in columns else [])
+    )
 
 
 def make_rdg_flux_metadata(
@@ -535,13 +645,17 @@ def _build_frame_support_from_annotation(
     elif annotation_dir:
         from ..io.annotation_bundle import load_annotation_bundle
 
-        exon_df, cds_df, _feats_df, _fmap_df, _tx_df, _loci_bed, _manifest = load_annotation_bundle(annotation_dir)
+        exon_df, cds_df, _feats_df, _fmap_df, _tx_df, _loci_bed, _manifest = load_annotation_bundle(
+            annotation_dir
+        )
         cds_tran = cds_to_transcript_space(cds_df, exon_df)
     elif annotation_path:
         cds_df, exon_df = bam_handlers.getexons_and_cds(annotation_path)
         cds_tran = cds_to_transcript_space(cds_df, exon_df)
     else:
-        raise ValueError("Provide --frame-support, or provide --cds/--annotation/--annotation-dir to build frame support")
+        raise ValueError(
+            "Provide --frame-support, or provide --cds/--annotation/--annotation-dir to build frame support"
+        )
 
     params = FrameSupportParams(frame_method=frame_method, frame_by_length=frame_by_length)
     return build_frame_support(profiles, cds_tran, params)
@@ -618,7 +732,11 @@ def export_rdg_flux_v1(
         frame_support_path=frame_support_path,
         sample_ids=sample_ids,
         psite_offset_model=psite_offset_model,
-        annotation_source=annotation_source or annotation_path or annotation_dir or cds_path or "unknown",
+        annotation_source=annotation_source
+        or annotation_path
+        or annotation_dir
+        or cds_path
+        or "unknown",
         transcriptome_fasta=transcriptome_fasta or "unknown",
         model_stage=model_stage,
         normalization=normalization,

@@ -8,7 +8,10 @@ from TranslonScorer.frame.frame_disambiguation import (
     candidate_frame_table,
     summarize_frame_disambiguation,
 )
-from TranslonScorer.frame.frame_method_compare import compare_frame_support_tables, validate_frame_support_on_cds
+from TranslonScorer.frame.frame_method_compare import (
+    compare_frame_support_tables,
+    validate_frame_support_on_cds,
+)
 from TranslonScorer.frame_support import build_frame_support
 from TranslonScorer.model import FrameSupportParams
 from TranslonScorer.orf.profile_compare import compare_profiles
@@ -23,22 +26,26 @@ from TranslonScorer.coverage.transcript_coords import cds_to_transcript_space
 
 
 def test_cds_to_transcript_space_maps_minus_strand():
-    cds = pl.DataFrame({
-        "tran_id": ["tx_plus", "tx_minus"],
-        "chr": ["chr1", "chr1"],
-        "start": [110, 510],
-        "stop": [160, 560],
-        "strand": ["+", "-"],
-    })
-    exons = pl.DataFrame({
-        "tran_id": ["tx_plus", "tx_minus"],
-        "chr": ["chr1", "chr1"],
-        "start": [[100, 200], [500, 600]],
-        "stop": [[180, 260], [560, 660]],
-        "tran_start": [[0, 80], [0, 60]],
-        "tran_stop": [[80, 140], [60, 120]],
-        "strand": ["+", "-"],
-    })
+    cds = pl.DataFrame(
+        {
+            "tran_id": ["tx_plus", "tx_minus"],
+            "chr": ["chr1", "chr1"],
+            "start": [110, 510],
+            "stop": [160, 560],
+            "strand": ["+", "-"],
+        }
+    )
+    exons = pl.DataFrame(
+        {
+            "tran_id": ["tx_plus", "tx_minus"],
+            "chr": ["chr1", "chr1"],
+            "start": [[100, 200], [500, 600]],
+            "stop": [[180, 260], [560, 660]],
+            "tran_start": [[0, 80], [0, 60]],
+            "tran_stop": [[80, 140], [60, 120]],
+            "strand": ["+", "-"],
+        }
+    )
 
     mapped = cds_to_transcript_space(cds, exons).sort("tran_id")
     rows = {r["tran_id"]: r for r in mapped.iter_rows(named=True)}
@@ -49,27 +56,33 @@ def test_cds_to_transcript_space_maps_minus_strand():
 
 
 def test_ensure_score_schema_and_frame_summary():
-    scored = pl.DataFrame({
-        "tran_id": ["tx1"],
-        "start": [0],
-        "stop": [9],
-        "type": ["CDS"],
-        "score": [3.0],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx1", "tx1", "tx1"],
-        "codon": [0, 1, 2],
-        "p0": [0.9, 0.8, 0.7],
-        "p1": [0.05, 0.1, 0.2],
-        "p2": [0.05, 0.1, 0.1],
-        "entropy": [0.2, 0.3, 0.4],
-        "method": ["linear+hmm", "linear+hmm", "linear+hmm"],
-    })
-    profiles = pl.DataFrame({
-        "tran_id": ["tx1", "tx1", "tx1"],
-        "pos": [0, 1, 3],
-        "count": [10.0, 5.0, 2.0],
-    })
+    scored = pl.DataFrame(
+        {
+            "tran_id": ["tx1"],
+            "start": [0],
+            "stop": [9],
+            "type": ["CDS"],
+            "score": [3.0],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx1", "tx1", "tx1"],
+            "codon": [0, 1, 2],
+            "p0": [0.9, 0.8, 0.7],
+            "p1": [0.05, 0.1, 0.2],
+            "p2": [0.05, 0.1, 0.1],
+            "entropy": [0.2, 0.3, 0.4],
+            "method": ["linear+hmm", "linear+hmm", "linear+hmm"],
+        }
+    )
+    profiles = pl.DataFrame(
+        {
+            "tran_id": ["tx1", "tx1", "tx1"],
+            "pos": [0, 1, 3],
+            "count": [10.0, 5.0, 2.0],
+        }
+    )
 
     out = add_frame_score_columns(ensure_score_schema(scored), frame_support, profiles=profiles)
     assert out["orf_id"][0] == "tx1:0:9:CDS"
@@ -99,15 +112,17 @@ def test_compare_score_tables_reports_delta():
 
 def test_panel_manifest_validation_and_merge():
     orfs = pl.DataFrame({"tran_id": ["tx1"], "start": [0], "stop": [9], "type": ["CDS"]})
-    panel = pl.DataFrame({
-        "panel_id": ["p1"],
-        "tran_id": ["tx1"],
-        "start": [0],
-        "stop": [9],
-        "type": ["CDS"],
-        "label": ["positive"],
-        "category": ["annotated_cds"],
-    })
+    panel = pl.DataFrame(
+        {
+            "panel_id": ["p1"],
+            "tran_id": ["tx1"],
+            "start": [0],
+            "stop": [9],
+            "type": ["CDS"],
+            "label": ["positive"],
+            "category": ["annotated_cds"],
+        }
+    )
     report = validate_panel_manifest(panel)
     assert bool(report["is_valid"][0])
     merged = merge_panel_manifest(orfs, panel)
@@ -126,17 +141,21 @@ def test_compare_profiles_summary():
 
 
 def test_frame_disambiguation_counts_frame_discordant_candidates():
-    candidates = pl.DataFrame({
-        "read_key": ["r1", "r1", "r2", "r2", "r3"],
-        "tran_id": ["tx1", "tx2", "tx1", "tx2", "tx1"],
-        "tran_start_bam": [12, 13, 21, 24, 30],
-        "count": [1.0, 1.0, 2.0, 2.0, 1.0],
-    })
-    cds = pl.DataFrame({
-        "tran_id": ["tx1", "tx2"],
-        "start": [0, 0],
-        "stop": [90, 90],
-    })
+    candidates = pl.DataFrame(
+        {
+            "read_key": ["r1", "r1", "r2", "r2", "r3"],
+            "tran_id": ["tx1", "tx2", "tx1", "tx2", "tx1"],
+            "tran_start_bam": [12, 13, 21, 24, 30],
+            "count": [1.0, 1.0, 2.0, 2.0, 1.0],
+        }
+    )
+    cds = pl.DataFrame(
+        {
+            "tran_id": ["tx1", "tx2"],
+            "start": [0, 0],
+            "stop": [90, 90],
+        }
+    )
     frames = candidate_frame_table(candidates, cds)
     classes, summary = summarize_frame_disambiguation(frames)
     r1 = classes.filter(pl.col("read_key") == "r1")
@@ -148,11 +167,13 @@ def test_frame_disambiguation_counts_frame_discordant_candidates():
 
 
 def test_confusion_learning_preserves_asymmetric_leakage():
-    profiles = pl.DataFrame({
-        "tran_id": ["tx1", "tx1", "tx1"],
-        "pos": [30, 31, 32],
-        "count": [70.0, 10.0, 20.0],
-    })
+    profiles = pl.DataFrame(
+        {
+            "tran_id": ["tx1", "tx1", "tx1"],
+            "pos": [30, 31, 32],
+            "count": [70.0, 10.0, 20.0],
+        }
+    )
     cds = pl.DataFrame({"tran_id": ["tx1"], "start": [0], "stop": [90]})
 
     C = learn_confusion(profiles, cds, by_length=False)[None]
@@ -205,15 +226,21 @@ def test_latent_em_is_count_weighted_not_sparse_codon_weighted():
 
 
 def test_frame_support_outputs_adjusted_counts_for_linear_and_latent():
-    profiles = pl.DataFrame({
-        "tran_id": ["tx1", "tx1", "tx1", "tx1", "tx1", "tx1"],
-        "pos": [30, 31, 32, 33, 34, 35],
-        "count": [70.0, 10.0, 20.0, 80.0, 10.0, 10.0],
-    })
+    profiles = pl.DataFrame(
+        {
+            "tran_id": ["tx1", "tx1", "tx1", "tx1", "tx1", "tx1"],
+            "pos": [30, 31, 32, 33, 34, 35],
+            "count": [70.0, 10.0, 20.0, 80.0, 10.0, 10.0],
+        }
+    )
     cds = pl.DataFrame({"tran_id": ["tx1"], "start": [0], "stop": [90]})
 
-    linear = build_frame_support(profiles, cds, FrameSupportParams(frame_method="linear", frame_by_length=False))
-    latent = build_frame_support(profiles, cds, FrameSupportParams(frame_method="latent", frame_by_length=False))
+    linear = build_frame_support(
+        profiles, cds, FrameSupportParams(frame_method="linear", frame_by_length=False)
+    )
+    latent = build_frame_support(
+        profiles, cds, FrameSupportParams(frame_method="latent", frame_by_length=False)
+    )
 
     for support in (linear, latent):
         assert "observed_f0" in support.columns
@@ -231,15 +258,17 @@ def test_frame_support_outputs_adjusted_counts_for_linear_and_latent():
 
 
 def test_frame_validation_uses_cds_start_transcript_frame():
-    support = pl.DataFrame({
-        "tran_id": ["tx1", "tx1"],
-        "codon": [1, 2],
-        "p0": [0.05, 0.10],
-        "p1": [0.90, 0.80],
-        "p2": [0.05, 0.10],
-        "entropy": [0.5, 0.7],
-        "total_count": [10.0, 5.0],
-    })
+    support = pl.DataFrame(
+        {
+            "tran_id": ["tx1", "tx1"],
+            "codon": [1, 2],
+            "p0": [0.05, 0.10],
+            "p1": [0.90, 0.80],
+            "p2": [0.05, 0.10],
+            "entropy": [0.5, 0.7],
+            "total_count": [10.0, 5.0],
+        }
+    )
     cds = pl.DataFrame({"tran_id": ["tx1"], "start": [1], "stop": [30]})
 
     rows, summary = validate_frame_support_on_cds(support, cds, method="linear", trim_nt=0)
@@ -248,28 +277,34 @@ def test_frame_validation_uses_cds_start_transcript_frame():
     assert rows["pred_frame"].to_list() == [1, 1]
     assert summary["n_rows"][0] == 2
     assert summary["argmax_accuracy"][0] == 1.0
-    assert round(summary["weighted_mean_p_true"][0], 6) == round(((0.90 * 10.0) + (0.80 * 5.0)) / 15.0, 6)
+    assert round(summary["weighted_mean_p_true"][0], 6) == round(
+        ((0.90 * 10.0) + (0.80 * 5.0)) / 15.0, 6
+    )
 
 
 def test_rdg_flux_export_builds_position_level_contract(tmp_path):
-    profiles = pl.DataFrame({
-        "tran_id": ["tx1", "tx1", "tx1"],
-        "pos": [0, 1, 2],
-        "count": [80.0, 10.0, 10.0],
-    })
-    frame_support = pl.DataFrame({
-        "tran_id": ["tx1"],
-        "codon": [0],
-        "adjusted_f0": [98.0],
-        "adjusted_f1": [2.0],
-        "adjusted_f2": [0.0],
-        "total_count": [100.0],
-        "p0": [0.98],
-        "p1": [0.02],
-        "p2": [0.0],
-        "entropy": [0.141],
-        "method": ["linear"],
-    })
+    profiles = pl.DataFrame(
+        {
+            "tran_id": ["tx1", "tx1", "tx1"],
+            "pos": [0, 1, 2],
+            "count": [80.0, 10.0, 10.0],
+        }
+    )
+    frame_support = pl.DataFrame(
+        {
+            "tran_id": ["tx1"],
+            "codon": [0],
+            "adjusted_f0": [98.0],
+            "adjusted_f1": [2.0],
+            "adjusted_f2": [0.0],
+            "total_count": [100.0],
+            "p0": [0.98],
+            "p1": [0.02],
+            "p2": [0.0],
+            "entropy": [0.141],
+            "method": ["linear"],
+        }
+    )
 
     table = rdg_flux_position_table(
         profiles,
@@ -294,7 +329,16 @@ def test_rdg_flux_export_builds_position_level_contract(tmp_path):
     ]
     assert table.height == 3
     assert table["sample_id"][0] == "ribocrypt_fwd_full"
-    assert round(table["p_frame0"][0] + table["p_frame1"][0] + table["p_frame2"][0] + table["p_background"][0], 6) == 1.0
+    assert (
+        round(
+            table["p_frame0"][0]
+            + table["p_frame1"][0]
+            + table["p_frame2"][0]
+            + table["p_background"][0],
+            6,
+        )
+        == 1.0
+    )
     assert table["p_frame0"][0] > 0.85
     assert table["effective_depth"][0] == 72.0
 

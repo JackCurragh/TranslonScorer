@@ -89,7 +89,11 @@ def ensure_orf_id(df: pl.DataFrame) -> pl.DataFrame:
 
     return (
         df.with_row_index("_score_row")
-        .with_columns(pl.concat_str([pl.lit("row"), pl.col("_score_row").cast(pl.Utf8)], separator=":").alias("orf_id"))
+        .with_columns(
+            pl.concat_str([pl.lit("row"), pl.col("_score_row").cast(pl.Utf8)], separator=":").alias(
+                "orf_id"
+            )
+        )
         .drop("_score_row")
     )
 
@@ -127,7 +131,11 @@ def ensure_score_schema(
     }
     for col, value in frame_defaults.items():
         if col not in df.columns:
-            dtype = pl.Utf8 if col == "frame_method" else (pl.Int64 if col == "frame_support_codons" else pl.Float64)
+            dtype = (
+                pl.Utf8
+                if col == "frame_method"
+                else (pl.Int64 if col == "frame_support_codons" else pl.Float64)
+            )
             additions.append(pl.lit(value).cast(dtype).alias(col))
 
     ambiguity_defaults: dict[str, Any] = {
@@ -205,12 +213,15 @@ def add_frame_score_columns(
 
     fs = _collapse_frame_support(frame_support)
     fs_by_tx = {
-        str(key[0] if isinstance(key, tuple) else key): sub
-        for key, sub in fs.group_by("tran_id")
+        str(key[0] if isinstance(key, tuple) else key): sub for key, sub in fs.group_by("tran_id")
     }
 
     prof_by_tx: dict[str, pl.DataFrame] = {}
-    if profiles is not None and not profiles.is_empty() and {"tran_id", "pos", "count"}.issubset(set(profiles.columns)):
+    if (
+        profiles is not None
+        and not profiles.is_empty()
+        and {"tran_id", "pos", "count"}.issubset(set(profiles.columns))
+    ):
         prof_norm = (
             profiles.select(["tran_id", "pos", "count"])
             .group_by(["tran_id", "pos"])
@@ -229,27 +240,31 @@ def add_frame_score_columns(
         start_val = row.get(start)
         stop_val = row.get(stop)
         if tx_fs is None or start_val is None or stop_val is None:
-            rows.append({
-                "orf_id": row["orf_id"],
-                "frame_posterior_mean": None,
-                "frame_entropy_mean": None,
-                "frame_weighted_count": None,
-                "frame_support_codons": 0,
-                "frame_method": row.get("frame_method"),
-            })
+            rows.append(
+                {
+                    "orf_id": row["orf_id"],
+                    "frame_posterior_mean": None,
+                    "frame_entropy_mean": None,
+                    "frame_weighted_count": None,
+                    "frame_support_codons": 0,
+                    "frame_method": row.get("frame_method"),
+                }
+            )
             continue
 
         s = int(start_val)
         e = int(stop_val)
         if e <= s:
-            rows.append({
-                "orf_id": row["orf_id"],
-                "frame_posterior_mean": None,
-                "frame_entropy_mean": None,
-                "frame_weighted_count": None,
-                "frame_support_codons": 0,
-                "frame_method": row.get("frame_method"),
-            })
+            rows.append(
+                {
+                    "orf_id": row["orf_id"],
+                    "frame_posterior_mean": None,
+                    "frame_entropy_mean": None,
+                    "frame_weighted_count": None,
+                    "frame_support_codons": 0,
+                    "frame_method": row.get("frame_method"),
+                }
+            )
             continue
 
         frame = row.get("frame")
@@ -262,15 +277,25 @@ def add_frame_score_columns(
         sub = tx_fs.filter((pl.col("codon") >= codon_lo) & (pl.col("codon") < codon_hi))
 
         posterior = float(sub[p_col].mean()) if not sub.is_empty() else None
-        entropy = float(sub["entropy"].mean()) if not sub.is_empty() and "entropy" in sub.columns else None
-        method = str(sub["method"][0]) if not sub.is_empty() and "method" in sub.columns and sub["method"][0] is not None else row.get("frame_method")
+        entropy = (
+            float(sub["entropy"].mean())
+            if not sub.is_empty() and "entropy" in sub.columns
+            else None
+        )
+        method = (
+            str(sub["method"][0])
+            if not sub.is_empty() and "method" in sub.columns and sub["method"][0] is not None
+            else row.get("frame_method")
+        )
 
         weighted_count = None
         tx_prof = prof_by_tx.get(tid)
         if tx_prof is not None and not sub.is_empty():
             prof_sub = (
                 tx_prof.filter((pl.col("pos") >= s) & (pl.col("pos") < e))
-                .with_columns((pl.col("pos") // 3).alias("codon"), (pl.col("pos") % 3).alias("pos_frame"))
+                .with_columns(
+                    (pl.col("pos") // 3).alias("codon"), (pl.col("pos") % 3).alias("pos_frame")
+                )
                 .join(sub.select(["codon", "p0", "p1", "p2"]), on="codon", how="left")
             )
             total = 0.0
@@ -281,21 +306,25 @@ def add_frame_score_columns(
                     total += float(p_row["count"]) * float(p_val)
             weighted_count = total
 
-        rows.append({
-            "orf_id": row["orf_id"],
-            "frame_posterior_mean": posterior,
-            "frame_entropy_mean": entropy,
-            "frame_weighted_count": weighted_count,
-            "frame_support_codons": sub.height,
-            "frame_method": method,
-        })
+        rows.append(
+            {
+                "orf_id": row["orf_id"],
+                "frame_posterior_mean": posterior,
+                "frame_entropy_mean": entropy,
+                "frame_weighted_count": weighted_count,
+                "frame_support_codons": sub.height,
+                "frame_method": method,
+            }
+        )
 
     summary = pl.from_dicts(rows)
     drop_cols = [c for c in FRAME_SCORE_COLUMNS if c in scored.columns]
     return scored.drop(drop_cols).join(summary, on="orf_id", how="left")
 
 
-def compare_score_tables(raw: pl.DataFrame, frame: pl.DataFrame, *, label_column: str | None = None) -> tuple[pl.DataFrame, pl.DataFrame]:
+def compare_score_tables(
+    raw: pl.DataFrame, frame: pl.DataFrame, *, label_column: str | None = None
+) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Compare raw and frame-weighted score tables by ORF key."""
     raw_s = ensure_score_schema(raw, score_mode="raw")
     frame_s = ensure_score_schema(frame, score_mode="frame_weighted")
@@ -304,14 +333,11 @@ def compare_score_tables(raw: pl.DataFrame, frame: pl.DataFrame, *, label_column
     if label_column and label_column in raw_s.columns:
         keep.append(label_column)
 
-    joined = (
-        raw_s.select([c for c in keep if c in raw_s.columns])
-        .join(
-            frame_s.select([c for c in keep if c in frame_s.columns]),
-            on="orf_id",
-            how="inner",
-            suffix="_frame",
-        )
+    joined = raw_s.select([c for c in keep if c in raw_s.columns]).join(
+        frame_s.select([c for c in keep if c in frame_s.columns]),
+        on="orf_id",
+        how="inner",
+        suffix="_frame",
     )
 
     for col in ("score", "hrf", "avg", "nzc", "rise_up", "step_down"):
@@ -323,10 +349,24 @@ def compare_score_tables(raw: pl.DataFrame, frame: pl.DataFrame, *, label_column
         "n_raw": raw_s.height,
         "n_frame": frame_s.height,
         "n_joined": joined.height,
-        "mean_score_raw": float(raw_s["score"].mean()) if "score" in raw_s.columns and raw_s.height else None,
-        "mean_score_frame": float(frame_s["score"].mean()) if "score" in frame_s.columns and frame_s.height else None,
-        "median_score_delta": float(joined["score_delta"].median()) if "score_delta" in joined.columns and joined.height else None,
-        "mean_score_delta": float(joined["score_delta"].mean()) if "score_delta" in joined.columns and joined.height else None,
+        "mean_score_raw": (
+            float(raw_s["score"].mean()) if "score" in raw_s.columns and raw_s.height else None
+        ),
+        "mean_score_frame": (
+            float(frame_s["score"].mean())
+            if "score" in frame_s.columns and frame_s.height
+            else None
+        ),
+        "median_score_delta": (
+            float(joined["score_delta"].median())
+            if "score_delta" in joined.columns and joined.height
+            else None
+        ),
+        "mean_score_delta": (
+            float(joined["score_delta"].mean())
+            if "score_delta" in joined.columns and joined.height
+            else None
+        ),
     }
 
     if label_column and label_column in joined.columns:
@@ -341,7 +381,9 @@ def compare_score_tables(raw: pl.DataFrame, frame: pl.DataFrame, *, label_column
                 float(a["score"].mean() - b["score"].mean()) if a.height and b.height else None
             )
             summary_values["frame_label_score_gap"] = (
-                float(a["score_frame"].mean() - b["score_frame"].mean()) if a.height and b.height else None
+                float(a["score_frame"].mean() - b["score_frame"].mean())
+                if a.height and b.height
+                else None
             )
 
     return joined, pl.DataFrame([summary_values])

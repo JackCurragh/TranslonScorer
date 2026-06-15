@@ -61,16 +61,20 @@ def validate_panel_manifest(panel: pl.DataFrame) -> pl.DataFrame:
         if duplicate_orf_ids:
             errors.append(f"manifest has {duplicate_orf_ids} duplicate orf_id values")
 
-    return pl.DataFrame([{
-        "n_rows": panel.height,
-        "n_columns": len(panel.columns),
-        "has_orf_id": has_orf_id,
-        "has_coordinate_key": has_coord_key,
-        "duplicate_orf_ids": duplicate_orf_ids,
-        "is_valid": len(errors) == 0,
-        "errors": "; ".join(errors) if errors else None,
-        "warnings": "; ".join(warnings) if warnings else None,
-    }])
+    return pl.DataFrame(
+        [
+            {
+                "n_rows": panel.height,
+                "n_columns": len(panel.columns),
+                "has_orf_id": has_orf_id,
+                "has_coordinate_key": has_coord_key,
+                "duplicate_orf_ids": duplicate_orf_ids,
+                "is_valid": len(errors) == 0,
+                "errors": "; ".join(errors) if errors else None,
+                "warnings": "; ".join(warnings) if warnings else None,
+            }
+        ]
+    )
 
 
 def merge_panel_manifest(orfs: pl.DataFrame, panel: pl.DataFrame) -> pl.DataFrame:
@@ -92,4 +96,3 @@ def panel_freeze_report(path: str) -> pl.DataFrame:
         pl.lit(path).alias("path"),
         pl.lit(manifest_sha256(path)).alias("sha256"),
     )
-

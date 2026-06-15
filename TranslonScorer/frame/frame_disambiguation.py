@@ -24,13 +24,25 @@ def _ensure_read_key(df: pl.DataFrame) -> pl.DataFrame:
     if "qname" in df.columns:
         return df.with_columns(pl.col("qname").cast(pl.Utf8).alias("read_key"))
     if "read_row_id" in df.columns:
-        return df.with_columns(pl.concat_str([pl.lit("row"), pl.col("read_row_id").cast(pl.Utf8)], separator=":").alias("read_key"))
+        return df.with_columns(
+            pl.concat_str(
+                [pl.lit("row"), pl.col("read_row_id").cast(pl.Utf8)], separator=":"
+            ).alias("read_key")
+        )
     coord_cols = [c for c in ["chr", "start", "stop", "length", "strand"] if c in df.columns]
     if coord_cols:
-        return df.with_columns(pl.concat_str([pl.col(c).cast(pl.Utf8) for c in coord_cols], separator=":").alias("read_key"))
+        return df.with_columns(
+            pl.concat_str([pl.col(c).cast(pl.Utf8) for c in coord_cols], separator=":").alias(
+                "read_key"
+            )
+        )
     return (
         df.with_row_index("_read_row")
-        .with_columns(pl.concat_str([pl.lit("row"), pl.col("_read_row").cast(pl.Utf8)], separator=":").alias("read_key"))
+        .with_columns(
+            pl.concat_str([pl.lit("row"), pl.col("_read_row").cast(pl.Utf8)], separator=":").alias(
+                "read_key"
+            )
+        )
         .drop("_read_row")
     )
 
@@ -51,33 +63,39 @@ def candidate_frame_table(candidates: pl.DataFrame, cds_tran_df: pl.DataFrame) -
     if "count" not in df.columns:
         df = df.with_columns(pl.lit(1.0).alias("count"))
 
-    cds = cds_tran_df.select(["tran_id", pl.col("start").alias("cds_start")]).unique(subset=["tran_id"])
+    cds = cds_tran_df.select(["tran_id", pl.col("start").alias("cds_start")]).unique(
+        subset=["tran_id"]
+    )
     df = df.join(cds, on="tran_id", how="left")
-    return (
-        df.with_columns(
-            pl.when(pl.col("cds_start").is_not_null())
-            .then((pl.col(pos_col).cast(pl.Int64) - pl.col("cds_start").cast(pl.Int64)) % 3)
-            .otherwise(pl.col(pos_col).cast(pl.Int64) % 3)
-            .cast(pl.Int64)
-            .alias("candidate_frame")
-        )
+    return df.with_columns(
+        pl.when(pl.col("cds_start").is_not_null())
+        .then((pl.col(pos_col).cast(pl.Int64) - pl.col("cds_start").cast(pl.Int64)) % 3)
+        .otherwise(pl.col(pos_col).cast(pl.Int64) % 3)
+        .cast(pl.Int64)
+        .alias("candidate_frame")
     )
 
 
-def summarize_frame_disambiguation(candidate_frames: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+def summarize_frame_disambiguation(
+    candidate_frames: pl.DataFrame,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Summarize how often ambiguous candidate assignments disagree in frame."""
     if candidate_frames.is_empty():
         empty_classes = pl.DataFrame()
-        summary = pl.DataFrame([{
-            "n_read_keys": 0,
-            "n_ambiguous_read_keys": 0,
-            "n_frame_discordant_read_keys": 0,
-            "ambiguous_fraction": 0.0,
-            "frame_discordant_fraction_of_ambiguous": None,
-            "weighted_ambiguous_count": 0.0,
-            "weighted_frame_discordant_count": 0.0,
-            "weighted_frame_discordant_fraction_of_ambiguous": None,
-        }])
+        summary = pl.DataFrame(
+            [
+                {
+                    "n_read_keys": 0,
+                    "n_ambiguous_read_keys": 0,
+                    "n_frame_discordant_read_keys": 0,
+                    "ambiguous_fraction": 0.0,
+                    "frame_discordant_fraction_of_ambiguous": None,
+                    "weighted_ambiguous_count": 0.0,
+                    "weighted_frame_discordant_count": 0.0,
+                    "weighted_frame_discordant_fraction_of_ambiguous": None,
+                }
+            ]
+        )
         return empty_classes, summary
 
     grouped = (
@@ -92,7 +110,9 @@ def summarize_frame_disambiguation(candidate_frames: pl.DataFrame) -> tuple[pl.D
         )
         .with_columns(
             (pl.col("n_candidate_transcripts") > 1).alias("is_ambiguous"),
-            ((pl.col("n_candidate_transcripts") > 1) & (pl.col("n_candidate_frames") > 1)).alias("is_frame_discordant"),
+            ((pl.col("n_candidate_transcripts") > 1) & (pl.col("n_candidate_frames") > 1)).alias(
+                "is_frame_discordant"
+            ),
         )
     )
 
@@ -102,16 +122,24 @@ def summarize_frame_disambiguation(candidate_frames: pl.DataFrame) -> tuple[pl.D
     weighted_amb = float(ambiguous["read_weight"].sum() or 0.0) if ambiguous.height else 0.0
     weighted_disc = float(discordant["read_weight"].sum() or 0.0) if discordant.height else 0.0
 
-    summary = pl.DataFrame([{
-        "n_read_keys": n_read_keys,
-        "n_ambiguous_read_keys": ambiguous.height,
-        "n_frame_discordant_read_keys": discordant.height,
-        "ambiguous_fraction": (ambiguous.height / n_read_keys) if n_read_keys else 0.0,
-        "frame_discordant_fraction_of_ambiguous": (discordant.height / ambiguous.height) if ambiguous.height else None,
-        "weighted_ambiguous_count": weighted_amb,
-        "weighted_frame_discordant_count": weighted_disc,
-        "weighted_frame_discordant_fraction_of_ambiguous": (weighted_disc / weighted_amb) if weighted_amb > 0 else None,
-    }])
+    summary = pl.DataFrame(
+        [
+            {
+                "n_read_keys": n_read_keys,
+                "n_ambiguous_read_keys": ambiguous.height,
+                "n_frame_discordant_read_keys": discordant.height,
+                "ambiguous_fraction": (ambiguous.height / n_read_keys) if n_read_keys else 0.0,
+                "frame_discordant_fraction_of_ambiguous": (
+                    (discordant.height / ambiguous.height) if ambiguous.height else None
+                ),
+                "weighted_ambiguous_count": weighted_amb,
+                "weighted_frame_discordant_count": weighted_disc,
+                "weighted_frame_discordant_fraction_of_ambiguous": (
+                    (weighted_disc / weighted_amb) if weighted_amb > 0 else None
+                ),
+            }
+        ]
+    )
     return grouped, summary
 
 
@@ -178,4 +206,3 @@ def frame_disambiguation_from_bam(
     write_parquet_safe(classes, paths["classes"])
     write_csv_safe(summary, paths["summary"])
     return paths
-

@@ -24,6 +24,7 @@ Public API
 ----------
 apply_policy  — report + policy → report + consequentiality_score + consequential
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -59,15 +60,11 @@ def apply_policy(
     # --- tier confidence: mean SUPPORTED across the chain aspects present ---
     present_calls = [c for c in _CHAIN_CALL_COLS if c in report.columns]
     if present_calls:
-        supported_flags = [
-            (pl.col(c) == _SUPPORTED).cast(pl.Float64) for c in present_calls
-        ]
+        supported_flags = [(pl.col(c) == _SUPPORTED).cast(pl.Float64) for c in present_calls]
         present_counts = [pl.col(c).is_not_null().cast(pl.Float64) for c in present_calls]
         n_present = sum(present_counts[1:], present_counts[0])
         n_supported = sum(supported_flags[1:], supported_flags[0])
-        tier_conf = (
-            pl.when(n_present > 0).then(n_supported / n_present).otherwise(0.0)
-        )
+        tier_conf = pl.when(n_present > 0).then(n_supported / n_present).otherwise(0.0)
     else:
         tier_conf = pl.lit(0.0)
 

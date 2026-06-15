@@ -31,7 +31,9 @@ def _expand_row(r: dict) -> Iterable[dict]:
         }
 
 
-def inspect_parquet(path: str, limit: int = 5, expand: bool = True, out_csv: Optional[str] = None) -> None:
+def inspect_parquet(
+    path: str, limit: int = 5, expand: bool = True, out_csv: Optional[str] = None
+) -> None:
     df = pl.read_parquet(path)
     size = os.path.getsize(path)
     click.echo(f"file: {path}")
@@ -46,10 +48,20 @@ def inspect_parquet(path: str, limit: int = 5, expand: bool = True, out_csv: Opt
         click.echo("\npreview (head):")
         head = df.head(limit)
         # Print a subset of columns to keep it tidy
-        cols = [c for c in [
-            "orf_id", "tran_id", "start_pos_tran", "stop_pos_tran",
-            "locus_id", "feature_chain", "slice_start", "slice_end"
-        ] if c in head.columns]
+        cols = [
+            c
+            for c in [
+                "orf_id",
+                "tran_id",
+                "start_pos_tran",
+                "stop_pos_tran",
+                "locus_id",
+                "feature_chain",
+                "slice_start",
+                "slice_end",
+            ]
+            if c in head.columns
+        ]
         click.echo(head.select(cols))
         return
 
@@ -58,10 +70,14 @@ def inspect_parquet(path: str, limit: int = 5, expand: bool = True, out_csv: Opt
         shown = 0
         for r in df.head(limit).iter_rows(named=True):
             shown += 1
-            click.echo(f"\nORF {r.get('orf_id')} | tran {r.get('tran_id')} | ORF {r.get('start_pos_tran')}→{r.get('stop_pos_tran')}")
+            click.echo(
+                f"\nORF {r.get('orf_id')} | tran {r.get('tran_id')} | ORF {r.get('start_pos_tran')}→{r.get('stop_pos_tran')}"
+            )
             for part in _expand_row(r):
-                k = part["kind"]; fid = part["feature_id"]
-                s = part["slice_start"]; e = part["slice_end"]
+                k = part["kind"]
+                fid = part["feature_id"]
+                s = part["slice_start"]
+                e = part["slice_end"]
                 rng = f" [{s}:{e}]" if s is not None and e is not None else ""
                 click.echo(f"  - {k}: {fid}{rng}")
         if out_csv:
@@ -73,4 +89,3 @@ def inspect_parquet(path: str, limit: int = 5, expand: bool = True, out_csv: Opt
     else:
         click.echo("\n(no composite columns found; printing basic head)")
         click.echo(df.head(limit))
-

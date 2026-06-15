@@ -6,4 +6,3 @@ Modules:
 - deblur:positional deblurring (optional)
 - latent:latent probabilistic refinement (experimental)
 """
-

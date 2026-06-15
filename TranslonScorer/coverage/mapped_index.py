@@ -28,7 +28,7 @@ def build_mapped_index(
 
     Returns path to out_parquet.
     """
-    os.makedirs(os.path.dirname(out_parquet) or '.', exist_ok=True)
+    os.makedirs(os.path.dirname(out_parquet) or ".", exist_ok=True)
 
     # Determine total rows
     n_rows = pl.scan_parquet(read_index_parquet).select(pl.len()).collect().item()
@@ -53,27 +53,33 @@ def build_mapped_index(
 
             # Map genomic -> transcript coords (sample-independent)
             mapped = bam_handlers.bamtranscript(
-                idx_df.select(["chr","start","stop","length","strand","count"]).unique(),
+                idx_df.select(["chr", "start", "stop", "length", "strand", "count"]).unique(),
                 exon_df,
             )
             if mapped.is_empty():
                 continue
 
             # Normalize dtypes for a reliable join (avoid cat vs str mismatches)
-            mapped = mapped.with_columns([
-                pl.col("chr").cast(pl.Utf8),
-                pl.col("strand").cast(pl.Utf8),
-                pl.col("start").cast(pl.Int64),
-                pl.col("stop").cast(pl.Int64),
-                pl.col("length").cast(pl.Int64),
-            ])
-            idx_keys = idx_df.select(["chr","start","stop","length","strand","read_id"]).with_columns([
-                pl.col("chr").cast(pl.Utf8),
-                pl.col("strand").cast(pl.Utf8),
-                pl.col("start").cast(pl.Int64),
-                pl.col("stop").cast(pl.Int64),
-                pl.col("length").cast(pl.Int64),
-            ])
+            mapped = mapped.with_columns(
+                [
+                    pl.col("chr").cast(pl.Utf8),
+                    pl.col("strand").cast(pl.Utf8),
+                    pl.col("start").cast(pl.Int64),
+                    pl.col("stop").cast(pl.Int64),
+                    pl.col("length").cast(pl.Int64),
+                ]
+            )
+            idx_keys = idx_df.select(
+                ["chr", "start", "stop", "length", "strand", "read_id"]
+            ).with_columns(
+                [
+                    pl.col("chr").cast(pl.Utf8),
+                    pl.col("strand").cast(pl.Utf8),
+                    pl.col("start").cast(pl.Int64),
+                    pl.col("stop").cast(pl.Int64),
+                    pl.col("length").cast(pl.Int64),
+                ]
+            )
 
             # Align chromosome naming: add 'chr' prefix to index if absent
             mapped = mapped.with_columns(pl.col("chr").alias("chr_join"))
@@ -85,21 +91,20 @@ def build_mapped_index(
             )
 
             # Re-attach read_id via genomic keys
-            joined = (
-                mapped
-                .join(
-                    idx_keys,
-                    on=["chr_join","start","stop","length","strand"],
-                    how="inner",
-                )
-                .select(["read_id","tran_id","tran_start_bam","length","strand"])  # order cols
-            )
+            joined = mapped.join(
+                idx_keys,
+                on=["chr_join", "start", "stop", "length", "strand"],
+                how="inner",
+            ).select(
+                ["read_id", "tran_id", "tran_start_bam", "length", "strand"]
+            )  # order cols
 
             # Append to Parquet
             total_mapped += joined.height
             tbl = joined.to_arrow()
             if writer is None:
                 from pyarrow import parquet as pq
+
                 writer = pq.ParquetWriter(out_parquet, schema=tbl.schema)
             writer.write_table(tbl)  # type: ignore
 

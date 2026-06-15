@@ -26,9 +26,7 @@ def saveorfsandexons(orf_df, exon_df, filename):
 
     # Keep original chromosome names and concatenate coordinate columns
     exon_df = exon_df.with_columns(
-        pl.col("start", "stop", "tran_start", "tran_stop").apply(
-            lambda x: ",".join(map(str, x))
-        )
+        pl.col("start", "stop", "tran_start", "tran_stop").apply(lambda x: ",".join(map(str, x)))
     )
     exon_df.write_csv(f"{filename}_exons.csv")
     return f"{filename}_annotated_orfs.csv", f"{filename}_exons.csv"
@@ -52,36 +50,32 @@ def asitecalc(df, offsets):
     for length in df["length"].unique().sort():
         if length not in offsets:
             continue
-            
+
         # Process one length at a time
         length_result = (
             df.filter(pl.col("length") == length)
-            .with_columns(
-                pl.col("start").add(offsets[length]).alias("A-site")
-            )
+            .with_columns(pl.col("start").add(offsets[length]).alias("A-site"))
             .select(["chr", "A-site", "count"])
             # Group and aggregate counts immediately
             .group_by(["chr", "A-site"])
             .agg(pl.col("count").sum())
         )
-        
+
         if not length_result.is_empty():
             results.append(length_result)
-        
+
         # Clear memory
         del length_result
-    
+
     if not results:
         return pl.DataFrame()
-    
+
     # Combine results and calculate final positions
     return (
         pl.concat(results)
         .group_by(["chr", "A-site"])
         .agg(pl.col("count").sum())
-        .with_columns(
-            pl.col("A-site").add(1).alias("stop")
-        )
+        .with_columns(pl.col("A-site").add(1).alias("stop"))
         .sort(["chr", "A-site"])
         .select(["chr", "A-site", "stop", "count"])
     )
@@ -102,45 +96,42 @@ def bedtobigwig(bedfile, chromsize, filename):
     log_info("Reading bedGraph data")
     # Read bedGraph data with proper column types
     bed_data = pl.read_csv(
-        bedfile, 
-        separator='\t', 
+        bedfile,
+        separator="\t",
         has_header=False,
         dtypes={
             "column_1": pl.String,
             "column_2": pl.Int64,
             "column_3": pl.Int64,
-            "column_4": pl.Float64
-        }
+            "column_4": pl.Float64,
+        },
     )
-    bed_data = bed_data.rename({
-        "column_1": "chrom",
-        "column_2": "start",
-        "column_3": "end",
-        "column_4": "value"
-    })
-    
+    bed_data = bed_data.rename(
+        {"column_1": "chrom", "column_2": "start", "column_3": "end", "column_4": "value"}
+    )
+
     # Get unique chromosomes from bedGraph
     bed_chroms = set(bed_data["chrom"].unique())
-    bed_has_chr = any(c.startswith('chr') for c in bed_chroms)
-    
+    bed_has_chr = any(c.startswith("chr") for c in bed_chroms)
+
     log_info("Reading chromosome sizes")
     # Read chromosome sizes file and normalize to match bedGraph format
     chrom_sizes = {}
-    with open(chromsize, 'r') as f:
+    with open(chromsize, "r") as f:
         for line in f:
-            chrom, size = line.strip().split('\t')
+            chrom, size = line.strip().split("\t")
             # Normalize chromosome name to match bedGraph format
-            if bed_has_chr and not chrom.startswith('chr'):
+            if bed_has_chr and not chrom.startswith("chr"):
                 chrom = f"chr{chrom}"
-            elif not bed_has_chr and chrom.startswith('chr'):
+            elif not bed_has_chr and chrom.startswith("chr"):
                 chrom = chrom[3:]  # Remove 'chr' prefix
             chrom_sizes[chrom] = int(size)
-    
+
     log_info(f"Found {len(chrom_sizes)} chromosomes in sizes file")
-    
+
     # Filter out chromosomes that aren't in the chromosome sizes file
     bed_data = bed_data.filter(pl.col("chrom").is_in(chrom_sizes.keys()))
-    
+
     if bed_data.is_empty():
         error_msg = (
             "No matching chromosomes found between bedGraph and chromosome sizes after normalization.\n"
@@ -149,71 +140,72 @@ def bedtobigwig(bedfile, chromsize, filename):
         )
         log_error(error_msg)
         raise ValueError(error_msg)
-    
+
     # Ensure all positions are valid
     bed_data = bed_data.filter(pl.col("end") > pl.col("start"))
-    
+
     # Remove any rows with NaN values
     bed_data = bed_data.drop_nulls()
-    
+
     # Sort the data by chromosome and start position
     bed_data = bed_data.sort(["chrom", "start"])
-    
+
     log_info(f"Processed bedGraph data: {len(bed_data)} entries")
-    
+
     # Create bigWig file
     log_info("Creating bigWig file")
     bw_file = bw.open(f"{filename}.bw", "w")
-    
+
     # Add header with chromosome sizes
     bw_file.addHeader(list(chrom_sizes.items()))
-    
+
     # Process chromosomes in a specific order (match chromosome sizes order)
-    chroms_to_process = [chrom for chrom in chrom_sizes.keys() if chrom in bed_data["chrom"].unique()]
+    chroms_to_process = [
+        chrom for chrom in chrom_sizes.keys() if chrom in bed_data["chrom"].unique()
+    ]
     if not chroms_to_process:
         log_error("No matched chromosomes to process - check that chromsizes matches BAM/bedGraph")
-    
+
     for chrom in chroms_to_process:
         chrom_data = bed_data.filter(pl.col("chrom") == chrom)
         if len(chrom_data) == 0:
             continue
-            
+
         log_info(f"Processing chromosome {chrom} with {len(chrom_data)} entries")
-        
+
         try:
             # Convert polars Series to lists
             starts = chrom_data["start"].to_list()
             ends = chrom_data["end"].to_list()
             values = chrom_data["value"].to_list()
-            
+
             # Validate positions against chromosome size
             max_pos = max(ends)
             if max_pos > chrom_sizes[chrom]:
-                log_warning(f"Trimming entries exceeding chromosome {chrom} size ({max_pos} > {chrom_sizes[chrom]})")
-                
+                log_warning(
+                    f"Trimming entries exceeding chromosome {chrom} size ({max_pos} > {chrom_sizes[chrom]})"
+                )
+
                 # Filter entries to be within chromosome size
-                valid_entries = [(s, e, v) for s, e, v in zip(starts, ends, values) if e <= chrom_sizes[chrom]]
+                valid_entries = [
+                    (s, e, v) for s, e, v in zip(starts, ends, values) if e <= chrom_sizes[chrom]
+                ]
                 if not valid_entries:
                     log_warning(f"No valid entries for chromosome {chrom} after trimming")
                     continue
-                    
+
                 starts, ends, values = zip(*valid_entries)
-            
+
             # Add entries chromosome by chromosome
-            bw_file.addEntries(
-                [chrom] * len(starts),
-                starts,
-                ends=ends,
-                values=values
-            )
-            
+            bw_file.addEntries([chrom] * len(starts), starts, ends=ends, values=values)
+
             log_info(f"Successfully added {len(starts)} entries for chromosome {chrom}")
-            
+
         except Exception as e:
             log_error(f"Error processing chromosome {chrom}: {str(e)}")
             # Continue with next chromosome instead of terminating the whole process
             continue
-    
+
     bw_file.close()
     log_info(f"Successfully created {filename}.bw")
-    return f"{filename}.bw" 
+    return f"{filename}.bw"

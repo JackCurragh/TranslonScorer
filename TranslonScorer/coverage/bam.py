@@ -17,6 +17,7 @@ Dependencies
 pysam   — BAM reading (CIGAR, fetch)
 oxbow   — optional faster reader (falls back to pysam when unavailable)
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -82,9 +83,7 @@ class BamSetProvider:
             )
         # Lazily-built {tran_id: ExonModel} for transcriptome→genome projection.
         self._exon_index: Optional[dict] = None
-        self._sample_names = sample_names or [
-            Path(b).stem for b in bams
-        ]
+        self._sample_names = sample_names or [Path(b).stem for b in bams]
         if len(self._sample_names) != len(self._bams):
             raise ValueError(
                 f"sample_names length ({len(self._sample_names)}) must match "
@@ -120,6 +119,7 @@ class BamSetProvider:
             else:  # metagene
                 if not self._start_codons:
                     from TranslonScorer.utils.logging import log_warning
+
                     log_warning(
                         f"metagene offsets need start_codons; falling back to "
                         f"global offset={self._offset_params.global_offset} for {bam_path.name}"
@@ -129,8 +129,10 @@ class BamSetProvider:
                     hist = self._build_metagene_histogram(bam_path)
                     # global base over usable lengths; metagene overrides where it
                     # has evidence (avoids missing-length gaps).
-                    table = {**global_offsets(self._offset_params),
-                             **metagene_offsets(hist, self._offset_params)}
+                    table = {
+                        **global_offsets(self._offset_params),
+                        **metagene_offsets(hist, self._offset_params),
+                    }
             tables[bam_path] = table
 
         self._offset_tables = tables
@@ -163,12 +165,14 @@ class BamSetProvider:
                     if length == 0 or rec.reference_end is None:
                         continue
                     if strand > 0:
-                        rel = spos - rec.reference_start          # 5′=ref_start
+                        rel = spos - rec.reference_start  # 5′=ref_start
                     else:
-                        rel = (rec.reference_end - 1) - spos      # 5′=ref_end-1
+                        rel = (rec.reference_end - 1) - spos  # 5′=ref_end-1
                     counts[(length, rel)] = counts.get((length, rel), 0.0) + 1.0
         if not counts:
-            return pl.DataFrame(schema={"read_length": pl.Int64, "rel_pos": pl.Int64, "count": pl.Float64})
+            return pl.DataFrame(
+                schema={"read_length": pl.Int64, "rel_pos": pl.Int64, "count": pl.Float64}
+            )
         return pl.DataFrame(
             [{"read_length": L, "rel_pos": r, "count": c} for (L, r), c in counts.items()],
             schema={"read_length": pl.Int64, "rel_pos": pl.Int64, "count": pl.Float64},
@@ -218,8 +222,9 @@ class BamSetProvider:
         for bam_path, sample_id in zip(self._bams, self._sample_names):
             table = offset_tables[bam_path]
             if self._transcriptome:
-                rows.extend(self._transcriptome_rows(
-                    pysam, bam_path, sample_id, table, regions, site))
+                rows.extend(
+                    self._transcriptome_rows(pysam, bam_path, sample_id, table, regions, site)
+                )
                 continue
             bam_rows: List[dict] = []
             try:
@@ -239,9 +244,15 @@ class BamSetProvider:
                                 continue
                             p_offset = table.get(length, self._offset_params.global_offset)
                             strand, pos = site_position(
-                                rec.reference_start, rec.reference_end, rec.is_reverse, p_offset, site)
+                                rec.reference_start,
+                                rec.reference_end,
+                                rec.is_reverse,
+                                p_offset,
+                                site,
+                            )
                             bam_rows.append(
-                                {"sample_id": sample_id, "strand": strand, "pos": pos, "count": 1.0})
+                                {"sample_id": sample_id, "strand": strand, "pos": pos, "count": 1.0}
+                            )
             except (OSError, ValueError):
                 continue
 
@@ -253,13 +264,21 @@ class BamSetProvider:
                 schema["sample_id"] = pl.Utf8
             return pl.DataFrame(schema=schema)
 
-        df = pl.DataFrame(rows, schema={"sample_id": pl.Utf8, "strand": pl.Int64,
-                                        "pos": pl.Int64, "count": pl.Float64})
-        keys = (["sample_id", "strand", "pos"] if by_sample else ["strand", "pos"])
+        df = pl.DataFrame(
+            rows,
+            schema={"sample_id": pl.Utf8, "strand": pl.Int64, "pos": pl.Int64, "count": pl.Float64},
+        )
+        keys = ["sample_id", "strand", "pos"] if by_sample else ["strand", "pos"]
         return df.group_by(keys).agg(pl.col("count").sum()).sort(keys)
 
     def _transcriptome_rows(
-        self, pysam, bam_path, sample_id, table, regions, site,
+        self,
+        pysam,
+        bam_path,
+        sample_id,
+        table,
+        regions,
+        site,
     ) -> List[dict]:
         """Project transcriptome-aligned reads to genome P/A-site rows.
 
@@ -270,8 +289,10 @@ class BamSetProvider:
         """
         from collections import defaultdict
         from TranslonScorer.coverage.transcriptome import (
-            build_exon_index, project_to_genome,
+            build_exon_index,
+            project_to_genome,
         )
+
         if self._exon_index is None:
             assert self._exon_df is not None  # guaranteed by __init__ guard
             self._exon_index = build_exon_index(self._exon_df)
@@ -291,8 +312,7 @@ class BamSetProvider:
                     length = rec.query_length or 0
                     if length == 0:
                         continue
-                    per_read[rec.query_name].append(
-                        (tran_id, int(rec.reference_start), length))
+                    per_read[rec.query_name].append((tran_id, int(rec.reference_start), length))
         except (OSError, ValueError):
             return []
 
@@ -325,10 +345,11 @@ class BamSetProvider:
                 continue  # genuine genomic multimapper
             else:
                 weight = 1.0 / len(sites)
-            for (chrom, strand, gpos) in sites:
+            for chrom, strand, gpos in sites:
                 if _in_regions(chrom, gpos):
-                    out.append({"sample_id": sample_id, "strand": strand,
-                                "pos": gpos, "count": weight})
+                    out.append(
+                        {"sample_id": sample_id, "strand": strand, "pos": gpos, "count": weight}
+                    )
         return out
 
     def size_factors(self) -> Dict[str, float]:
@@ -382,7 +403,9 @@ class BamSetProvider:
                                         blocks[i][1] - blocks[i][0],
                                         blocks[i + 1][1] - blocks[i + 1][0],
                                     )
-                                    kind = "span_conf" if overhang >= _JUNC_OVERHANG else "span_short"
+                                    kind = (
+                                        "span_conf" if overhang >= _JUNC_OVERHANG else "span_short"
+                                    )
                                     break
                             if kind is None:
                                 for bs, be in blocks:
@@ -402,11 +425,7 @@ class BamSetProvider:
 
         df = pl.DataFrame(rows)
         group_cols = ["junction_id", "kind"] + (["sample_id"] if by_sample else [])
-        return (
-            df.group_by(group_cols)
-            .agg(pl.col("count").sum())
-            .sort("junction_id")
-        )
+        return df.group_by(group_cols).agg(pl.col("count").sum()).sort("junction_id")
 
     # ------------------------------------------------------------------
     # SupportsMappability
@@ -420,6 +439,7 @@ class BamSetProvider:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _resolve_chrom(chrom: str, refs: set) -> Optional[str]:
     """Resolve a chromosome name against the set of BAM references."""

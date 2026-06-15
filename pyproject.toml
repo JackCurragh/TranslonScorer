@@ -87,3 +87,19 @@ include-package-data = true
 [tool.setuptools.packages.find]
 include = ["TranslonScorer", "TranslonScorer.*"]
 exclude = ["data/*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+extend-exclude = "(build|dist)/"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+# Formatting (line length etc.) is black's job; ruff handles correctness +
+# imports. E501 off (black wraps); F catches unused imports / undefined names.
+select = ["E", "F", "W", "I"]
+ignore = ["E501", "E741"]

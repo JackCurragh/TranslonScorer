@@ -14,6 +14,7 @@ _decide_step        — coverage step evidence → (eligibility, call)
 _elong_evidence     — frame-sum tallies → elongation evidence dict
 event_record        — raw evidence dict → one long-form record dict
 """
+
 from __future__ import annotations
 
 import json as _json
@@ -48,6 +49,7 @@ _RECORD_SCHEMA = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _jsonable(v):
     """Coerce a value to JSON-safe form (replaces inf/nan with strings)."""
     if isinstance(v, dict):
@@ -60,6 +62,7 @@ def _jsonable(v):
 # ---------------------------------------------------------------------------
 # Eligibility / call
 # ---------------------------------------------------------------------------
+
 
 def _decide_step(
     ev: dict,
@@ -79,7 +82,7 @@ def _decide_step(
         return "ELIGIBLE", "SUPPORTED"
     if r <= 0:
         return "ELIGIBLE", "UNSUPPORTED"
-    return "ELIGIBLE", "AMBIGUOUS"   # borderline: 0 < rise < threshold
+    return "ELIGIBLE", "AMBIGUOUS"  # borderline: 0 < rise < threshold
 
 
 def _elong_evidence(
@@ -88,7 +91,7 @@ def _elong_evidence(
     clean_tot: float,
     clean_inf: float,
     cont_tot: float,
-    cont_by_frame,          # list/array of length 3
+    cont_by_frame,  # list/array of length 3
     a_e: int,
     comp_frame: Dict[int, int],
     contended_nt: int,
@@ -107,13 +110,10 @@ def _elong_evidence(
     breadth = (covered / span_nt) if span_nt else 0.0
 
     competitor_share: Dict[int, float] = {
-        cid: ((cont_by_frame[af] / cont_tot) if cont_tot else 0.0)
-        for cid, af in comp_frame.items()
+        cid: ((cont_by_frame[af] / cont_tot) if cont_tot else 0.0) for cid, af in comp_frame.items()
     }
     noise_frame = {0, 1, 2} - {a_e} - set(comp_frame.values())
-    noise_share = (
-        sum(cont_by_frame[f] for f in noise_frame) / cont_tot
-    ) if cont_tot else 0.0
+    noise_share = (sum(cont_by_frame[f] for f in noise_frame) / cont_tot) if cont_tot else 0.0
 
     effective_in_frame = clean_in_frame if clean_in_frame is not None else overall_in_frame
     if n < thr.min_reads:
@@ -146,6 +146,7 @@ def _elong_evidence(
 # ---------------------------------------------------------------------------
 # Record serialisation
 # ---------------------------------------------------------------------------
+
 
 def event_record(
     event_id: int,

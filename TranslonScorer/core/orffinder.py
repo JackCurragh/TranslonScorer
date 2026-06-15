@@ -26,12 +26,12 @@ def find_all_positions(sequence, automaton):
     """
     frames = {0: [], 1: [], 2: []}
     codons = {}
-    
+
     for end_pos, pattern in automaton.iter(sequence):
         # position of last nucleotide of codon returned
         frames[(end_pos - 2) % 3].append(end_pos)
         codons[end_pos] = pattern
-        
+
     return frames, codons
 
 
@@ -56,7 +56,7 @@ def find_orfs(sequence, tran_id, startautomaton, stopautomaton, minlength=0, max
             - startorf: Start codon sequence
             - stoporf: Stop codon sequence
     """
-    
+
     orf_list = []
     startpositions, start_codons = find_all_positions(sequence, startautomaton)
     stoppositions, stop_codons = find_all_positions(sequence, stopautomaton)
@@ -65,7 +65,7 @@ def find_orfs(sequence, tran_id, startautomaton, stopautomaton, minlength=0, max
         for position in startpositions:
             # Find valid stop codons downstream of start position
             valid_stops = [i for i in stoppositions[frame] if i > position]
-            
+
             if valid_stops:
                 stopposition = min(valid_stops)
                 stopcodon = stop_codons[stopposition]
@@ -80,7 +80,7 @@ def find_orfs(sequence, tran_id, startautomaton, stopautomaton, minlength=0, max
                 "stop": stopposition - 3 if stopcodon in ["TAA", "TAG", "TGA"] else stopposition,
                 "length": stopposition - position,
                 "startorf": start_codons[position],
-                "stoporf": stopcodon
+                "stoporf": stopcodon,
             }
 
             # Filter by length
@@ -101,10 +101,10 @@ def build_codon_automaton(codons):
         ahocorasick.Automaton: Compiled automaton for pattern matching
     """
     automaton = ahocorasick.Automaton()
-    
+
     for codon in codons:
         automaton.add_word(codon, codon)
-    
+
     automaton.make_automaton()
     return automaton
 
@@ -128,7 +128,7 @@ def preporfs(sequence_input, start_codons=None, stop_codons=None, minlength=0, m
         start_codons = ["ATG"]
     if stop_codons is None:
         stop_codons = ["TAA", "TAG", "TGA"]
-    
+
     # Handle input type
     if isinstance(sequence_input, str):
         # Input is a file path, read FASTA
@@ -152,17 +152,19 @@ def preporfs(sequence_input, start_codons=None, stop_codons=None, minlength=0, m
             startautomaton=start_automaton,
             stopautomaton=stop_automaton,
             minlength=minlength,
-            maxlength=maxlength
+            maxlength=maxlength,
         )
         all_orfs.extend(orfs)
-    
+
     if not all_orfs:
-        return pl.DataFrame(schema={
-            'tran_id': pl.Utf8,
-            'start': pl.Int64,
-            'stop': pl.Int64,
-            'length': pl.Int64,
-            'sequence': pl.Utf8
-        })
-    
-    return pl.DataFrame(all_orfs) 
+        return pl.DataFrame(
+            schema={
+                "tran_id": pl.Utf8,
+                "start": pl.Int64,
+                "stop": pl.Int64,
+                "length": pl.Int64,
+                "sequence": pl.Utf8,
+            }
+        )
+
+    return pl.DataFrame(all_orfs)

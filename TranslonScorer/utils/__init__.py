@@ -13,8 +13,8 @@ from .logging import (
 )
 
 __all__ = [
-    'setup_logging',
-    'log_info',
-    'log_warning',
-    'log_error',
-] 
+    "setup_logging",
+    "log_info",
+    "log_warning",
+    "log_error",
+]

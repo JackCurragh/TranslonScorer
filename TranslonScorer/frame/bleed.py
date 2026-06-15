@@ -17,9 +17,9 @@ def _cds_interior(cds_df: pl.DataFrame, trim_nt: int = 30) -> pl.DataFrame:
     # Support both (tran_start,tran_stop) and (start,stop) column names
     start_col = "tran_start" if "tran_start" in cds_df.columns else "start"
     stop_col = "tran_stop" if "tran_stop" in cds_df.columns else "stop"
-    df = cds_df.with_columns(
-        (pl.col(stop_col) - pl.col(start_col)).alias("cds_len")
-    ).filter(pl.col("cds_len") >= 2 * trim_nt)
+    df = cds_df.with_columns((pl.col(stop_col) - pl.col(start_col)).alias("cds_len")).filter(
+        pl.col("cds_len") >= 2 * trim_nt
+    )
     if df.is_empty():
         return pl.DataFrame({"tran_id": [], "start": [], "stop": []})
     return df.select(
@@ -74,11 +74,15 @@ def learn_confusion(
 
     out: Dict[Optional[int], np.ndarray] = {}
     if has_length:
-        global_sums = np.array([float(agg.filter(pl.col("frame") == i)["sum"].sum()) for i in range(3)])
+        global_sums = np.array(
+            [float(agg.filter(pl.col("frame") == i)["sum"].sum()) for i in range(3)]
+        )
         out[None] = _shrink_and_stabilize(_cyclic_confusion_from_offsets(global_sums))
         for L in agg.get_column("length").unique().to_list():
             sub = agg.filter(pl.col("length") == L)
-            sums = np.array([float(sub.filter(pl.col("frame") == i)["sum"].sum()) for i in range(3)])
+            sums = np.array(
+                [float(sub.filter(pl.col("frame") == i)["sum"].sum()) for i in range(3)]
+            )
             out[int(L)] = _shrink_and_stabilize(_cyclic_confusion_from_offsets(sums))
     else:
         sums = np.array([float(agg.filter(pl.col("frame") == i)["sum"].sum()) for i in range(3)])

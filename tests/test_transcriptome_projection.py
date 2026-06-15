@@ -4,6 +4,7 @@ The integration test builds a tiny transcriptome-aligned BAM (references are
 transcript ids) and checks that BamSetProvider projects reads to the right
 genomic P/A-site, including isoform-multimapper convergence on a shared exon.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -15,22 +16,26 @@ pysam = pytest.importorskip("pysam")
 # Two-exon + strand transcript and a - strand transcript, plus a second isoform
 # of TX1 that shares the first exon (for multimapper convergence).
 def _exon_df() -> pl.DataFrame:
-    return pl.DataFrame({
-        "tran_id": ["TX1", "TX2", "TX1b"],
-        "chr": ["chr1", "chr2", "chr1"],
-        "strand": ["+", "-", "+"],
-        "start": [[100, 200], [500, 400], [100, 300]],
-        "stop": [[130, 230], [520, 420], [130, 330]],
-        "tran_start": [[0, 30], [0, 20], [0, 30]],
-    })
+    return pl.DataFrame(
+        {
+            "tran_id": ["TX1", "TX2", "TX1b"],
+            "chr": ["chr1", "chr2", "chr1"],
+            "strand": ["+", "-", "+"],
+            "start": [[100, 200], [500, 400], [100, 300]],
+            "stop": [[130, 230], [520, 420], [130, 330]],
+            "tran_start": [[0, 30], [0, 20], [0, 30]],
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # pure projection
 # ---------------------------------------------------------------------------
 
+
 def test_build_and_project_plus_strand():
     from TranslonScorer.coverage.transcriptome import build_exon_index, project_to_genome
+
     idx = build_exon_index(_exon_df())
     tx1 = idx["TX1"]
     assert tx1.chrom == "chr1" and tx1.strand == 1
@@ -44,6 +49,7 @@ def test_build_and_project_plus_strand():
 
 def test_project_minus_strand():
     from TranslonScorer.coverage.transcriptome import build_exon_index, project_to_genome
+
     idx = build_exon_index(_exon_df())
     tx2 = idx["TX2"]
     assert tx2.strand == -1
@@ -55,6 +61,7 @@ def test_project_minus_strand():
 
 def test_build_exon_index_missing_columns():
     from TranslonScorer.coverage.transcriptome import build_exon_index
+
     with pytest.raises(ValueError):
         build_exon_index(pl.DataFrame({"tran_id": ["X"]}))
 
@@ -63,10 +70,10 @@ def test_build_exon_index_missing_columns():
 # BamSetProvider transcriptome integration
 # ---------------------------------------------------------------------------
 
+
 def _write_transcriptome_bam(path, records, refs):
     """records: list of (qname, ref_name, tran_start, length)."""
-    header = {"HD": {"VN": "1.0"},
-              "SQ": [{"SN": name, "LN": ln} for name, ln in refs]}
+    header = {"HD": {"VN": "1.0"}, "SQ": [{"SN": name, "LN": ln} for name, ln in refs]}
     name_to_id = {name: i for i, (name, _) in enumerate(refs)}
     with pysam.AlignmentFile(str(path), "wb", header=header) as bam:
         for qname, ref, tstart, length in records:
@@ -94,7 +101,9 @@ def test_transcriptome_coverage_projects_to_genome(tmp_path):
     _write_transcriptome_bam(bam, [("r1", "TX1", 0, 30)], [("TX1", 60), ("TX2", 40), ("TX1b", 60)])
 
     provider = BamSetProvider(
-        [str(bam)], exon_df=_exon_df(), transcriptome=True,
+        [str(bam)],
+        exon_df=_exon_df(),
+        transcriptome=True,
         offsets=OffsetParams(method="global", global_offset=12),
     )
     cov = provider.coverage([Region("chr1", 100, 230)], site="P")
@@ -120,7 +129,9 @@ def test_transcriptome_isoform_multimapper_convergence(tmp_path):
         [("TX1", 60), ("TX2", 40), ("TX1b", 60)],
     )
     provider = BamSetProvider(
-        [str(bam)], exon_df=_exon_df(), transcriptome=True,
+        [str(bam)],
+        exon_df=_exon_df(),
+        transcriptome=True,
         offsets=OffsetParams(method="global", global_offset=12),
     )
     cov = provider.coverage([Region("chr1", 100, 230)], site="P")
@@ -142,7 +153,10 @@ def test_transcriptome_divergent_multimapper_dropped_when_unique(tmp_path):
         [("TX1", 60), ("TX2", 40), ("TX1b", 60)],
     )
     provider = BamSetProvider(
-        [str(bam)], exon_df=_exon_df(), transcriptome=True, multimap="unique",
+        [str(bam)],
+        exon_df=_exon_df(),
+        transcriptome=True,
+        multimap="unique",
         offsets=OffsetParams(method="global", global_offset=12),
     )
     cov = provider.coverage([Region("chr1", 100, 230)], site="P")

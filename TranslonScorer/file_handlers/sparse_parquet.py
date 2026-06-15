@@ -4,6 +4,7 @@ The sparse matrix stores read counts by sample/run; the companion BAM stores
 the genomic location for each unique read. This module joins those two pieces
 without materializing the full matrix.
 """
+
 from __future__ import annotations
 
 import json
@@ -64,7 +65,9 @@ def _parse_read_id(query_name: str) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
-def _load_tombstone_filters(manifest_path: Path, manifest: dict) -> tuple[set[int], set[str], set[str]]:
+def _load_tombstone_filters(
+    manifest_path: Path, manifest: dict
+) -> tuple[set[int], set[str], set[str]]:
     raw = manifest.get("tombstones_path", "global_tombstones.parquet")
     tombstones_path = manifest_path.parent / raw
     if not tombstones_path.exists():
@@ -91,7 +94,9 @@ def _load_tombstone_filters(manifest_path: Path, manifest: dict) -> tuple[set[in
 
 
 def _load_samples(manifest_path: Path, manifest: dict) -> pl.LazyFrame:
-    samples_path = manifest_path.parent / manifest.get("lookup_tables", {}).get("samples", "global_samples.parquet")
+    samples_path = manifest_path.parent / manifest.get("lookup_tables", {}).get(
+        "samples", "global_samples.parquet"
+    )
     if not samples_path.exists():
         raise FileNotFoundError(f"Sample lookup table does not exist: {samples_path}")
     return pl.scan_parquet(str(samples_path)).select(
@@ -159,6 +164,7 @@ def _spool_bam_events(
                     )
                 # Normalise chromosome names: if BAM uses chr-prefix and regions don't (or vice versa)
                 bam_chroms = set(bam.references)
+
                 def _normalise_chrom(chrom: str) -> Optional[str]:
                     if chrom in bam_chroms:
                         return chrom
@@ -185,7 +191,14 @@ def _spool_bam_events(
                 start = int(record.reference_start)
                 stop = int(record.reference_end or record.reference_start)
                 length = int(record.query_length or max(0, stop - start))
-                event_key = (read_id, record.reference_name, start, stop, strand, record.cigarstring)
+                event_key = (
+                    read_id,
+                    record.reference_name,
+                    start,
+                    stop,
+                    strand,
+                    record.cigarstring,
+                )
                 if regions and event_key in seen_region_events:
                     continue
                 seen_region_events.add(event_key)
@@ -194,7 +207,9 @@ def _spool_bam_events(
                 if handle is None:
                     path = out_dir / f"events.read_bucket={read_bucket:06d}.tsv"
                     handle = open(path, "w")
-                    handle.write("read_bucket\tread_id\tchr\tstart\tstop\tstrand\tlength\tevent_count\n")
+                    handle.write(
+                        "read_bucket\tread_id\tchr\tstart\tstop\tstrand\tlength\tevent_count\n"
+                    )
                     handles[read_bucket] = handle
                     paths[read_bucket] = path
                 handle.write(
@@ -224,7 +239,9 @@ def sparse_matrix_genomic_counts(
     read_bucket_size = int(manifest["read_bucket_size"])
     generation_roots = _generation_paths(manifest_file, manifest)
     samples = _load_samples(manifest_file, manifest)
-    read_tombstones, sample_tombstones, study_tombstones = _load_tombstone_filters(manifest_file, manifest)
+    read_tombstones, sample_tombstones, study_tombstones = _load_tombstone_filters(
+        manifest_file, manifest
+    )
     if sample_names:
         samples = samples.filter(pl.col("sample_name").is_in(sample_names))
     if sample_tombstones:
@@ -232,7 +249,11 @@ def sparse_matrix_genomic_counts(
     if study_tombstones:
         samples = samples.filter(~pl.col("study_id").is_in(sorted(study_tombstones)))
 
-    fetch_regions = regions if regions is not None else (_regions_from_exons(exon_df) if exon_df is not None else None)
+    fetch_regions = (
+        regions
+        if regions is not None
+        else (_regions_from_exons(exon_df) if exon_df is not None else None)
+    )
     with tempfile.TemporaryDirectory(prefix="translonscorer_sparse_matrix_") as tmp:
         event_paths = _spool_bam_events(
             bam_path,
@@ -251,8 +272,22 @@ def sparse_matrix_genomic_counts(
             joined = (
                 events.join(counts, on="read_id", how="inner")
                 .join(samples, on=["sample_id", "study_id_int"], how="inner")
-                .with_columns((pl.col("event_count").cast(pl.Float64) * pl.col("count").cast(pl.Float64)).alias("_count"))
-                .group_by("sample_name", "sample_id", "study_id", "study_id_int", "chr", "start", "stop", "strand", "length")
+                .with_columns(
+                    (
+                        pl.col("event_count").cast(pl.Float64) * pl.col("count").cast(pl.Float64)
+                    ).alias("_count")
+                )
+                .group_by(
+                    "sample_name",
+                    "sample_id",
+                    "study_id",
+                    "study_id_int",
+                    "chr",
+                    "start",
+                    "stop",
+                    "strand",
+                    "length",
+                )
                 .agg(pl.col("_count").sum().alias("count"))
                 .select(
                     pl.col("sample_name").alias("sample_id"),
@@ -287,7 +322,17 @@ def sparse_matrix_genomic_counts(
         )
     return (
         pl.concat(parts)
-        .group_by("sample_id", "sample_index", "study_id", "study_id_int", "chr", "start", "stop", "strand", "length")
+        .group_by(
+            "sample_id",
+            "sample_index",
+            "study_id",
+            "study_id_int",
+            "chr",
+            "start",
+            "stop",
+            "strand",
+            "length",
+        )
         .agg(pl.col("count").sum())
         .sort(["sample_id", "chr", "start", "strand", "length"])
     )

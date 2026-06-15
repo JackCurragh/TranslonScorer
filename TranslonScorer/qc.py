@@ -13,6 +13,7 @@ _assign_frames_sweep              — sweep-line CDS frame assignment for reads
 frame_dominance_matrix            — periodicity_qc output → read_length × sample matrix
 _empty_periodicity_schema         — empty DataFrame with the periodicity_qc schema
 """
+
 from __future__ import annotations
 
 import heapq
@@ -27,6 +28,7 @@ import polars as pl
 # ---------------------------------------------------------------------------
 # Periodicity score (RiboMetric formula)
 # ---------------------------------------------------------------------------
+
 
 def _compute_periodicity_from_frames(frames: Dict[int, float]) -> Dict:
     """Entropy-reduction periodicity score — exact RiboMetric formula (sqrt of info ratio).
@@ -80,7 +82,9 @@ def _ribometric_frame_scores(
 
     return {
         "periodicity_score": global_score,
-        "f0": agg[0] / t, "f1": agg[1] / t, "f2": agg[2] / t,
+        "f0": agg[0] / t,
+        "f1": agg[1] / t,
+        "f2": agg[2] / t,
         "n_reads": int(total_reads),
         "per_length": {l: s for l, (s, _) in per_length.items()},
     }
@@ -89,6 +93,7 @@ def _ribometric_frame_scores(
 # ---------------------------------------------------------------------------
 # Offset nudging
 # ---------------------------------------------------------------------------
+
 
 def _nudge_to_frame0(
     length_frame_dist: Dict[int, Dict[int, float]],
@@ -119,6 +124,7 @@ def _nudge_to_frame0(
 # Frame assignment (sweep-line, pure)
 # ---------------------------------------------------------------------------
 
+
 def _assign_frames_sweep(
     read_ids: List[int],
     asites: "np.ndarray",
@@ -140,7 +146,7 @@ def _assign_frames_sweep(
     sorted_rids = [read_ids[i] for i in order]
 
     result: Dict[int, int] = {}
-    active: list = []   # min-heap: (end_exclusive, phase)
+    active: list = []  # min-heap: (end_exclusive, phase)
     iv_ptr = 0
     n_ivs = len(intervals)
 
@@ -164,6 +170,7 @@ def _assign_frames_sweep(
 # ---------------------------------------------------------------------------
 # Frame-dominance matrix (pure pivot over periodicity_qc output)
 # ---------------------------------------------------------------------------
+
 
 def frame_dominance_matrix(
     perio_df: pl.DataFrame,
@@ -196,11 +203,13 @@ def frame_dominance_matrix(
             n = sum(counts)
             if n < min_reads:
                 continue
-            long_rows.append({
-                "read_length": int(length_str),
-                "sample_id": sample,
-                "value": float(vals.get(length_str, 0.0)),
-            })
+            long_rows.append(
+                {
+                    "read_length": int(length_str),
+                    "sample_id": sample,
+                    "value": float(vals.get(length_str, 0.0)),
+                }
+            )
 
     if not long_rows:
         return pl.DataFrame(schema={"read_length": pl.Int64})
@@ -214,14 +223,19 @@ def frame_dominance_matrix(
 # Empty schema helper
 # ---------------------------------------------------------------------------
 
+
 def _empty_periodicity_schema() -> pl.DataFrame:
-    return pl.DataFrame(schema={
-        "sample_id": pl.Utf8,
-        "periodicity_score": pl.Float64,
-        "f0": pl.Float64, "f1": pl.Float64, "f2": pl.Float64,
-        "n_cds_reads": pl.Int64,
-        "recommended_offsets": pl.Utf8,
-        "read_frame_distribution": pl.Utf8,
-        "per_length_periodicity": pl.Utf8,
-        "per_length_dominance": pl.Utf8,
-    })
+    return pl.DataFrame(
+        schema={
+            "sample_id": pl.Utf8,
+            "periodicity_score": pl.Float64,
+            "f0": pl.Float64,
+            "f1": pl.Float64,
+            "f2": pl.Float64,
+            "n_cds_reads": pl.Int64,
+            "recommended_offsets": pl.Utf8,
+            "read_frame_distribution": pl.Utf8,
+            "per_length_periodicity": pl.Utf8,
+            "per_length_dominance": pl.Utf8,
+        }
+    )

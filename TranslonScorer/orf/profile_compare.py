@@ -26,10 +26,14 @@ def _normalize_profiles(df: pl.DataFrame, count_col: str = "count") -> pl.DataFr
         df = df.rename(rename)
     required = {"tran_id", "pos", count_col}
     if not required.issubset(set(df.columns)):
-        raise ValueError(f"Profile table missing required columns: {sorted(required - set(df.columns))}")
+        raise ValueError(
+            f"Profile table missing required columns: {sorted(required - set(df.columns))}"
+        )
     return (
         df.select(["tran_id", "pos", count_col])
-        .with_columns(pl.col("pos").cast(pl.Int64), pl.col(count_col).cast(pl.Float64).alias("count"))
+        .with_columns(
+            pl.col("pos").cast(pl.Int64), pl.col(count_col).cast(pl.Float64).alias("count")
+        )
         .group_by(["tran_id", "pos"])
         .agg(pl.col("count").sum().alias("count"))
         .sort(["tran_id", "pos"])
@@ -69,7 +73,11 @@ def compare_profiles(
     total_a = float(np.sum(x)) if x.size else 0.0
     total_b = float(np.sum(y)) if y.size else 0.0
     abs_delta = joined["abs_delta"].to_numpy()
-    rmse = float(np.sqrt(np.mean(np.square(joined["count_delta"].to_numpy())))) if joined.height else None
+    rmse = (
+        float(np.sqrt(np.mean(np.square(joined["count_delta"].to_numpy()))))
+        if joined.height
+        else None
+    )
 
     summary: dict[str, Any] = {
         "label_a": label_a,
@@ -85,8 +93,18 @@ def compare_profiles(
         "mae": float(np.mean(abs_delta)) if abs_delta.size else None,
         "rmse": rmse,
         "pearson_r": pearson,
-        "a_only_mass": float(joined.filter((pl.col(f"count_{label_a}") > 0) & (pl.col(f"count_{label_b}") == 0))[f"count_{label_a}"].sum() or 0.0),
-        "b_only_mass": float(joined.filter((pl.col(f"count_{label_b}") > 0) & (pl.col(f"count_{label_a}") == 0))[f"count_{label_b}"].sum() or 0.0),
+        "a_only_mass": float(
+            joined.filter((pl.col(f"count_{label_a}") > 0) & (pl.col(f"count_{label_b}") == 0))[
+                f"count_{label_a}"
+            ].sum()
+            or 0.0
+        ),
+        "b_only_mass": float(
+            joined.filter((pl.col(f"count_{label_b}") > 0) & (pl.col(f"count_{label_a}") == 0))[
+                f"count_{label_b}"
+            ].sum()
+            or 0.0
+        ),
     }
     return joined, pl.DataFrame([summary])
 
@@ -112,4 +130,3 @@ def compare_profile_files(
         paths["deltas"] = f"{out_prefix}.profile_compare.deltas.parquet"
         write_parquet_safe(joined, paths["deltas"])
     return paths
-

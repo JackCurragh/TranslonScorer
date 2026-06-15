@@ -28,6 +28,7 @@ Tier 2 — periodicity_qc (all partitions + annotation)
 Entry point: matrix_qc() runs both tiers (periodicity only when bam_path
 and exon_df are supplied) and returns a joined DataFrame.
 """
+
 from __future__ import annotations
 
 import collections
@@ -64,6 +65,7 @@ from TranslonScorer.io.matrix import (  # noqa: F401, E402
 # Tier 1: length distribution QC (no BAM)
 # ---------------------------------------------------------------------------
 
+
 def fast_length_qc(
     partition_dir: str | Path,
     *,
@@ -76,9 +78,9 @@ def fast_length_qc(
         mean_length, peak_length, rpf_28_32_prop, length_cv
     """
     mp, manifest = _manifest(partition_dir)
-    count_files  = _count_parquets(mp, manifest)
-    reads_path   = _reads_parquet_path(mp, manifest)
-    samples      = _samples_df(mp, manifest)
+    count_files = _count_parquets(mp, manifest)
+    reads_path = _reads_parquet_path(mp, manifest)
+    samples = _samples_df(mp, manifest)
 
     if sample_names:
         samples = samples.filter(pl.col("sample_name").is_in(sample_names))
@@ -86,18 +88,19 @@ def fast_length_qc(
     log_info(f"Length QC: {len(count_files)} count file(s), {samples.height} samples")
 
     counts_lf = pl.scan_parquet(count_files)
-    reads_lf  = pl.scan_parquet(reads_path).select(["read_id", "length"])
+    reads_lf = pl.scan_parquet(reads_path).select(["read_id", "length"])
     sample_lf = samples.lazy().select(["sample_id", "sample_name", "study_id"])
 
     per_sl = (
-        counts_lf
-        .join(reads_lf, on="read_id", how="inner")
+        counts_lf.join(reads_lf, on="read_id", how="inner")
         .join(sample_lf, on="sample_id", how="inner")
         .group_by(["sample_name", "study_id", "length"])
-        .agg([
-            pl.col("count").sum().cast(pl.Float64).alias("total_count"),
-            pl.col("read_id").n_unique().alias("unique_at_length"),
-        ])
+        .agg(
+            [
+                pl.col("count").sum().cast(pl.Float64).alias("total_count"),
+                pl.col("read_id").n_unique().alias("unique_at_length"),
+            ]
+        )
         .collect()
     )
 
@@ -106,44 +109,53 @@ def fast_length_qc(
 
     rows = []
     for (sname, study_id), grp in per_sl.group_by(["sample_name", "study_id"]):
-        total  = float(grp["total_count"].sum())
+        total = float(grp["total_count"].sum())
         unique = int(grp["unique_at_length"].sum())
         if total == 0:
             continue
         lengths = grp["length"].to_numpy().astype(float)
-        counts  = grp["total_count"].to_numpy()
-        mean_l  = float(np.average(lengths, weights=counts))
-        std_l   = float(np.sqrt(np.average((lengths - mean_l) ** 2, weights=counts)))
-        peak_l  = int(lengths[np.argmax(counts)])
-        rpf_m   = (lengths >= 28) & (lengths <= 32)
-        rows.append({
-            "sample_id":         str(sname),
-            "study_id":          str(study_id),
-            "total_reads":       total,
-            "unique_reads":      unique,
-            "compression_ratio": unique / total,
-            "mean_length":       mean_l,
-            "peak_length":       peak_l,
-            "rpf_28_32_prop":    float(counts[rpf_m].sum() / total),
-            "length_cv":         float(std_l / mean_l) if mean_l > 0 else 0.0,
-        })
+        counts = grp["total_count"].to_numpy()
+        mean_l = float(np.average(lengths, weights=counts))
+        std_l = float(np.sqrt(np.average((lengths - mean_l) ** 2, weights=counts)))
+        peak_l = int(lengths[np.argmax(counts)])
+        rpf_m = (lengths >= 28) & (lengths <= 32)
+        rows.append(
+            {
+                "sample_id": str(sname),
+                "study_id": str(study_id),
+                "total_reads": total,
+                "unique_reads": unique,
+                "compression_ratio": unique / total,
+                "mean_length": mean_l,
+                "peak_length": peak_l,
+                "rpf_28_32_prop": float(counts[rpf_m].sum() / total),
+                "length_cv": float(std_l / mean_l) if mean_l > 0 else 0.0,
+            }
+        )
 
     return pl.from_dicts(rows).sort("sample_id") if rows else _empty_length_schema()
 
 
 def _empty_length_schema() -> pl.DataFrame:
-    return pl.DataFrame(schema={
-        "sample_id": pl.Utf8, "study_id": pl.Utf8,
-        "total_reads": pl.Float64, "unique_reads": pl.UInt32,
-        "compression_ratio": pl.Float64, "mean_length": pl.Float64,
-        "peak_length": pl.UInt32, "rpf_28_32_prop": pl.Float64,
-        "length_cv": pl.Float64,
-    })
+    return pl.DataFrame(
+        schema={
+            "sample_id": pl.Utf8,
+            "study_id": pl.Utf8,
+            "total_reads": pl.Float64,
+            "unique_reads": pl.UInt32,
+            "compression_ratio": pl.Float64,
+            "mean_length": pl.Float64,
+            "peak_length": pl.UInt32,
+            "rpf_28_32_prop": pl.Float64,
+            "length_cv": pl.Float64,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # Tier 2: periodicity and offset calibration (sampled BAM)
 # ---------------------------------------------------------------------------
+
 
 def _bam_chroms(bam_path: str | Path) -> set:
     with pysam.AlignmentFile(str(bam_path), "rb") as bam:
@@ -163,8 +175,6 @@ from TranslonScorer.events import (  # noqa: F401, E402
     _build_frame_intervals,
     _deconflict_intervals,
 )
-
-
 
 
 def periodicity_qc(
@@ -192,9 +202,7 @@ def periodicity_qc(
     # Resolve partition list
     if isinstance(partition_dirs, (str, Path)):
         parent = Path(partition_dirs)
-        dirs: List[Path] = sorted(
-            d for d in parent.iterdir() if d.is_dir() and _discover_bam(d)
-        )
+        dirs: List[Path] = sorted(d for d in parent.iterdir() if d.is_dir() and _discover_bam(d))
     else:
         dirs = [Path(d) for d in partition_dirs]
 
@@ -232,8 +240,7 @@ def periodicity_qc(
     if sample_names:
         samples_df0 = samples_df0.filter(pl.col("sample_name").is_in(sample_names))
     sample_map: Dict[int, str] = {
-        int(r[0]): str(r[1])
-        for r in samples_df0.select(["sample_id", "sample_name"]).iter_rows()
+        int(r[0]): str(r[1]) for r in samples_df0.select(["sample_id", "sample_name"]).iter_rows()
     }
 
     for pdir in dirs:
@@ -296,13 +303,12 @@ def periodicity_qc(
         sampled_ids = pl.Series(list(read_pos.keys()), dtype=pl.UInt64)
         if not count_files:
             continue
-        counts_df = (
-            pl.concat([pl.read_parquet(f) for f in count_files])
-            .filter(pl.col("read_id").is_in(sampled_ids))
+        counts_df = pl.concat([pl.read_parquet(f) for f in count_files]).filter(
+            pl.col("read_id").is_in(sampled_ids)
         )
 
         for row in counts_df.iter_rows(named=True):
-            rid   = int(row["read_id"])
+            rid = int(row["read_id"])
             sname = sample_map.get(int(row["sample_id"]))
             if sname is None:
                 continue
@@ -336,7 +342,7 @@ def periodicity_qc(
 
     rows = []
     for sname, lfd in rfd.items():
-        scores  = _ribometric_frame_scores(lfd)
+        scores = _ribometric_frame_scores(lfd)
         offsets = _nudge_to_frame0(lfd, base_offsets)
         # Per-read-length frame distribution and dominance — the read-length×frame
         # signal RiboMetric surfaces, kept here instead of being collapsed into the
@@ -348,19 +354,25 @@ def periodicity_qc(
             rfd_json[str(length)] = counts
             tot = sum(counts)
             dominance_json[str(length)] = (max(counts) / tot) if tot > 0 else 0.0
-        rows.append({
-            "sample_id":         sname,
-            "periodicity_score": scores["periodicity_score"],
-            "f0": scores["f0"], "f1": scores["f1"], "f2": scores["f2"],
-            "n_cds_reads":       scores["n_reads"],
-            "recommended_offsets": json.dumps({str(k): v for k, v in offsets.items()}),
-            # length -> [count_f0, count_f1, count_f2]
-            "read_frame_distribution": json.dumps(rfd_json),
-            # length -> sqrt entropy-reduction periodicity score
-            "per_length_periodicity": json.dumps({str(k): v for k, v in scores["per_length"].items()}),
-            # length -> dominant-frame fraction (max frame proportion), offset-invariant
-            "per_length_dominance": json.dumps(dominance_json),
-        })
+        rows.append(
+            {
+                "sample_id": sname,
+                "periodicity_score": scores["periodicity_score"],
+                "f0": scores["f0"],
+                "f1": scores["f1"],
+                "f2": scores["f2"],
+                "n_cds_reads": scores["n_reads"],
+                "recommended_offsets": json.dumps({str(k): v for k, v in offsets.items()}),
+                # length -> [count_f0, count_f1, count_f2]
+                "read_frame_distribution": json.dumps(rfd_json),
+                # length -> sqrt entropy-reduction periodicity score
+                "per_length_periodicity": json.dumps(
+                    {str(k): v for k, v in scores["per_length"].items()}
+                ),
+                # length -> dominant-frame fraction (max frame proportion), offset-invariant
+                "per_length_dominance": json.dumps(dominance_json),
+            }
+        )
 
     return pl.from_dicts(rows).sort("sample_id") if rows else _empty_periodicity_schema()
 
@@ -380,6 +392,7 @@ from TranslonScorer.qc import (  # noqa: F401, E402
 # aggregate / cluster / per-sample queries as pure-Polars joins+group-bys
 # (tabulate_frames), with no pysam and no Python row loop.
 # ===========================================================================
+
 
 def _scan_partition_loci(
     bam_path: str | Path,
@@ -435,11 +448,13 @@ def _scan_partition_loci(
         return pl.DataFrame(schema={"read_id": pl.UInt64, "length": pl.Int64, "frame": pl.Int8})
 
     rids = list(read_frames.keys())
-    return pl.DataFrame({
-        "read_id": pl.Series(rids, dtype=pl.UInt64),
-        "length": pl.Series([read_len[r] for r in rids], dtype=pl.Int64),
-        "frame": pl.Series([read_frames[r] for r in rids], dtype=pl.Int8),
-    })
+    return pl.DataFrame(
+        {
+            "read_id": pl.Series(rids, dtype=pl.UInt64),
+            "length": pl.Series([read_len[r] for r in rids], dtype=pl.Int64),
+            "frame": pl.Series([read_frames[r] for r in rids], dtype=pl.Int8),
+        }
+    )
 
 
 # Worker globals for the parallel index build (set once per spawned process via
@@ -456,6 +471,7 @@ def _build_worker_init(frame_ivs, bam_refs, default_offset) -> None:
 def _build_worker_scan(bam_path_str: str) -> bytes:
     """Scan one partition; return the loci DF as Arrow IPC bytes (cheap to ship)."""
     import io
+
     df = _scan_partition_loci(
         bam_path_str,
         _BUILD_CTX["frame_ivs"],
@@ -499,9 +515,11 @@ def build_read_loci_index(
     frame_ivs = _build_frame_intervals(cds_df, cds_df, bam_refs)
     if n_workers is None:
         n_workers = min(len(dirs), os.cpu_count() or 1)
-    log_info(f"read_loci index: {len(dirs)} partitions, "
-             f"{sum(len(v) for v in frame_ivs.values()):,} CDS intervals, "
-             f"{n_workers} worker(s)")
+    log_info(
+        f"read_loci index: {len(dirs)} partitions, "
+        f"{sum(len(v) for v in frame_ivs.values()):,} CDS intervals, "
+        f"{n_workers} worker(s)"
+    )
 
     bam_paths = [str(_discover_bam(d)) for d in dirs]
     parts: List[pl.DataFrame] = []
@@ -516,13 +534,16 @@ def build_read_loci_index(
                 log_info(f"  scanned {i + 1}/{len(dirs)} partitions")
     else:
         import io
+
         ctx = mp.get_context("spawn")
         with ctx.Pool(
             processes=n_workers,
             initializer=_build_worker_init,
             initargs=(frame_ivs, bam_refs, default_offset),
         ) as pool:
-            for i, ipc in enumerate(pool.imap_unordered(_build_worker_scan, bam_paths, chunksize=1)):
+            for i, ipc in enumerate(
+                pool.imap_unordered(_build_worker_scan, bam_paths, chunksize=1)
+            ):
                 df = pl.read_ipc(io.BytesIO(ipc))
                 if not df.is_empty():
                     parts.append(df)
@@ -578,12 +599,18 @@ def tabulate_frames(
             continue
         count_files.extend(_count_parquets(mp, manifest))
     if not count_files:
-        return pl.DataFrame(schema={"sample_name": pl.Utf8, "length": pl.Int64, "frame": pl.Int8, "count": pl.Float64})
+        return pl.DataFrame(
+            schema={
+                "sample_name": pl.Utf8,
+                "length": pl.Int64,
+                "frame": pl.Int8,
+                "count": pl.Float64,
+            }
+        )
 
     counts = pl.scan_parquet(count_files).select(["read_id", "sample_id", "count"])
     joined = (
-        counts
-        .join(read_loci.lazy(), on="read_id", how="inner")
+        counts.join(read_loci.lazy(), on="read_id", how="inner")
         .join(samples.lazy(), on="sample_id", how="inner")
         .with_columns(pl.col("count").cast(pl.Float64))
     )
@@ -592,16 +619,16 @@ def tabulate_frames(
         keys = ["length", "frame"]
     elif group_level == "cluster":
         if cluster_labels is None:
-            raise ValueError("group_level='cluster' requires cluster_labels (sample_name, cluster_id)")
+            raise ValueError(
+                "group_level='cluster' requires cluster_labels (sample_name, cluster_id)"
+            )
         joined = joined.join(cluster_labels.lazy(), on="sample_name", how="inner")
         keys = ["cluster_id", "length", "frame"]
     else:  # sample
         keys = ["sample_name", "length", "frame"]
 
     out = (
-        joined.group_by(keys)
-        .agg(pl.col("count").sum().alias("count"))
-        .collect(engine="streaming")
+        joined.group_by(keys).agg(pl.col("count").sum().alias("count")).collect(engine="streaming")
     )
     return out
 
@@ -624,7 +651,9 @@ def periodicity_qc_fast(
     if read_loci is None:
         read_loci = build_read_loci_index(partition_dirs, cds_df, default_offset=default_offset)
 
-    tab = tabulate_frames(partition_dirs, read_loci, group_level="sample", sample_names=sample_names)
+    tab = tabulate_frames(
+        partition_dirs, read_loci, group_level="sample", sample_names=sample_names
+    )
     if tab.is_empty():
         return _empty_periodicity_schema()
 
@@ -634,7 +663,9 @@ def periodicity_qc_fast(
     for row in tab.iter_rows(named=True):
         s = str(row["sample_name"])
         L = int(row["length"])
-        rfd.setdefault(s, {}).setdefault(L, {0: 0.0, 1: 0.0, 2: 0.0})[int(row["frame"])] += float(row["count"])
+        rfd.setdefault(s, {}).setdefault(L, {0: 0.0, 1: 0.0, 2: 0.0})[int(row["frame"])] += float(
+            row["count"]
+        )
 
     base_offsets = {length: default_offset for lfd in rfd.values() for length in lfd}
     rows = []
@@ -647,22 +678,29 @@ def periodicity_qc_fast(
             rfd_json[str(length)] = counts
             tot = sum(counts)
             dominance_json[str(length)] = (max(counts) / tot) if tot > 0 else 0.0
-        rows.append({
-            "sample_id": sname,
-            "periodicity_score": scores["periodicity_score"],
-            "f0": scores["f0"], "f1": scores["f1"], "f2": scores["f2"],
-            "n_cds_reads": scores["n_reads"],
-            "recommended_offsets": json.dumps({str(k): v for k, v in offsets.items()}),
-            "read_frame_distribution": json.dumps(rfd_json),
-            "per_length_periodicity": json.dumps({str(k): v for k, v in scores["per_length"].items()}),
-            "per_length_dominance": json.dumps(dominance_json),
-        })
+        rows.append(
+            {
+                "sample_id": sname,
+                "periodicity_score": scores["periodicity_score"],
+                "f0": scores["f0"],
+                "f1": scores["f1"],
+                "f2": scores["f2"],
+                "n_cds_reads": scores["n_reads"],
+                "recommended_offsets": json.dumps({str(k): v for k, v in offsets.items()}),
+                "read_frame_distribution": json.dumps(rfd_json),
+                "per_length_periodicity": json.dumps(
+                    {str(k): v for k, v in scores["per_length"].items()}
+                ),
+                "per_length_dominance": json.dumps(dominance_json),
+            }
+        )
     return pl.from_dicts(rows).sort("sample_id") if rows else _empty_periodicity_schema()
 
 
 # ---------------------------------------------------------------------------
 # Combined entry point
 # ---------------------------------------------------------------------------
+
 
 def matrix_qc(
     partitions: "str | Path | List[str | Path]",
@@ -703,24 +741,27 @@ def matrix_qc(
     # Aggregate per-sample stats across partitions
     combined = pl.concat(length_parts)
     base = (
-        combined
-        .group_by(["sample_id", "study_id"])
-        .agg([
-            pl.col("total_reads").sum(),
-            pl.col("unique_reads").sum(),
-            (pl.col("total_reads").sum() / pl.col("unique_reads").sum()).alias("compression_ratio"),
-            # Weighted mean/peak/rpf from the per-partition rows
-            (
-                (pl.col("mean_length") * pl.col("total_reads")).sum()
-                / pl.col("total_reads").sum()
-            ).alias("mean_length"),
-            pl.col("peak_length").mode().first(),
-            (
-                (pl.col("rpf_28_32_prop") * pl.col("total_reads")).sum()
-                / pl.col("total_reads").sum()
-            ).alias("rpf_28_32_prop"),
-            pl.col("length_cv").mean(),
-        ])
+        combined.group_by(["sample_id", "study_id"])
+        .agg(
+            [
+                pl.col("total_reads").sum(),
+                pl.col("unique_reads").sum(),
+                (pl.col("total_reads").sum() / pl.col("unique_reads").sum()).alias(
+                    "compression_ratio"
+                ),
+                # Weighted mean/peak/rpf from the per-partition rows
+                (
+                    (pl.col("mean_length") * pl.col("total_reads")).sum()
+                    / pl.col("total_reads").sum()
+                ).alias("mean_length"),
+                pl.col("peak_length").mode().first(),
+                (
+                    (pl.col("rpf_28_32_prop") * pl.col("total_reads")).sum()
+                    / pl.col("total_reads").sum()
+                ).alias("rpf_28_32_prop"),
+                pl.col("length_cv").mean(),
+            ]
+        )
         .sort("sample_id")
     )
 

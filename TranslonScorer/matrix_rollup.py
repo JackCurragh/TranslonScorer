@@ -26,6 +26,7 @@ Design (see translonscorer/docs/matrix_query_engine.md):
 Per-query cost is O(rollup size) = O(groups × lengths × phases), independent of
 nnz — the property needed for 6k-sample cohorts.
 """
+
 from __future__ import annotations
 
 import collections
@@ -57,8 +58,12 @@ from .matrix_qc import (
 )
 
 _INDEX_SCHEMA = {
-    "read_id": pl.UInt64, "length": pl.Int64, "strand": pl.Utf8,
-    "phase0": pl.Int8, "gene_code": pl.Int32, "n_align": pl.Int32,
+    "read_id": pl.UInt64,
+    "length": pl.Int64,
+    "strand": pl.Utf8,
+    "phase0": pl.Int8,
+    "gene_code": pl.Int32,
+    "n_align": pl.Int32,
 }
 
 
@@ -68,8 +73,9 @@ _INDEX_SCHEMA = {
 from TranslonScorer.io.annotation import build_cds_blocks, build_gene_spans  # noqa: F401, E402
 
 
-def _assign_region_sweep(ids: List[int], asites: np.ndarray,
-                         intervals: List[Tuple[int, int, int]]) -> Dict[int, int]:
+def _assign_region_sweep(
+    ids: List[int], asites: np.ndarray, intervals: List[Tuple[int, int, int]]
+) -> Dict[int, int]:
     """First-containing-interval payload per id (sweep-line). intervals: (start, stop, payload)."""
     if not intervals or len(ids) == 0:
         return {}
@@ -96,7 +102,10 @@ def _assign_region_sweep(ids: List[int], asites: np.ndarray,
 # Phase A: per-partition alignment scan (all candidate loci, offset 0 phase)
 # ---------------------------------------------------------------------------
 
-def _scan_partition_alignments(bam_path, frame_ivs, gene_ivs, bam_refs, ref_offset: int) -> pl.DataFrame:
+
+def _scan_partition_alignments(
+    bam_path, frame_ivs, gene_ivs, bam_refs, ref_offset: int
+) -> pl.DataFrame:
     aln_rid: List[int] = []
     aln_len: List[int] = []
     aln_strand: List[str] = []
@@ -117,7 +126,8 @@ def _scan_partition_alignments(bam_path, frame_ivs, gene_ivs, bam_refs, ref_offs
             rec_count[rid] += 1
             strand = "-" if rec.is_reverse else "+"
             asite = (
-                int(rec.reference_end) - 1 - ref_offset if rec.is_reverse
+                int(rec.reference_end) - 1 - ref_offset
+                if rec.is_reverse
                 else int(rec.reference_start) + ref_offset
             )
             aln_rid.append(rid)
@@ -132,7 +142,9 @@ def _scan_partition_alignments(bam_path, frame_ivs, gene_ivs, bam_refs, ref_offs
 
     frame: List[Optional[int]] = [None] * n
     gene: List[int] = [-1] * n
-    groups: Dict[Tuple[str, str], Tuple[List[int], List[int]]] = collections.defaultdict(lambda: ([], []))
+    groups: Dict[Tuple[str, str], Tuple[List[int], List[int]]] = collections.defaultdict(
+        lambda: ([], [])
+    )
     for i in range(n):
         groups[(aln_chrom[i], aln_strand[i])][0].append(i)
         groups[(aln_chrom[i], aln_strand[i])][1].append(aln_asite[i])
@@ -162,17 +174,21 @@ def _scan_partition_alignments(bam_path, frame_ivs, gene_ivs, bam_refs, ref_offs
         out_gene.append(gene[i])
         out_nalign.append(rec_count[aln_rid[i]])
 
-    return pl.DataFrame({
-        "read_id": pl.Series(out_rid, dtype=pl.UInt64),
-        "length": pl.Series(out_len, dtype=pl.Int64),
-        "strand": pl.Series(out_strand, dtype=pl.Utf8),
-        "phase0": pl.Series(out_phase0, dtype=pl.Int8),
-        "gene_code": pl.Series(out_gene, dtype=pl.Int32),
-        "n_align": pl.Series(out_nalign, dtype=pl.Int32),
-    })
+    return pl.DataFrame(
+        {
+            "read_id": pl.Series(out_rid, dtype=pl.UInt64),
+            "length": pl.Series(out_len, dtype=pl.Int64),
+            "strand": pl.Series(out_strand, dtype=pl.Utf8),
+            "phase0": pl.Series(out_phase0, dtype=pl.Int8),
+            "gene_code": pl.Series(out_gene, dtype=pl.Int32),
+            "n_align": pl.Series(out_nalign, dtype=pl.Int32),
+        }
+    )
 
 
-def _scan_partition_alignments_oxbow(bam_path, frame_ivs, gene_ivs, bam_refs, ref_offset: int) -> pl.DataFrame:
+def _scan_partition_alignments_oxbow(
+    bam_path, frame_ivs, gene_ivs, bam_refs, ref_offset: int
+) -> pl.DataFrame:
     """Vectorised oxbow reader — replaces the per-record pysam Python loop.
 
     Coordinate mapping (verified vs pysam): reference_start = pos - 1,
@@ -187,19 +203,25 @@ def _scan_partition_alignments_oxbow(bam_path, frame_ivs, gene_ivs, bam_refs, re
         return pl.DataFrame(schema=_INDEX_SCHEMA)
 
     df = (
-        df.filter((pl.col("flag") & 4) == 0)                       # mapped
-        .with_columns([
-            pl.col("qname").str.extract(r"read_(\d+)").cast(pl.UInt64).alias("read_id"),
-            pl.col("seq").str.len_chars().cast(pl.Int64).alias("length"),
-            pl.when((pl.col("flag") & 16) != 0).then(pl.lit("-")).otherwise(pl.lit("+")).alias("strand"),
-            pl.col("rname").cast(pl.Utf8).alias("chrom"),
-        ])
+        df.filter((pl.col("flag") & 4) == 0)  # mapped
+        .with_columns(
+            [
+                pl.col("qname").str.extract(r"read_(\d+)").cast(pl.UInt64).alias("read_id"),
+                pl.col("seq").str.len_chars().cast(pl.Int64).alias("length"),
+                pl.when((pl.col("flag") & 16) != 0)
+                .then(pl.lit("-"))
+                .otherwise(pl.lit("+"))
+                .alias("strand"),
+                pl.col("rname").cast(pl.Utf8).alias("chrom"),
+            ]
+        )
         .filter(pl.col("read_id").is_not_null() & (pl.col("length") > 0))
         .with_columns(
             pl.when(pl.col("strand") == "-")
             .then(pl.col("end") - 1 - ref_offset)
             .otherwise(pl.col("pos") - 1 + ref_offset)
-            .cast(pl.Int64).alias("asite")
+            .cast(pl.Int64)
+            .alias("asite")
         )
         .with_columns(pl.len().over("read_id").cast(pl.Int32).alias("n_align"))
         .with_row_index("aln_idx")
@@ -207,7 +229,7 @@ def _scan_partition_alignments_oxbow(bam_path, frame_ivs, gene_ivs, bam_refs, re
     )
 
     n = df.height
-    frame = np.full(n, -128, dtype=np.int16)   # sentinel = not in CDS
+    frame = np.full(n, -128, dtype=np.int16)  # sentinel = not in CDS
     gene = np.full(n, -1, dtype=np.int32)
     for (chrom, strand), grp in df.group_by(["chrom", "strand"]):
         idxs = grp.get_column("aln_idx").to_list()
@@ -222,16 +244,19 @@ def _scan_partition_alignments_oxbow(bam_path, frame_ivs, gene_ivs, bam_refs, re
                 gene[k] = v
 
     out = (
-        df.with_columns([
-            pl.Series("frame", frame),
-            pl.Series("gene_code", gene),
-        ])
+        df.with_columns(
+            [
+                pl.Series("frame", frame),
+                pl.Series("gene_code", gene),
+            ]
+        )
         .filter(pl.col("frame") != -128)
         .with_columns(
             pl.when(pl.col("strand") == "+")
             .then((pl.col("frame") - ref_offset) % 3)
             .otherwise((pl.col("frame") + ref_offset) % 3)
-            .cast(pl.Int8).alias("phase0")
+            .cast(pl.Int8)
+            .alias("phase0")
         )
         .select(["read_id", "length", "strand", "phase0", "gene_code", "n_align"])
     )
@@ -248,13 +273,24 @@ _CTX: Dict = {}
 
 
 def _worker_init(frame_ivs, gene_ivs, bam_refs, ref_offset, reader) -> None:
-    _CTX.update(frame_ivs=frame_ivs, gene_ivs=gene_ivs, bam_refs=bam_refs,
-                ref_offset=ref_offset, reader=reader)
+    _CTX.update(
+        frame_ivs=frame_ivs,
+        gene_ivs=gene_ivs,
+        bam_refs=bam_refs,
+        ref_offset=ref_offset,
+        reader=reader,
+    )
 
 
 def _worker_scan(bam_path_str: str) -> bytes:
-    df = _scan_dispatch(bam_path_str, _CTX["frame_ivs"], _CTX["gene_ivs"],
-                        _CTX["bam_refs"], _CTX["ref_offset"], _CTX["reader"])
+    df = _scan_dispatch(
+        bam_path_str,
+        _CTX["frame_ivs"],
+        _CTX["gene_ivs"],
+        _CTX["bam_refs"],
+        _CTX["ref_offset"],
+        _CTX["reader"],
+    )
     buf = io.BytesIO()
     df.write_ipc(buf)
     return buf.getvalue()
@@ -285,9 +321,11 @@ def build_alignment_index(
     gene_ivs, _gene_id_of = build_gene_spans(cds_df)
     if n_workers is None:
         n_workers = min(len(dirs), os.cpu_count() or 1)
-    log_info(f"alignment index: {len(dirs)} partitions, "
-             f"{sum(len(v) for v in frame_ivs.values()):,} CDS intervals, "
-             f"{sum(len(v) for v in gene_ivs.values()):,} gene spans, {n_workers} worker(s)")
+    log_info(
+        f"alignment index: {len(dirs)} partitions, "
+        f"{sum(len(v) for v in frame_ivs.values()):,} CDS intervals, "
+        f"{sum(len(v) for v in gene_ivs.values()):,} gene spans, {n_workers} worker(s)"
+    )
 
     bam_paths = [str(_discover_bam(d)) for d in dirs]
     parts: List[pl.DataFrame] = []
@@ -298,8 +336,11 @@ def build_alignment_index(
                 parts.append(df)
     else:
         ctx = mp.get_context("spawn")
-        with ctx.Pool(n_workers, initializer=_worker_init,
-                      initargs=(frame_ivs, gene_ivs, bam_refs, ref_offset, reader)) as pool:
+        with ctx.Pool(
+            n_workers,
+            initializer=_worker_init,
+            initargs=(frame_ivs, gene_ivs, bam_refs, ref_offset, reader),
+        ) as pool:
             for i, ipc in enumerate(pool.imap_unordered(_worker_scan, bam_paths, chunksize=1)):
                 df = pl.read_ipc(io.BytesIO(ipc))
                 if not df.is_empty():
@@ -333,20 +374,23 @@ def _gba_weight_shard(multi: "pl.LazyFrame", density: "pl.LazyFrame") -> "pl.Laz
     (read_id, sample_name) window is correct whether applied per-shard or globally.
     """
     return (
-        multi
-        .join(density, on=["sample_name", "gene_code"], how="left")
+        multi.join(density, on=["sample_name", "gene_code"], how="left")
         .with_columns(pl.col("dens").fill_null(0.0))
-        .with_columns([
-            pl.col("dens").sum().over(["read_id", "sample_name"]).alias("tot_dens"),
-            pl.len().over(["read_id", "sample_name"]).alias("n_cand"),
-        ])
+        .with_columns(
+            [
+                pl.col("dens").sum().over(["read_id", "sample_name"]).alias("tot_dens"),
+                pl.len().over(["read_id", "sample_name"]).alias("n_cand"),
+            ]
+        )
         .with_columns(
             pl.when(pl.col("tot_dens") > 0)
             .then(pl.col("dens") / pl.col("tot_dens"))
-            .otherwise(1.0 / pl.col("n_cand")).alias("w")
+            .otherwise(1.0 / pl.col("n_cand"))
+            .alias("w")
         )
         .with_columns((pl.col("count") * pl.col("w")).alias("count"))
-        .group_by(_ROLL_KEYS).agg(pl.col("count").sum().alias("count"))
+        .group_by(_ROLL_KEYS)
+        .agg(pl.col("count").sum().alias("count"))
     )
 
 
@@ -355,28 +399,53 @@ def _gba2_worker_init(density_path: str) -> None:
 
 
 def _gba2_worker(shard_path: str) -> bytes:
-    out = _gba_weight_shard(pl.scan_parquet(shard_path), _G2CTX["density"].lazy()).collect(engine="streaming")
-    buf = io.BytesIO(); out.write_ipc(buf)
+    out = _gba_weight_shard(pl.scan_parquet(shard_path), _G2CTX["density"].lazy()).collect(
+        engine="streaming"
+    )
+    buf = io.BytesIO()
+    out.write_ipc(buf)
     return buf.getvalue()
 
 
-def _roll_worker_init(frame_ivs, gene_ivs, bam_refs, ref_offset, reader, sample_map, mode, tmpdir) -> None:
-    _RCTX.update(frame_ivs=frame_ivs, gene_ivs=gene_ivs, bam_refs=bam_refs, ref_offset=ref_offset,
-                 reader=reader, sample_map=sample_map, mode=mode, tmpdir=tmpdir)
+def _roll_worker_init(
+    frame_ivs, gene_ivs, bam_refs, ref_offset, reader, sample_map, mode, tmpdir
+) -> None:
+    _RCTX.update(
+        frame_ivs=frame_ivs,
+        gene_ivs=gene_ivs,
+        bam_refs=bam_refs,
+        ref_offset=ref_offset,
+        reader=reader,
+        sample_map=sample_map,
+        mode=mode,
+        tmpdir=tmpdir,
+    )
 
 
 def _roll_worker(pdir_str: str):
     """Scan one partition, join its counts, return (unique_roll, density, multi_shard_path)."""
     pdir = Path(pdir_str)
     bam = _discover_bam(pdir)
-    empty_u = pl.DataFrame(schema={**{k: _INDEX_SCHEMA.get(k, pl.Utf8) for k in _ROLL_KEYS}, "count": pl.Float64})
+    empty_u = pl.DataFrame(
+        schema={**{k: _INDEX_SCHEMA.get(k, pl.Utf8) for k in _ROLL_KEYS}, "count": pl.Float64}
+    )
     if bam is None:
-        b = io.BytesIO(); empty_u.write_ipc(b)
-        b2 = io.BytesIO(); pl.DataFrame(schema={"sample_name": pl.Utf8, "gene_code": pl.Int32, "dens": pl.Float64}).write_ipc(b2)
+        b = io.BytesIO()
+        empty_u.write_ipc(b)
+        b2 = io.BytesIO()
+        pl.DataFrame(
+            schema={"sample_name": pl.Utf8, "gene_code": pl.Int32, "dens": pl.Float64}
+        ).write_ipc(b2)
         return (b.getvalue(), b2.getvalue(), None)
 
-    aln = _scan_dispatch(bam, _RCTX["frame_ivs"], _RCTX["gene_ivs"], _RCTX["bam_refs"],
-                         _RCTX["ref_offset"], _RCTX["reader"])
+    aln = _scan_dispatch(
+        bam,
+        _RCTX["frame_ivs"],
+        _RCTX["gene_ivs"],
+        _RCTX["bam_refs"],
+        _RCTX["ref_offset"],
+        _RCTX["reader"],
+    )
     try:
         mp_, manifest = _manifest(pdir)
         cfiles = _count_parquets(mp_, manifest)
@@ -384,8 +453,12 @@ def _roll_worker(pdir_str: str):
         cfiles = []
 
     if aln.is_empty() or not cfiles:
-        b = io.BytesIO(); empty_u.write_ipc(b)
-        b2 = io.BytesIO(); pl.DataFrame(schema={"sample_name": pl.Utf8, "gene_code": pl.Int32, "dens": pl.Float64}).write_ipc(b2)
+        b = io.BytesIO()
+        empty_u.write_ipc(b)
+        b2 = io.BytesIO()
+        pl.DataFrame(
+            schema={"sample_name": pl.Utf8, "gene_code": pl.Int32, "dens": pl.Float64}
+        ).write_ipc(b2)
         return (b.getvalue(), b2.getvalue(), None)
 
     counts = pl.read_parquet(cfiles).select(["read_id", "sample_id", "count"])
@@ -398,19 +471,23 @@ def _roll_worker(pdir_str: str):
     uroll = uniq.group_by(_ROLL_KEYS).agg(pl.col("count").sum().alias("count"))
     dens = (
         uniq.filter(pl.col("gene_code") >= 0)
-        .group_by(["sample_name", "gene_code"]).agg(pl.col("count").sum().alias("dens"))
+        .group_by(["sample_name", "gene_code"])
+        .agg(pl.col("count").sum().alias("dens"))
     )
 
     multi_path = None
     if _RCTX["mode"] == "gba":
         multi = base.filter(pl.col("n_align") > 1).select(
-            ["read_id", "sample_name", "length", "strand", "phase0", "gene_code", "count"])
+            ["read_id", "sample_name", "length", "strand", "phase0", "gene_code", "count"]
+        )
         if multi.height:
             multi_path = str(Path(_RCTX["tmpdir"]) / f"multi_{pdir.name}.parquet")
             multi.write_parquet(multi_path)
 
-    bu = io.BytesIO(); uroll.write_ipc(bu)
-    bd = io.BytesIO(); dens.write_ipc(bd)
+    bu = io.BytesIO()
+    uroll.write_ipc(bu)
+    bd = io.BytesIO()
+    dens.write_ipc(bd)
     return (bu.getvalue(), bd.getvalue(), multi_path)
 
 
@@ -438,8 +515,13 @@ def build_matrix_rollup(
         dirs = sorted(d for d in parent.iterdir() if d.is_dir() and _discover_bam(d))
     else:
         dirs = [Path(d) for d in partition_dirs if _discover_bam(Path(d))]
-    out_schema = {"sample_name": pl.Utf8, "length": pl.Int64, "strand": pl.Utf8,
-                  "phase0": pl.Int8, "count": pl.Float64}
+    out_schema = {
+        "sample_name": pl.Utf8,
+        "length": pl.Int64,
+        "strand": pl.Utf8,
+        "phase0": pl.Int8,
+        "count": pl.Float64,
+    }
     if not dirs:
         return pl.DataFrame(schema=out_schema)
 
@@ -462,13 +544,26 @@ def build_matrix_rollup(
     try:
         dir_strs = [str(d) for d in dirs]
         if n_workers <= 1:
-            _roll_worker_init(frame_ivs, gene_ivs, bam_refs, ref_offset, reader, sample_map, multimap_mode, tmpdir)
+            _roll_worker_init(
+                frame_ivs, gene_ivs, bam_refs, ref_offset, reader, sample_map, multimap_mode, tmpdir
+            )
             results = [_roll_worker(s) for s in dir_strs]
         else:
             ctx = mp.get_context("spawn")
-            with ctx.Pool(n_workers, initializer=_roll_worker_init,
-                          initargs=(frame_ivs, gene_ivs, bam_refs, ref_offset, reader,
-                                    sample_map, multimap_mode, tmpdir)) as pool:
+            with ctx.Pool(
+                n_workers,
+                initializer=_roll_worker_init,
+                initargs=(
+                    frame_ivs,
+                    gene_ivs,
+                    bam_refs,
+                    ref_offset,
+                    reader,
+                    sample_map,
+                    multimap_mode,
+                    tmpdir,
+                ),
+            ) as pool:
                 results = list(pool.imap_unordered(_roll_worker, dir_strs, chunksize=1))
 
         for bu, bd, mpath in results:
@@ -479,15 +574,21 @@ def build_matrix_rollup(
 
         uroll = (
             pl.concat(u_parts).group_by(_ROLL_KEYS).agg(pl.col("count").sum().alias("count"))
-            if u_parts else pl.DataFrame(schema=out_schema)
+            if u_parts
+            else pl.DataFrame(schema=out_schema)
         )
 
         if multimap_mode == "unique":
             return uroll
 
         density = (
-            pl.concat(d_parts).group_by(["sample_name", "gene_code"]).agg(pl.col("dens").sum().alias("dens"))
-            if d_parts else pl.DataFrame(schema={"sample_name": pl.Utf8, "gene_code": pl.Int32, "dens": pl.Float64})
+            pl.concat(d_parts)
+            .group_by(["sample_name", "gene_code"])
+            .agg(pl.col("dens").sum().alias("dens"))
+            if d_parts
+            else pl.DataFrame(
+                schema={"sample_name": pl.Utf8, "gene_code": pl.Int32, "dens": pl.Float64}
+            )
         )
         if not multi_paths:
             return uroll
@@ -497,18 +598,26 @@ def build_matrix_rollup(
         # across workers (broadcast density via a Parquet file) — otherwise a
         # single streaming pass.
         if n_workers <= 1:
-            multi = _gba_weight_shard(pl.scan_parquet(multi_paths), density.lazy()).collect(engine="streaming")
+            multi = _gba_weight_shard(pl.scan_parquet(multi_paths), density.lazy()).collect(
+                engine="streaming"
+            )
         else:
             density_path = str(Path(tmpdir) / "density.parquet")
             density.write_parquet(density_path)
             ctx = mp.get_context("spawn")
-            with ctx.Pool(min(n_workers, len(multi_paths)),
-                          initializer=_gba2_worker_init, initargs=(density_path,)) as pool:
-                m_parts = [pl.read_ipc(io.BytesIO(b))
-                           for b in pool.imap_unordered(_gba2_worker, multi_paths, chunksize=1)]
+            with ctx.Pool(
+                min(n_workers, len(multi_paths)),
+                initializer=_gba2_worker_init,
+                initargs=(density_path,),
+            ) as pool:
+                m_parts = [
+                    pl.read_ipc(io.BytesIO(b))
+                    for b in pool.imap_unordered(_gba2_worker, multi_paths, chunksize=1)
+                ]
             multi = (
                 pl.concat(m_parts).group_by(_ROLL_KEYS).agg(pl.col("count").sum().alias("count"))
-                if m_parts else pl.DataFrame(schema=out_schema)
+                if m_parts
+                else pl.DataFrame(schema=out_schema)
             )
         return (
             pl.concat([uroll, multi]).group_by(_ROLL_KEYS).agg(pl.col("count").sum().alias("count"))
@@ -529,35 +638,64 @@ _PCTX: Dict = {}
 
 def gene_regions(cds_df: pl.DataFrame, gene_ids: List[str]) -> List[Tuple[str, str, int, int, int]]:
     """(chrom, strand, start, stop, gene_code) CDS span per requested gene."""
-    sub = cds_df.filter(pl.col("gene_id").is_in(gene_ids)).with_columns([
-        pl.col("start").list.min().alias("g0"),
-        pl.col("stop").list.max().alias("g1"),
-    ]).group_by(["gene_id", "chr", "strand"]).agg([pl.col("g0").min(), pl.col("g1").max()])
+    sub = (
+        cds_df.filter(pl.col("gene_id").is_in(gene_ids))
+        .with_columns(
+            [
+                pl.col("start").list.min().alias("g0"),
+                pl.col("stop").list.max().alias("g1"),
+            ]
+        )
+        .group_by(["gene_id", "chr", "strand"])
+        .agg([pl.col("g0").min(), pl.col("g1").max()])
+    )
     code = {g: i for i, g in enumerate(sorted(gene_ids))}
     out = []
     for r in sub.iter_rows(named=True):
-        out.append((str(r["chr"]), str(r["strand"]), int(r["g0"]), int(r["g1"]), code[r["gene_id"]]))
+        out.append(
+            (str(r["chr"]), str(r["strand"]), int(r["g0"]), int(r["g1"]), code[r["gene_id"]])
+        )
     return out
 
 
-def _prof_worker_init(regions, bam_refs, ref_offset, sample_map, group_level, cluster_labels) -> None:
-    _PCTX.update(regions=regions, bam_refs=bam_refs, ref_offset=ref_offset,
-                 sample_map=sample_map, group_level=group_level, cluster_labels=cluster_labels)
+def _prof_worker_init(
+    regions, bam_refs, ref_offset, sample_map, group_level, cluster_labels
+) -> None:
+    _PCTX.update(
+        regions=regions,
+        bam_refs=bam_refs,
+        ref_offset=ref_offset,
+        sample_map=sample_map,
+        group_level=group_level,
+        cluster_labels=cluster_labels,
+    )
 
 
 def _prof_worker(pdir_str: str) -> bytes:
     pdir = Path(pdir_str)
     bam = _discover_bam(pdir)
-    empty = pl.DataFrame(schema={"group": pl.Utf8, "gene_code": pl.Int32, "pos": pl.Int64, "count": pl.Float64})
+    empty = pl.DataFrame(
+        schema={"group": pl.Utf8, "gene_code": pl.Int32, "pos": pl.Int64, "count": pl.Float64}
+    )
     if bam is None:
-        b = io.BytesIO(); empty.write_ipc(b); return b.getvalue()
-    bam_refs = _PCTX["bam_refs"]; ref_offset = _PCTX["ref_offset"]
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
+    bam_refs = _PCTX["bam_refs"]
+    ref_offset = _PCTX["ref_offset"]
 
     rid, gcode, pos = [], [], []
     with pysam.AlignmentFile(str(bam), "rb") as bf:
         for chrom, strand, start, stop, gc in _PCTX["regions"]:
-            fetch_chrom = chrom if chrom in bam_refs else (
-                f"chr{chrom}" if f"chr{chrom}" in bam_refs else (chrom[3:] if chrom[3:] in bam_refs else None))
+            fetch_chrom = (
+                chrom
+                if chrom in bam_refs
+                else (
+                    f"chr{chrom}"
+                    if f"chr{chrom}" in bam_refs
+                    else (chrom[3:] if chrom[3:] in bam_refs else None)
+                )
+            )
             if fetch_chrom is None:
                 continue
             want_rev = strand == "-"
@@ -567,40 +705,59 @@ def _prof_worker(pdir_str: str) -> bytes:
                 r = _parse_read_id(rec.query_name)
                 if r is None:
                     continue
-                a = int(rec.reference_end) - 1 - ref_offset if rec.is_reverse else int(rec.reference_start) + ref_offset
+                a = (
+                    int(rec.reference_end) - 1 - ref_offset
+                    if rec.is_reverse
+                    else int(rec.reference_start) + ref_offset
+                )
                 if a < start or a >= stop:
                     continue
-                rid.append(r); gcode.append(gc); pos.append(a)
+                rid.append(r)
+                gcode.append(gc)
+                pos.append(a)
     if not rid:
-        b = io.BytesIO(); empty.write_ipc(b); return b.getvalue()
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
 
-    aln = pl.DataFrame({"read_id": pl.Series(rid, dtype=pl.UInt64),
-                        "gene_code": pl.Series(gcode, dtype=pl.Int32),
-                        "pos": pl.Series(pos, dtype=pl.Int64)}).unique()
+    aln = pl.DataFrame(
+        {
+            "read_id": pl.Series(rid, dtype=pl.UInt64),
+            "gene_code": pl.Series(gcode, dtype=pl.Int32),
+            "pos": pl.Series(pos, dtype=pl.Int64),
+        }
+    ).unique()
     try:
         mp_, manifest = _manifest(pdir)
         cfiles = _count_parquets(mp_, manifest)
     except FileNotFoundError:
         cfiles = []
     if not cfiles:
-        b = io.BytesIO(); empty.write_ipc(b); return b.getvalue()
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
 
     counts = pl.read_parquet(cfiles).select(["read_id", "sample_id", "count"])
-    base = (counts.join(aln, on="read_id", how="inner")
-            .join(_PCTX["sample_map"], on="sample_id", how="inner")
-            .with_columns(pl.col("count").cast(pl.Float64)))
+    base = (
+        counts.join(aln, on="read_id", how="inner")
+        .join(_PCTX["sample_map"], on="sample_id", how="inner")
+        .with_columns(pl.col("count").cast(pl.Float64))
+    )
 
     level = _PCTX["group_level"]
     if level == "aggregate":
         base = base.with_columns(pl.lit("aggregate").alias("group"))
     elif level == "cluster":
         base = base.join(_PCTX["cluster_labels"], on="sample_name", how="inner").with_columns(
-            pl.col("cluster_id").cast(pl.Utf8).alias("group"))
+            pl.col("cluster_id").cast(pl.Utf8).alias("group")
+        )
     else:
         base = base.with_columns(pl.col("sample_name").alias("group"))
 
     out = base.group_by(["group", "gene_code", "pos"]).agg(pl.col("count").sum().alias("count"))
-    b = io.BytesIO(); out.write_ipc(b); return b.getvalue()
+    b = io.BytesIO()
+    out.write_ipc(b)
+    return b.getvalue()
 
 
 def tabulate_profiles(
@@ -646,39 +803,67 @@ def tabulate_profiles(
         parts = [pl.read_ipc(io.BytesIO(_prof_worker(s))) for s in dir_strs]
     else:
         ctx = mp.get_context("spawn")
-        with ctx.Pool(n_workers, initializer=_prof_worker_init,
-                      initargs=(regions, bam_refs, ref_offset, sample_map, group_level, cluster_labels)) as pool:
-            parts = [pl.read_ipc(io.BytesIO(b)) for b in pool.imap_unordered(_prof_worker, dir_strs, chunksize=1)]
+        with ctx.Pool(
+            n_workers,
+            initializer=_prof_worker_init,
+            initargs=(regions, bam_refs, ref_offset, sample_map, group_level, cluster_labels),
+        ) as pool:
+            parts = [
+                pl.read_ipc(io.BytesIO(b))
+                for b in pool.imap_unordered(_prof_worker, dir_strs, chunksize=1)
+            ]
 
     parts = [p for p in parts if not p.is_empty()]
     if not parts:
         return pl.DataFrame(schema=out_schema)
-    rolled = pl.concat(parts).group_by(["group", "gene_code", "pos"]).agg(pl.col("count").sum().alias("count"))
+    rolled = (
+        pl.concat(parts)
+        .group_by(["group", "gene_code", "pos"])
+        .agg(pl.col("count").sum().alias("count"))
+    )
     return rolled.with_columns(
         pl.col("gene_code").replace_strict(code_to_gene, default=None).alias("gene_id")
     ).sort(["gene_id", "pos"])
 
 
 def _cov_worker_init(regions, bam_refs, ref_offset, sample_map, group_level="aggregate") -> None:
-    _PCTX.update(regions=regions, bam_refs=bam_refs, ref_offset=ref_offset,
-                 sample_map=sample_map, group_level=group_level)
+    _PCTX.update(
+        regions=regions,
+        bam_refs=bam_refs,
+        ref_offset=ref_offset,
+        sample_map=sample_map,
+        group_level=group_level,
+    )
 
 
 def _cov_worker(pdir_str: str) -> bytes:
     pdir = Path(pdir_str)
     bam = _discover_bam(pdir)
     per_sample = _PCTX.get("group_level") == "sample"
-    schema = ({"sample_name": pl.Utf8, "strand": pl.Int64, "pos": pl.Int64, "count": pl.Float64}
-              if per_sample else {"strand": pl.Int64, "pos": pl.Int64, "count": pl.Float64})
+    schema = (
+        {"sample_name": pl.Utf8, "strand": pl.Int64, "pos": pl.Int64, "count": pl.Float64}
+        if per_sample
+        else {"strand": pl.Int64, "pos": pl.Int64, "count": pl.Float64}
+    )
     empty = pl.DataFrame(schema=schema)
     if bam is None:
-        b = io.BytesIO(); empty.write_ipc(b); return b.getvalue()
-    bam_refs = _PCTX["bam_refs"]; off = _PCTX["ref_offset"]
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
+    bam_refs = _PCTX["bam_refs"]
+    off = _PCTX["ref_offset"]
     rid, pos, strand = [], [], []
     with pysam.AlignmentFile(str(bam), "rb") as bf:
         for chrom, start, stop in _PCTX["regions"]:
-            fc = chrom if chrom in bam_refs else (f"chr{chrom}" if f"chr{chrom}" in bam_refs
-                                                  else (chrom[3:] if chrom[3:] in bam_refs else None))
+            fc = (
+                chrom
+                if chrom in bam_refs
+                else (
+                    f"chr{chrom}"
+                    if f"chr{chrom}" in bam_refs
+                    else (chrom[3:] if chrom[3:] in bam_refs else None)
+                )
+            )
             if fc is None:
                 continue
             for rec in bf.fetch(fc, max(0, start), stop):
@@ -688,34 +873,59 @@ def _cov_worker(pdir_str: str) -> bytes:
                 if r is None:
                     continue
                 if rec.is_reverse:
-                    rid.append(r); pos.append(int(rec.reference_end) - 1 - off); strand.append(-1)
+                    rid.append(r)
+                    pos.append(int(rec.reference_end) - 1 - off)
+                    strand.append(-1)
                 else:
-                    rid.append(r); pos.append(int(rec.reference_start) + off); strand.append(1)
+                    rid.append(r)
+                    pos.append(int(rec.reference_start) + off)
+                    strand.append(1)
     if not rid:
-        b = io.BytesIO(); empty.write_ipc(b); return b.getvalue()
-    aln = pl.DataFrame({"read_id": pl.Series(rid, dtype=pl.UInt64),
-                        "pos": pl.Series(pos, dtype=pl.Int64),
-                        "strand": pl.Series(strand, dtype=pl.Int64)})
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
+    aln = pl.DataFrame(
+        {
+            "read_id": pl.Series(rid, dtype=pl.UInt64),
+            "pos": pl.Series(pos, dtype=pl.Int64),
+            "strand": pl.Series(strand, dtype=pl.Int64),
+        }
+    )
     try:
         mp_, manifest = _manifest(pdir)
         cfiles = _count_parquets(mp_, manifest)
     except FileNotFoundError:
         cfiles = []
     if not cfiles:
-        b = io.BytesIO(); empty.write_ipc(b); return b.getvalue()
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
     counts = pl.read_parquet(cfiles).select(["read_id", "sample_id", "count"])
-    base = (counts.join(aln, on="read_id", how="inner")
-            .join(_PCTX["sample_map"], on="sample_id", how="inner")
-            .with_columns(pl.col("count").cast(pl.Float64)))
+    base = (
+        counts.join(aln, on="read_id", how="inner")
+        .join(_PCTX["sample_map"], on="sample_id", how="inner")
+        .with_columns(pl.col("count").cast(pl.Float64))
+    )
     if per_sample:
-        out = base.group_by(["sample_name", "strand", "pos"]).agg(pl.col("count").sum().alias("count"))
+        out = base.group_by(["sample_name", "strand", "pos"]).agg(
+            pl.col("count").sum().alias("count")
+        )
     else:
         out = base.group_by(["strand", "pos"]).agg(pl.col("count").sum().alias("count"))
-    b = io.BytesIO(); out.write_ipc(b); return b.getvalue()
+    b = io.BytesIO()
+    out.write_ipc(b)
+    return b.getvalue()
 
 
-def region_coverage(partition_dirs, regions, *, ref_offset: int = 15, group_level: str = "aggregate",
-                    sample_names: Optional[List[str]] = None, n_workers: Optional[int] = None) -> pl.DataFrame:
+def region_coverage(
+    partition_dirs,
+    regions,
+    *,
+    ref_offset: int = 15,
+    group_level: str = "aggregate",
+    sample_names: Optional[List[str]] = None,
+    n_workers: Optional[int] = None,
+) -> pl.DataFrame:
     """A-site coverage over genomic regions, strand-aware. group_level='aggregate'
     → (strand, pos, count); 'sample' → (sample_name, strand, pos, count)."""
     per_sample = group_level == "sample"
@@ -724,8 +934,11 @@ def region_coverage(partition_dirs, regions, *, ref_offset: int = 15, group_leve
         dirs = sorted(d for d in parent.iterdir() if d.is_dir() and _discover_bam(d))
     else:
         dirs = [Path(d) for d in partition_dirs if _discover_bam(Path(d))]
-    out_schema = ({"sample_name": pl.Utf8, "strand": pl.Int64, "pos": pl.Int64, "count": pl.Float64}
-                  if per_sample else {"strand": pl.Int64, "pos": pl.Int64, "count": pl.Float64})
+    out_schema = (
+        {"sample_name": pl.Utf8, "strand": pl.Int64, "pos": pl.Int64, "count": pl.Float64}
+        if per_sample
+        else {"strand": pl.Int64, "pos": pl.Int64, "count": pl.Float64}
+    )
     if not dirs or not regions:
         return pl.DataFrame(schema=out_schema)
     bam_refs = _bam_chroms(_discover_bam(dirs[0]))
@@ -741,31 +954,45 @@ def region_coverage(partition_dirs, regions, *, ref_offset: int = 15, group_leve
         parts = [pl.read_ipc(io.BytesIO(_cov_worker(s))) for s in dir_strs]
     else:
         ctx = mp.get_context("spawn")
-        with ctx.Pool(n_workers, initializer=_cov_worker_init,
-                      initargs=(regions, bam_refs, ref_offset, sample_map, group_level)) as pool:
-            parts = [pl.read_ipc(io.BytesIO(b)) for b in pool.imap_unordered(_cov_worker, dir_strs, chunksize=1)]
+        with ctx.Pool(
+            n_workers,
+            initializer=_cov_worker_init,
+            initargs=(regions, bam_refs, ref_offset, sample_map, group_level),
+        ) as pool:
+            parts = [
+                pl.read_ipc(io.BytesIO(b))
+                for b in pool.imap_unordered(_cov_worker, dir_strs, chunksize=1)
+            ]
     parts = [p for p in parts if not p.is_empty()]
     if not parts:
         return pl.DataFrame(schema=out_schema)
-    keys = (["sample_name", "strand", "pos"] if per_sample else ["strand", "pos"])
+    keys = ["sample_name", "strand", "pos"] if per_sample else ["strand", "pos"]
     return pl.concat(parts).group_by(keys).agg(pl.col("count").sum().alias("count")).sort("pos")
 
 
-_JUNC_OVERHANG = 6   # min flanking aligned length on BOTH sides → confident span
+_JUNC_OVERHANG = 6  # min flanking aligned length on BOTH sides → confident span
 
 
 def _junc_worker_init(junctions, bam_refs, sample_map, group_level, cluster_labels) -> None:
-    _PCTX.update(junctions=junctions, bam_refs=bam_refs, sample_map=sample_map,
-                 group_level=group_level, cluster_labels=cluster_labels)
+    _PCTX.update(
+        junctions=junctions,
+        bam_refs=bam_refs,
+        sample_map=sample_map,
+        group_level=group_level,
+        cluster_labels=cluster_labels,
+    )
 
 
 def _junc_worker(pdir_str: str) -> bytes:
     pdir = Path(pdir_str)
     bam = _discover_bam(pdir)
-    empty = pl.DataFrame(schema={"group": pl.Utf8, "junction_id": pl.UInt64,
-                                 "kind": pl.Utf8, "count": pl.Float64})
+    empty = pl.DataFrame(
+        schema={"group": pl.Utf8, "junction_id": pl.UInt64, "kind": pl.Utf8, "count": pl.Float64}
+    )
     if bam is None:
-        b = io.BytesIO(); empty.write_ipc(b); return b.getvalue()
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
     bam_refs = _PCTX["bam_refs"]
     # Classify reads at each donor: span_conf (intron matches, overhang≥6 both
     # sides), span_short (matches but short overhang → ambiguous mapping),
@@ -773,8 +1000,15 @@ def _junc_worker(pdir_str: str) -> bytes:
     rid, jid, kind = [], [], []
     with pysam.AlignmentFile(str(bam), "rb") as bf:
         for chrom, donor, acceptor, strand, jjid in _PCTX["junctions"]:
-            fc = chrom if chrom in bam_refs else (f"chr{chrom}" if f"chr{chrom}" in bam_refs
-                                                  else (chrom[3:] if chrom[3:] in bam_refs else None))
+            fc = (
+                chrom
+                if chrom in bam_refs
+                else (
+                    f"chr{chrom}"
+                    if f"chr{chrom}" in bam_refs
+                    else (chrom[3:] if chrom[3:] in bam_refs else None)
+                )
+            )
             if fc is None:
                 continue
             for rec in bf.fetch(fc, max(0, donor), donor + 1):
@@ -796,33 +1030,48 @@ def _junc_worker(pdir_str: str) -> bytes:
                             k = "unspliced"
                             break
                 if k is not None:
-                    rid.append(r); jid.append(jjid); kind.append(k)
+                    rid.append(r)
+                    jid.append(jjid)
+                    kind.append(k)
     if not rid:
-        b = io.BytesIO(); empty.write_ipc(b); return b.getvalue()
-    aln = pl.DataFrame({"read_id": pl.Series(rid, dtype=pl.UInt64),
-                        "junction_id": pl.Series(jid, dtype=pl.UInt64),
-                        "kind": pl.Series(kind, dtype=pl.Utf8)}).unique()
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
+    aln = pl.DataFrame(
+        {
+            "read_id": pl.Series(rid, dtype=pl.UInt64),
+            "junction_id": pl.Series(jid, dtype=pl.UInt64),
+            "kind": pl.Series(kind, dtype=pl.Utf8),
+        }
+    ).unique()
     try:
         mp_, manifest = _manifest(pdir)
         cfiles = _count_parquets(mp_, manifest)
     except FileNotFoundError:
         cfiles = []
     if not cfiles:
-        b = io.BytesIO(); empty.write_ipc(b); return b.getvalue()
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
     counts = pl.read_parquet(cfiles).select(["read_id", "sample_id", "count"])
-    base = (counts.join(aln, on="read_id", how="inner")
-            .join(_PCTX["sample_map"], on="sample_id", how="inner")
-            .with_columns(pl.col("count").cast(pl.Float64)))
+    base = (
+        counts.join(aln, on="read_id", how="inner")
+        .join(_PCTX["sample_map"], on="sample_id", how="inner")
+        .with_columns(pl.col("count").cast(pl.Float64))
+    )
     level = _PCTX["group_level"]
     if level == "aggregate":
         base = base.with_columns(pl.lit("aggregate").alias("group"))
     elif level == "cluster":
         base = base.join(_PCTX["cluster_labels"], on="sample_name", how="inner").with_columns(
-            pl.col("cluster_id").cast(pl.Utf8).alias("group"))
+            pl.col("cluster_id").cast(pl.Utf8).alias("group")
+        )
     else:
         base = base.with_columns(pl.col("sample_name").alias("group"))
     out = base.group_by(["group", "junction_id", "kind"]).agg(pl.col("count").sum().alias("count"))
-    b = io.BytesIO(); out.write_ipc(b); return b.getvalue()
+    b = io.BytesIO()
+    out.write_ipc(b)
+    return b.getvalue()
 
 
 def tabulate_junctions(
@@ -862,13 +1111,23 @@ def tabulate_junctions(
         parts = [pl.read_ipc(io.BytesIO(_junc_worker(s))) for s in dir_strs]
     else:
         ctx = mp.get_context("spawn")
-        with ctx.Pool(n_workers, initializer=_junc_worker_init,
-                      initargs=(junctions, bam_refs, sample_map, group_level, cluster_labels)) as pool:
-            parts = [pl.read_ipc(io.BytesIO(b)) for b in pool.imap_unordered(_junc_worker, dir_strs, chunksize=1)]
+        with ctx.Pool(
+            n_workers,
+            initializer=_junc_worker_init,
+            initargs=(junctions, bam_refs, sample_map, group_level, cluster_labels),
+        ) as pool:
+            parts = [
+                pl.read_ipc(io.BytesIO(b))
+                for b in pool.imap_unordered(_junc_worker, dir_strs, chunksize=1)
+            ]
     parts = [p for p in parts if not p.is_empty()]
     if not parts:
         return pl.DataFrame(schema=out_schema)
-    return pl.concat(parts).group_by(["group", "junction_id", "kind"]).agg(pl.col("count").sum().alias("count"))
+    return (
+        pl.concat(parts)
+        .group_by(["group", "junction_id", "kind"])
+        .agg(pl.col("count").sum().alias("count"))
+    )
 
 
 def junction_support_dict(jdf: pl.DataFrame, group: str = "aggregate") -> Dict[int, dict]:
@@ -882,7 +1141,9 @@ def junction_support_dict(jdf: pl.DataFrame, group: str = "aggregate") -> Dict[i
     return out
 
 
-def profile_matrix(profiles: pl.DataFrame, gene_id: str) -> Tuple[np.ndarray, List[str], np.ndarray]:
+def profile_matrix(
+    profiles: pl.DataFrame, gene_id: str
+) -> Tuple[np.ndarray, List[str], np.ndarray]:
     """Pivot tabulate_profiles output for one gene → ([group × position] matrix,
     group labels, position vector).  Ready for profile_clustering / score_clustered."""
     sub = profiles.filter(pl.col("gene_id") == gene_id)
@@ -898,6 +1159,7 @@ def profile_matrix(profiles: pl.DataFrame, gene_id: str) -> Tuple[np.ndarray, Li
 # ---------------------------------------------------------------------------
 # Phase B: vectorised rollup with multimap strategy
 # ---------------------------------------------------------------------------
+
 
 def tabulate_rollup(
     partition_dirs,
@@ -931,15 +1193,19 @@ def tabulate_rollup(
             continue
         count_files.extend(_count_parquets(mp_, manifest))
 
-    out_schema = {"sample_name": pl.Utf8, "length": pl.Int64, "strand": pl.Utf8,
-                  "phase0": pl.Int8, "count": pl.Float64}
+    out_schema = {
+        "sample_name": pl.Utf8,
+        "length": pl.Int64,
+        "strand": pl.Utf8,
+        "phase0": pl.Int8,
+        "count": pl.Float64,
+    }
     if not count_files:
         return pl.DataFrame(schema=out_schema)
 
     counts = pl.scan_parquet(count_files).select(["read_id", "sample_id", "count"])
     base = (
-        counts
-        .join(index.lazy(), on="read_id", how="inner")
+        counts.join(index.lazy(), on="read_id", how="inner")
         .join(samples.lazy(), on="sample_id", how="inner")
         .with_columns(pl.col("count").cast(pl.Float64))
     )
@@ -949,7 +1215,8 @@ def tabulate_rollup(
     if multimap_mode == "unique":
         return (
             base.filter(pl.col("n_align") == 1)
-            .group_by(keys).agg(pl.col("count").sum().alias("count"))
+            .group_by(keys)
+            .agg(pl.col("count").sum().alias("count"))
             .collect(engine="streaming")
         )
 
@@ -965,17 +1232,20 @@ def tabulate_rollup(
     # per-(sample, gene) unique-read density
     density = (
         uniq.filter(pl.col("gene_code") >= 0)
-        .group_by(["sample_name", "gene_code"]).agg(pl.col("count").sum().alias("dens"))
+        .group_by(["sample_name", "gene_code"])
+        .agg(pl.col("count").sum().alias("dens"))
     )
 
     multi = base.filter(pl.col("n_align") > 1)
     multi = (
         multi.join(density, on=["sample_name", "gene_code"], how="left")
         .with_columns(pl.col("dens").fill_null(0.0))
-        .with_columns([
-            pl.col("dens").sum().over(["read_id", "sample_name"]).alias("tot_dens"),
-            pl.len().over(["read_id", "sample_name"]).alias("n_cand"),
-        ])
+        .with_columns(
+            [
+                pl.col("dens").sum().over(["read_id", "sample_name"]).alias("tot_dens"),
+                pl.len().over(["read_id", "sample_name"]).alias("n_cand"),
+            ]
+        )
         .with_columns(
             pl.when(pl.col("tot_dens") > 0)
             .then(pl.col("dens") / pl.col("tot_dens"))
@@ -988,7 +1258,8 @@ def tabulate_rollup(
 
     return (
         pl.concat([uniq_roll, multi_roll])
-        .group_by(keys).agg(pl.col("count").sum().alias("count"))
+        .group_by(keys)
+        .agg(pl.col("count").sum().alias("count"))
         .collect(engine="streaming")
     )
 
@@ -996,6 +1267,7 @@ def tabulate_rollup(
 # ---------------------------------------------------------------------------
 # Phase C: central offset calibration + scoring (operates on the tiny rollup)
 # ---------------------------------------------------------------------------
+
 
 def _frame_at(phase0: int, strand: str, offset: int) -> int:
     return (phase0 + offset) % 3 if strand == "+" else (phase0 - offset) % 3
@@ -1037,6 +1309,7 @@ def rollup_to_periodicity(
 ) -> pl.DataFrame:
     """Apply per-(sample, length) offsets to the rollup → periodicity_qc schema."""
     from .matrix_qc import _empty_periodicity_schema
+
     if rollup.is_empty():
         return _empty_periodicity_schema()
 
@@ -1060,16 +1333,22 @@ def rollup_to_periodicity(
             rfd_json[str(length)] = counts
             tot = sum(counts)
             dom_json[str(length)] = (max(counts) / tot) if tot > 0 else 0.0
-        rows.append({
-            "sample_id": sname,
-            "periodicity_score": scores["periodicity_score"],
-            "f0": scores["f0"], "f1": scores["f1"], "f2": scores["f2"],
-            "n_cds_reads": scores["n_reads"],
-            "recommended_offsets": json.dumps({str(k): v for k, v in used_off[sname].items()}),
-            "read_frame_distribution": json.dumps(rfd_json),
-            "per_length_periodicity": json.dumps({str(k): v for k, v in scores["per_length"].items()}),
-            "per_length_dominance": json.dumps(dom_json),
-        })
+        rows.append(
+            {
+                "sample_id": sname,
+                "periodicity_score": scores["periodicity_score"],
+                "f0": scores["f0"],
+                "f1": scores["f1"],
+                "f2": scores["f2"],
+                "n_cds_reads": scores["n_reads"],
+                "recommended_offsets": json.dumps({str(k): v for k, v in used_off[sname].items()}),
+                "read_frame_distribution": json.dumps(rfd_json),
+                "per_length_periodicity": json.dumps(
+                    {str(k): v for k, v in scores["per_length"].items()}
+                ),
+                "per_length_dominance": json.dumps(dom_json),
+            }
+        )
     return pl.from_dicts(rows).sort("sample_id") if rows else _empty_periodicity_schema()
 
 
@@ -1079,7 +1358,7 @@ def periodicity_qc_scalable(
     *,
     index: "pl.DataFrame | str | Path | None" = None,
     multimap_mode: str = "unique",
-    offset_mode: str = "calibrate",          # "calibrate" | "fixed"
+    offset_mode: str = "calibrate",  # "calibrate" | "fixed"
     fixed_offset: int = 15,
     ref_offset: int = 15,
     sample_names: Optional[List[str]] = None,
@@ -1087,12 +1366,19 @@ def periodicity_qc_scalable(
 ) -> pl.DataFrame:
     """End-to-end scalable periodicity QC: index (or reuse) → rollup → calibrate → score."""
     if index is None:
-        index = build_alignment_index(partition_dirs, cds_df, ref_offset=ref_offset, n_workers=n_workers)
-    rollup = tabulate_rollup(partition_dirs, index, multimap_mode=multimap_mode, sample_names=sample_names)
+        index = build_alignment_index(
+            partition_dirs, cds_df, ref_offset=ref_offset, n_workers=n_workers
+        )
+    rollup = tabulate_rollup(
+        partition_dirs, index, multimap_mode=multimap_mode, sample_names=sample_names
+    )
     if offset_mode == "fixed":
-        offsets = {(s, L): fixed_offset
-                   for s, L in {(str(r["sample_name"]), int(r["length"]))
-                                for r in rollup.iter_rows(named=True)}}
+        offsets = {
+            (s, L): fixed_offset
+            for s, L in {
+                (str(r["sample_name"]), int(r["length"])) for r in rollup.iter_rows(named=True)
+            }
+        }
     else:
         offsets = calibrate_offsets(rollup)
     return rollup_to_periodicity(rollup, offsets, default_offset=fixed_offset)

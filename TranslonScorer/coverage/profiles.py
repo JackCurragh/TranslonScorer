@@ -11,6 +11,7 @@ Schema (profiles):
 
 Optionally include a 'sample' column for multi-sample sources.
 """
+
 from __future__ import annotations
 
 from typing import Dict, Iterable, Iterator, Optional, Tuple
@@ -37,32 +38,32 @@ def _ensure_transcript_coords(reads_df: pl.DataFrame, exon_df: pl.DataFrame) -> 
     Else, project genomic reads to transcript coords via bamtranscript().
     """
     cols = set(reads_df.columns)
-    if {'tran_id', 'tran_start_bam'}.issubset(cols):
+    if {"tran_id", "tran_start_bam"}.issubset(cols):
         return reads_df
 
     # Heuristic: if 'chr' overlaps many tran_ids in exon_df, treat as transcriptomic
-    if 'chr' in cols:
+    if "chr" in cols:
         # Sample small subset to test overlap
-        sample_chr = set(reads_df.get_column('chr').head(1000).to_list())
-        exon_tran = set(exon_df.get_column('tran_id').head(1000).to_list())
+        sample_chr = set(reads_df.get_column("chr").head(1000).to_list())
+        exon_tran = set(exon_df.get_column("tran_id").head(1000).to_list())
         if len(sample_chr.intersection(exon_tran)) > 10:
-            df = reads_df.rename({'chr': 'tran_id'})
-            return df.with_columns(
-                pl.col('start').alias('tran_start_bam')
-            )
+            df = reads_df.rename({"chr": "tran_id"})
+            return df.with_columns(pl.col("start").alias("tran_start_bam"))
 
     # Default: genomic reads → transcript projection
     projected = bam_handlers.bamtranscript(reads_df, exon_df)
     return projected
 
 
-def _compute_asite_profiles(df_with_tran: pl.DataFrame, offsets: Dict[int, int], *, keep_length: bool = False) -> pl.DataFrame:
+def _compute_asite_profiles(
+    df_with_tran: pl.DataFrame, offsets: Dict[int, int], *, keep_length: bool = False
+) -> pl.DataFrame:
     """Compute A-site transcript profiles (tran_id, pos, count) from transcript-mapped reads.
 
     Expects columns: tran_id, tran_start_bam, length, count
     """
     if df_with_tran.is_empty():
-        return pl.DataFrame({'tran_id': [], 'pos': [], 'count': []})
+        return pl.DataFrame({"tran_id": [], "pos": [], "count": []})
 
     # Map per-length offsets; unknown lengths default to 15
     def _ofs(L: int) -> int:
@@ -71,19 +72,30 @@ def _compute_asite_profiles(df_with_tran: pl.DataFrame, offsets: Dict[int, int],
         except Exception:
             return 15
 
-    sample_cols = [c for c in ("sample_id", "sample_index", "study_id", "study_id_int") if c in df_with_tran.columns]
-    cols = sample_cols + ['tran_id', 'pos'] + (['length'] if keep_length and 'length' in df_with_tran.columns else [])
+    sample_cols = [
+        c
+        for c in ("sample_id", "sample_index", "study_id", "study_id_int")
+        if c in df_with_tran.columns
+    ]
+    cols = (
+        sample_cols
+        + ["tran_id", "pos"]
+        + (["length"] if keep_length and "length" in df_with_tran.columns else [])
+    )
     out = (
-        df_with_tran
-        .with_columns(
-            pl.col('length').map_elements(_ofs).alias('ofs'),
-            pl.col('tran_start_bam').cast(pl.Int64)
+        df_with_tran.with_columns(
+            pl.col("length").map_elements(_ofs).alias("ofs"),
+            pl.col("tran_start_bam").cast(pl.Int64),
         )
-        .with_columns((pl.col('tran_start_bam') + pl.col('ofs')).alias('pos'))
-        .select(sample_cols + ['tran_id', 'pos', 'count'] + (['length'] if keep_length and 'length' in df_with_tran.columns else []))
+        .with_columns((pl.col("tran_start_bam") + pl.col("ofs")).alias("pos"))
+        .select(
+            sample_cols
+            + ["tran_id", "pos", "count"]
+            + (["length"] if keep_length and "length" in df_with_tran.columns else [])
+        )
         .group_by(cols)
-        .agg(pl.col('count').sum())
-        .rename({'count': 'count'})
+        .agg(pl.col("count").sum())
+        .rename({"count": "count"})
         .sort(cols)
     )
     return out
@@ -99,7 +111,7 @@ def profiles_from_bam(
     count_pattern: Optional[str] = None,
     count_tag: Optional[str] = None,
     keep_length: bool = False,
-) -> tuple[pl.DataFrame, Dict[int,int]]:
+) -> tuple[pl.DataFrame, Dict[int, int]]:
     """Compute transcript A-site profiles from a BAM (classic or collapsed).
 
     Returns (profiles_df, offsets_dict).
@@ -119,13 +131,13 @@ def profiles_from_bam(
     try:
         bam_type, _ = bam_handlers.detect_bam_type(reads, exon_df)
     except Exception:
-        bam_type = 'genomic'
+        bam_type = "genomic"
 
-    if bam_type == 'genomic':
+    if bam_type == "genomic":
         reads = bam_handlers.bamtranscript(reads, exon_df)
     else:
-        reads = reads.rename({'chr': 'tran_id'}).with_columns(
-            pl.col('start').alias('tran_start_bam')
+        reads = reads.rename({"chr": "tran_id"}).with_columns(
+            pl.col("start").alias("tran_start_bam")
         )
 
     # Compute offsets from a change-point analysis on transcriptomic reads
@@ -157,7 +169,11 @@ def _transcript_gene_map(
     if transcripts_df is not None and {"tran_id", "gene_id"}.issubset(set(transcripts_df.columns)):
         return transcripts_df.select(["tran_id", "gene_id"]).drop_nulls().unique()
     if feature_map_df is not None and "locus_id" in feature_map_df.columns:
-        tx_col = "tran_id" if "tran_id" in feature_map_df.columns else ("transcript_id" if "transcript_id" in feature_map_df.columns else None)
+        tx_col = (
+            "tran_id"
+            if "tran_id" in feature_map_df.columns
+            else ("transcript_id" if "transcript_id" in feature_map_df.columns else None)
+        )
         if tx_col:
             out = feature_map_df.select([tx_col, "locus_id"]).drop_nulls().unique()
             if tx_col != "tran_id":
@@ -175,7 +191,9 @@ def gene_expression_matrix_from_profiles(
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Build long and wide gene expression matrices from sample-resolved profiles."""
     if profiles.is_empty():
-        empty_long = pl.DataFrame(schema={"sample_id": pl.Utf8, "gene_id": pl.Utf8, "count": pl.Float64})
+        empty_long = pl.DataFrame(
+            schema={"sample_id": pl.Utf8, "gene_id": pl.Utf8, "count": pl.Float64}
+        )
         empty_wide = pl.DataFrame(schema={"gene_id": pl.Utf8})
         return empty_long, empty_wide
     if "sample_id" not in profiles.columns:
@@ -226,14 +244,28 @@ def profiles_from_sparse_parquet_matrix(
     )
     if genomic_counts.is_empty():
         return (
-            pl.DataFrame(schema={"sample_id": pl.Utf8, "tran_id": pl.Utf8, "pos": pl.Int64, "count": pl.Float64}),
+            pl.DataFrame(
+                schema={
+                    "sample_id": pl.Utf8,
+                    "tran_id": pl.Utf8,
+                    "pos": pl.Int64,
+                    "count": pl.Float64,
+                }
+            ),
             {},
             genomic_counts,
         )
     mapped = bam_handlers.bamtranscript(genomic_counts, exon_df)
     if mapped.is_empty():
         return (
-            pl.DataFrame(schema={"sample_id": pl.Utf8, "tran_id": pl.Utf8, "pos": pl.Int64, "count": pl.Float64}),
+            pl.DataFrame(
+                schema={
+                    "sample_id": pl.Utf8,
+                    "tran_id": pl.Utf8,
+                    "pos": pl.Int64,
+                    "count": pl.Float64,
+                }
+            ),
             {},
             genomic_counts,
         )
@@ -243,7 +275,9 @@ def profiles_from_sparse_parquet_matrix(
         offsets = coordinates.change_point_analysis(rel)
         offsets = {int(k): int(v) for k, v in offsets.items()}
     except Exception as exc:
-        log_warning(f"Could not infer offsets from sparse matrix profiles; using default offset {default_offset}: {exc}")
+        log_warning(
+            f"Could not infer offsets from sparse matrix profiles; using default offset {default_offset}: {exc}"
+        )
         offsets = _default_offsets_for_profiles(mapped, default_offset)
     for length in mapped.get_column("length").drop_nulls().unique().to_list():
         offsets.setdefault(int(length), int(default_offset))
@@ -259,7 +293,7 @@ def profiles_from_zarr(
     cds_df: pl.DataFrame,
     *,
     default_offset: int = 15,
-    offsets_mode: str = 'auto',
+    offsets_mode: str = "auto",
     offsets_out: str | None = None,
     sample_cap_per_len: int = 50000,
     mapped_index_parquet: str | None = None,
@@ -274,7 +308,7 @@ def profiles_from_zarr(
     log_info("Streaming Zarr + index for profiles…")
     cds_tran_df = cds_to_transcript_space(cds_df, exon_df)
     offsets_by_sample: Dict[str, Dict[int, int]] = {}
-    sampled_by_sample_len: Dict[tuple[str,int], int] = {}
+    sampled_by_sample_len: Dict[tuple[str, int], int] = {}
 
     mapped_path: str | None = None
     if mapped_index_parquet:
@@ -292,15 +326,15 @@ def profiles_from_zarr(
         if mapped_path:
             # Join to mapped index via read_id (faster; no projection)
             # Ensure read_id present; the index provides it
-            if 'read_id' not in chunk.columns:
+            if "read_id" not in chunk.columns:
                 # Add sequential row ids won't match; enforce safeguard
                 raise RuntimeError("read_id missing in chunk; expected from index join")
-            mapped = (
-                chunk.join(
-                    pl.scan_parquet(mapped_path).select(["read_id","tran_id","tran_start_bam","length","strand"]).collect(),
-                    on=["read_id","length","strand"],  # use length/strand to reduce collisions
-                    how='inner'
-                )
+            mapped = chunk.join(
+                pl.scan_parquet(mapped_path)
+                .select(["read_id", "tran_id", "tran_start_bam", "length", "strand"])
+                .collect(),
+                on=["read_id", "length", "strand"],  # use length/strand to reduce collisions
+                how="inner",
             )
             if mapped.is_empty():
                 continue
@@ -313,27 +347,30 @@ def profiles_from_zarr(
             offsets_by_sample[sample] = {}
         offsets = offsets_by_sample[sample]
 
-        if offsets_mode == 'auto':
+        if offsets_mode == "auto":
             # Accumulate a capped sample per read length for change-point
-            need: set[int] = set(int(x) for x in mapped.get_column('length').unique().to_list() if int(x) not in offsets)
+            need: set[int] = set(
+                int(x)
+                for x in mapped.get_column("length").unique().to_list()
+                if int(x) not in offsets
+            )
             if need:
                 # Prepare input for relative-to-CDS shift detection:
                 # ensure the 'start' column refers to transcript start.
-                if 'tran_start_bam' in mapped.columns:
-                    rel_input = mapped.with_columns(pl.col('tran_start_bam').alias('start'))
-                elif 'tran_start' in mapped.columns:
-                    rel_input = mapped.with_columns(pl.col('tran_start').alias('start'))
+                if "tran_start_bam" in mapped.columns:
+                    rel_input = mapped.with_columns(pl.col("tran_start_bam").alias("start"))
+                elif "tran_start" in mapped.columns:
+                    rel_input = mapped.with_columns(pl.col("tran_start").alias("start"))
                 else:
                     rel_input = mapped
                 # Join CDS to compute relative to CDS start using existing helper
-                rel = bam_handlers.process_transcriptomic_bam(
-                    rel_input,
-                    cds_tran_df
-                )
+                rel = bam_handlers.process_transcriptomic_bam(rel_input, cds_tran_df)
                 # For each needed length, take up to sample_cap_per_len rows
                 rows = []
                 for L in list(need):
-                    sub = rel.filter(pl.col('length') == int(L)).select(['bamcds_start','length','count'])
+                    sub = rel.filter(pl.col("length") == int(L)).select(
+                        ["bamcds_start", "length", "count"]
+                    )
                     if sub.height == 0:
                         continue
                     # Downsample if necessary
@@ -342,16 +379,16 @@ def profiles_from_zarr(
                 if rows:
                     pool = pl.concat(rows)
                     off = coordinates.change_point_analysis(pool)
-                    offsets.update({int(k): int(v) for k,v in off.items()})
+                    offsets.update({int(k): int(v) for k, v in off.items()})
                 # Fill any remaining unseen with default
                 for L in need:
                     offsets.setdefault(int(L), default_offset)
-        elif offsets_mode == 'required':
+        elif offsets_mode == "required":
             # Expect provided offsets via file (handled by caller); nothing to do
             pass
         else:
             # global default
-            lengths = set(int(x) for x in mapped.get_column('length').unique().to_list())
+            lengths = set(int(x) for x in mapped.get_column("length").unique().to_list())
             for L in lengths:
                 offsets.setdefault(int(L), default_offset)
 
@@ -363,7 +400,7 @@ def profiles_from_zarr(
         rows = []
         for s, od in offsets_by_sample.items():
             for L, ofs in od.items():
-                rows.append({'sample': s, 'length': int(L), 'offset': int(ofs)})
+                rows.append({"sample": s, "length": int(L), "offset": int(ofs)})
         if rows:
             pl.from_dicts(rows).write_csv(offsets_out)
 
@@ -371,7 +408,7 @@ def profiles_from_zarr(
 def write_profiles_parquet(df: pl.DataFrame, out_path: str, sample: Optional[str] = None) -> str:
     """Write profiles to Parquet; include sample column if provided (safe I/O)."""
     if sample:
-        df = df.with_columns(pl.lit(sample).alias('sample'))
+        df = df.with_columns(pl.lit(sample).alias("sample"))
     return write_parquet_safe(df, out_path)
 
 
@@ -393,12 +430,13 @@ def profiles_from_bigwig(
     def _bw_to_profiles(bw) -> pl.DataFrame:
         tran = bigwig_handlers.transcriptreads(bw, exon_df)
         if tran.is_empty():
-            return pl.DataFrame({'tran_id': [], 'pos': [], 'count': []})
+            return pl.DataFrame({"tran_id": [], "pos": [], "count": []})
         return (
-            tran.select(['tran_id', 'tran_start', 'counts'])
-                .rename({'tran_start': 'pos', 'counts': 'count'})
-                .group_by(['tran_id', 'pos']).agg(pl.col('count').sum())
-                .sort(['tran_id', 'pos'])
+            tran.select(["tran_id", "tran_start", "counts"])
+            .rename({"tran_start": "pos", "counts": "count"})
+            .group_by(["tran_id", "pos"])
+            .agg(pl.col("count").sum())
+            .sort(["tran_id", "pos"])
         )
 
     # Single BigWig path
@@ -406,17 +444,18 @@ def profiles_from_bigwig(
         return _bw_to_profiles(bigwig_path)
 
     # Strand-specific dict
-    fwd = bigwig_path.get('forward')
-    rev = bigwig_path.get('reverse')
-    f_df = _bw_to_profiles(fwd) if fwd else pl.DataFrame({'tran_id': [], 'pos': [], 'count': []})
-    r_df = _bw_to_profiles(rev) if rev else pl.DataFrame({'tran_id': [], 'pos': [], 'count': []})
+    fwd = bigwig_path.get("forward")
+    rev = bigwig_path.get("reverse")
+    f_df = _bw_to_profiles(fwd) if fwd else pl.DataFrame({"tran_id": [], "pos": [], "count": []})
+    r_df = _bw_to_profiles(rev) if rev else pl.DataFrame({"tran_id": [], "pos": [], "count": []})
 
     if f_df.is_empty() and r_df.is_empty():
-        return pl.DataFrame({'tran_id': [], 'pos': [], 'count': []})
+        return pl.DataFrame({"tran_id": [], "pos": [], "count": []})
 
     # Sum strands into total profiles for now
-    both = pl.concat([f_df, r_df]) if not (f_df.is_empty() or r_df.is_empty()) else (f_df if not f_df.is_empty() else r_df)
-    return (
-        both.group_by(['tran_id', 'pos']).agg(pl.col('count').sum())
-            .sort(['tran_id', 'pos'])
+    both = (
+        pl.concat([f_df, r_df])
+        if not (f_df.is_empty() or r_df.is_empty())
+        else (f_df if not f_df.is_empty() else r_df)
     )
+    return both.group_by(["tran_id", "pos"]).agg(pl.col("count").sum()).sort(["tran_id", "pos"])

@@ -17,6 +17,7 @@ All modes share the same downstream scoring code path
 (bigwig.score_transcript) so the score column is directly comparable to
 BigWig-based scoring runs.
 """
+
 from __future__ import annotations
 
 import gc
@@ -36,6 +37,7 @@ from .orf.score_schema import ensure_score_schema
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _default_offsets(lengths: Iterable[int], default: int = 15) -> Dict[int, int]:
     return {int(L): int(default) for L in set(int(x) for x in lengths)}
@@ -117,9 +119,7 @@ def profiles_to_scored_orfs(
         tran_orfs = orf_df.filter(pl.col("tran_id") == tran_id)
         orf_data = tran_orfs.to_dict(as_series=False)
 
-        scored_dict = score_transcript(
-            (str(tran_id), tran_data, orf_data, old_scoring, sru_range)
-        )
+        scored_dict = score_transcript((str(tran_id), tran_data, orf_data, old_scoring, sru_range))
         if scored_dict is not None:
             results.append(pl.from_dict(scored_dict))
 
@@ -138,6 +138,7 @@ def profiles_to_scored_orfs(
 # Aggregate mode
 # ---------------------------------------------------------------------------
 
+
 def aggregate_profiles_from_genomic_counts(
     genomic_counts: pl.DataFrame,
     exon_df: pl.DataFrame,
@@ -151,10 +152,8 @@ def aggregate_profiles_from_genomic_counts(
     if genomic_counts.is_empty():
         return pl.DataFrame(schema={"tran_id": pl.Utf8, "pos": pl.Int64, "count": pl.Float64})
 
-    agg = (
-        genomic_counts
-        .group_by(["chr", "start", "stop", "strand", "length"])
-        .agg(pl.col("count").sum())
+    agg = genomic_counts.group_by(["chr", "start", "stop", "strand", "length"]).agg(
+        pl.col("count").sum()
     )
     return _genomic_to_transcript_profiles(agg, exon_df, offsets)
 
@@ -181,20 +180,27 @@ def score_aggregate(
         sample_names=sample_names,
     )
 
-    log_info(f"Loaded {genomic_counts.height:,} genomic-count rows across "
-             f"{genomic_counts.get_column('sample_id').n_unique() if not genomic_counts.is_empty() else 0} samples")
+    log_info(
+        f"Loaded {genomic_counts.height:,} genomic-count rows across "
+        f"{genomic_counts.get_column('sample_id').n_unique() if not genomic_counts.is_empty() else 0} samples"
+    )
 
     profiles = aggregate_profiles_from_genomic_counts(genomic_counts, exon_df, offsets)
     log_info(f"Aggregate profiles: {profiles.height:,} transcript-position rows")
 
     return profiles_to_scored_orfs(
-        profiles, orf_df, sru_range=sru_range, old_scoring=old_scoring, input_type="sparse_matrix_aggregate"
+        profiles,
+        orf_df,
+        sru_range=sru_range,
+        old_scoring=old_scoring,
+        input_type="sparse_matrix_aggregate",
     )
 
 
 # ---------------------------------------------------------------------------
 # Per-sample mode
 # ---------------------------------------------------------------------------
+
 
 def per_sample_profiles_from_genomic_counts(
     genomic_counts: pl.DataFrame,
@@ -217,8 +223,7 @@ def per_sample_profiles_from_genomic_counts(
         for key, grp in sample_offsets.group_by("sample_id"):
             sid = str(key[0] if isinstance(key, tuple) else key)
             offsets_by_sample[sid] = {
-                int(r[0]): int(r[1])
-                for r in grp.select(["length", "offset"]).iter_rows()
+                int(r[0]): int(r[1]) for r in grp.select(["length", "offset"]).iter_rows()
             }
 
     for key, sample_df in genomic_counts.group_by("sample_id"):
@@ -263,8 +268,10 @@ def score_per_sample(
         exon_df=exon_df,
         sample_names=sample_names,
     )
-    log_info(f"Loaded {genomic_counts.height:,} rows for "
-             f"{genomic_counts.get_column('sample_id').n_unique() if not genomic_counts.is_empty() else 0} samples")
+    log_info(
+        f"Loaded {genomic_counts.height:,} rows for "
+        f"{genomic_counts.get_column('sample_id').n_unique() if not genomic_counts.is_empty() else 0} samples"
+    )
 
     results: Dict[str, pl.DataFrame] = {}
     for sid, profiles in per_sample_profiles_from_genomic_counts(
@@ -272,7 +279,10 @@ def score_per_sample(
     ):
         log_info(f"Scoring sample {sid}…")
         scored = profiles_to_scored_orfs(
-            profiles, orf_df, sru_range=sru_range, old_scoring=old_scoring,
+            profiles,
+            orf_df,
+            sru_range=sru_range,
+            old_scoring=old_scoring,
             input_type="sparse_matrix_per_sample",
         )
         if not scored.is_empty():
@@ -285,10 +295,11 @@ def score_per_sample(
 # Cluster-aggregate mode  (delegates heavy work to profile_clustering)
 # ---------------------------------------------------------------------------
 
+
 def score_clustered(
-    locus_profiles_matrix: np.ndarray,   # [n_samples, n_positions]
+    locus_profiles_matrix: np.ndarray,  # [n_samples, n_positions]
     sample_names: List[str],
-    pos_vector: np.ndarray,               # genomic/transcript positions (length n_positions)
+    pos_vector: np.ndarray,  # genomic/transcript positions (length n_positions)
     tran_id: str,
     orf_df: pl.DataFrame,
     *,

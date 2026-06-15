@@ -19,9 +19,9 @@ def setup_logging(level: int = logging.INFO) -> None:
     """
     logging.basicConfig(
         level=level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        stream=sys.stdout
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        stream=sys.stdout,
     )
 
 
@@ -48,7 +48,7 @@ def log_warning(message: str) -> None:
 def log_error(
     message: str,
     raise_exception: bool = True,
-    exception_type: Optional[Type[Exception]] = RuntimeError
+    exception_type: Optional[Type[Exception]] = RuntimeError,
 ) -> None:
     """
     Log an error message and optionally raise an exception.
@@ -67,4 +67,4 @@ def log_error(
 
 
 # Set up logging when the module is imported
-setup_logging() 
+setup_logging()

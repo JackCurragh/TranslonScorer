@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Zarr + unique-read index loader utilities.
 
@@ -22,11 +23,12 @@ import importlib
 _zarr_mod = None
 _zarr_err = None
 
+
 def _require_zarr():
     global _zarr_mod, _zarr_err
     if _zarr_mod is None and _zarr_err is None:
         try:
-            _zarr_mod = importlib.import_module('zarr')
+            _zarr_mod = importlib.import_module("zarr")
         except Exception as e:
             _zarr_err = e
     if _zarr_mod is None:
@@ -62,8 +64,8 @@ def _open_counts(zroot: str):
         keys = list(root.keys()) if hasattr(root, "keys") else []
         if keys:
             # Prefer a child literally named 'counts' if present
-            if 'counts' in keys:
-                return root['counts']
+            if "counts" in keys:
+                return root["counts"]
             return root[keys[0]]
     except Exception:
         # Could not open as group; fall through to direct array paths
@@ -71,10 +73,10 @@ def _open_counts(zroot: str):
 
     # Try an explicit '/counts' child path
     try:
-        return _zarr_mod.open(zroot.rstrip('/') + '/counts', mode='r')
+        return _zarr_mod.open(zroot.rstrip("/") + "/counts", mode="r")
     except Exception:
         # Final attempt: open the given path as an array
-        arr = _zarr_mod.open(zroot, mode='r')
+        arr = _zarr_mod.open(zroot, mode="r")
         return arr
 
 
@@ -127,7 +129,7 @@ def iter_reads_from_zarr(
         # For each sample, slice counts and emit
         for s in samples:
             si = sample_to_index[s]
-            read_ids = idx_df.get_column('read_id').to_numpy()
+            read_ids = idx_df.get_column("read_id").to_numpy()
             if samples_first:
                 counts = arr.get_orthogonal_selection((si, read_ids))
             else:
@@ -135,8 +137,12 @@ def iter_reads_from_zarr(
 
             # Build DF with counts
             if include_read_id:
-                df = idx_df.with_columns(pl.Series("count", counts)).select(["read_id","chr","start","stop","strand","length","count"])  # keep read_id
+                df = idx_df.with_columns(pl.Series("count", counts)).select(
+                    ["read_id", "chr", "start", "stop", "strand", "length", "count"]
+                )  # keep read_id
             else:
-                df = idx_df.with_columns(pl.Series("count", counts)).select(["chr","start","stop","strand","length","count"])  # drop read_id
+                df = idx_df.with_columns(pl.Series("count", counts)).select(
+                    ["chr", "start", "stop", "strand", "length", "count"]
+                )  # drop read_id
 
             yield s, df

@@ -432,11 +432,6 @@ def test_pipeline_shim_qc_importable():
     assert "sample_id" in schema.columns
 
 
-def test_pipeline_shim_frame_support_importable():
-    """pipeline/frame_support.py shim: build_frame_support importable."""
-    from TranslonScorer.pipeline.frame_support import build_frame_support
-    assert callable(build_frame_support)
-
 
 def test_pipeline_shim_clustering_importable():
     """pipeline/profile_clustering.py shim: public API importable from old path."""

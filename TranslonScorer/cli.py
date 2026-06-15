@@ -926,7 +926,7 @@ def feature_metrics_cmd(profiles: str, features: str, feature_map: str, splits_c
     """
     setup_logging()
     _warn_deprecated("feature-metrics", "extract-events + score-bams/score-matrix")
-    from .pipeline.feature_metrics import feature_metrics
+    from .orf.feature_metrics import feature_metrics
     splits_df = None
     if splits_csv:
         import polars as pl

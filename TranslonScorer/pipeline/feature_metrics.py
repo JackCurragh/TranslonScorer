@@ -8,7 +8,7 @@ import numpy as np
 from ..utils.logging import log_info
 import click
 from ..frame.frame_crosstalk import estimate_crosstalk_matrix, invert_and_correct
-from .junction_model import estimate_junction_expectation, junction_llr
+from ..coverage.junction_model import estimate_junction_expectation, junction_llr
 
 
 def _profiles_to_tran_df(prof: pl.DataFrame, tran_id: Optional[str] = None) -> pl.DataFrame:

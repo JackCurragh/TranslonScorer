@@ -9,7 +9,7 @@ import polars as pl
 
 from ..utils import log_info
 from ..file_handlers import bam as bam_handlers
-from .locus_features import build_locus_features, _read_gtf  # reuse existing parsers
+from ..coverage.locus_features import build_locus_features, _read_gtf  # reuse existing parsers
 
 
 def _write_json(path: str, obj: Dict[str, Any]) -> None:

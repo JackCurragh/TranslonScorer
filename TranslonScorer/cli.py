@@ -235,7 +235,7 @@ def profiles(**kwargs):
     else:
         cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
 
-    from .pipeline.profiles import (
+    from .coverage.profiles import (
         gene_expression_matrix_from_profiles,
         profiles_from_bam,
         profiles_from_bigwig,
@@ -243,8 +243,8 @@ def profiles(**kwargs):
         profiles_from_zarr,
         write_profiles_parquet,
     )
-    from .pipeline.locus_profiles import build_locus_profiles_zarr
-    from .pipeline.transcript_coords import cds_to_transcript_space
+    from .coverage.locus_profiles import build_locus_profiles_zarr
+    from .coverage.transcript_coords import cds_to_transcript_space
 
     log_info("Inputs detected: " + (
         "Sparse Parquet" if config.sparse_matrix_manifest else ("BAM" if config.bam else ("Zarr" if config.zarr_root else ("BigWig" if (config.bigwig or (config.forward_bigwig and config.reverse_bigwig)) else "Unknown")))
@@ -310,7 +310,7 @@ def profiles(**kwargs):
             odf.write_csv(config.offsets_out)
         if config.junctions_out:
             # Aggregate junctions from BAM
-            from .pipeline.junctions import aggregate_bam_junctions
+            from .coverage.junctions import aggregate_bam_junctions
             log_info("Aggregating junctions from BAM…")
             j = aggregate_bam_junctions(config.bam)
             if not j.is_empty():
@@ -384,7 +384,7 @@ def profiles(**kwargs):
                 raise click.BadParameter('Zarr mode requires at least one --sample or use --all-samples')
         # If index missing but BAM is present, build index now
         if not config.read_index_parquet and config.bam:
-            from .pipeline.index_from_bam import build_read_index_from_bam
+            from .coverage.index_from_bam import build_read_index_from_bam
             log_info('Building Zarr read index from BAM…')
             out_idx = os.path.join(os.path.dirname(kwargs['profiles_out']), 'read_index.parquet') if kwargs.get('profiles_out') else 'read_index.parquet'
             config.read_index_parquet = build_read_index_from_bam(
@@ -845,7 +845,7 @@ def plot(scored_orfs: str, bigwig: str, exons: str, plot_range: int, output: str
 def index_from_bam_cmd(bam: str, zarr_root: str, out_index: str, zarr_metadata_parquet: str | None, zarr_reads_fasta: str | None, zarr_read_key: str, bam_key: str, hash_alg: str):
     """Build read_index.parquet for Zarr counts by aligning rows to BAM reads."""
     setup_logging()
-    from .pipeline.index_from_bam import build_read_index_from_bam
+    from .coverage.index_from_bam import build_read_index_from_bam
     path = build_read_index_from_bam(
         bam_path=bam,
         zarr_root=zarr_root,

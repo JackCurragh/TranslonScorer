@@ -14,7 +14,7 @@ from ..file_handlers import bigwig as bw_handlers
 from ..file_handlers import zarr as zarr_handlers
 from ..core import coordinates, orffinder
 from ..visualization import plots
-from .transcript_coords import cds_to_transcript_space
+from ..coverage.transcript_coords import cds_to_transcript_space
 
 
 def process_bam_workflow(config: Config) -> Tuple[Union[str, Dict[str, str]], pl.DataFrame, pl.DataFrame]:
@@ -295,7 +295,7 @@ def all_workflow(config: Config) -> None:
             config.bigwig_paths = config.bigwig
         # Optional: build frame support from BigWig-derived profiles
         if getattr(config, 'frame_method', 'none') != 'none':
-            from .profiles import profiles_from_bigwig
+            from ..coverage.profiles import profiles_from_bigwig
             from ..frame_support import build_frame_support
             from ..model import FrameSupportParams
             from ..utils import log_info

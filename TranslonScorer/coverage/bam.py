@@ -19,7 +19,6 @@ oxbow   — optional faster reader (falls back to pysam when unavailable)
 """
 from __future__ import annotations
 
-import functools
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -28,7 +27,7 @@ import polars as pl
 from TranslonScorer.model import OffsetParams, Region
 from TranslonScorer.offsets import make_offset_table, metagene_offsets, global_offsets
 from TranslonScorer.coverage.base import MAPPABILITY_LEDGER_SCHEMA
-from TranslonScorer.coverage.profile import apply_offsets, site_position
+from TranslonScorer.coverage.profile import site_position
 
 
 PathLike = Union[str, Path]
@@ -162,7 +161,7 @@ class BamSetProvider:
                     if self._multimap == "unique" and not _is_unique(rec):
                         continue
                     length = rec.query_length or 0
-                    if length == 0:
+                    if length == 0 or rec.reference_end is None:
                         continue
                     if strand > 0:
                         rel = spos - rec.reference_start          # 5′=ref_start
@@ -233,7 +232,7 @@ class BamSetProvider:
                             if self._multimap == "unique" and not _is_unique(rec):
                                 continue
                             length = rec.query_length or 0
-                            if length == 0:
+                            if length == 0 or rec.reference_end is None:
                                 continue
                             p_offset = table.get(length, self._offset_params.global_offset)
                             strand, pos = site_position(

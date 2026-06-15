@@ -16,13 +16,14 @@ small RNA is scored on its evidence like anything else.
 ## Installation
 
 ```sh
-pip install "TranslonScorer @ git+https://github.com/JackCurragh/TranslonScorer"
+pip install "TranslonScorer @ git+https://github.com/jackcurragh/translonscorer"
 # optional extras: [bigwig] [zarr] [viz] [fastbam] [dev] or [full]
-pip install "TranslonScorer[full] @ git+https://github.com/JackCurragh/TranslonScorer"
+pip install "TranslonScorer[full] @ git+https://github.com/jackcurragh/translonscorer"
 ```
 
 Core needs `pysam`, `polars`, `numpy`. `scipy` is optional (hierarchical
-clustering of confusing loci).
+clustering of confusing loci). `pyBigWig` (the `[bigwig]` extra) is needed for
+bigWig coverage and bigBed feature input.
 
 ---
 
@@ -45,6 +46,10 @@ provider** changes:
 
 All three feed one scoring core and produce the same `fact_event_score` store
 and per-translon report.
+
+The **feature source** (what to score) and the **coverage source** (the reads)
+are independent — mix any of them: e.g. score GTF CDSs against your BAMs, or your
+own BED12 ORFs against the matrix.
 
 **You do not need a pre-built annotation database.** `extract-events` builds the
 features to score from whatever you have — a GTF/GFF (score annotated CDSs), a
@@ -78,12 +83,13 @@ consequential         re-gate an existing report under a different policy
 
 ### A. Individual files (your own BAMs)
 
-Score a handful of genome-aligned Ribo-seq BAMs against an annotation:
+Score annotated CDSs (from a GTF) against a handful of genome-aligned Ribo-seq
+BAMs — no annotation database needed:
 
 ```sh
-# one-shot
+# one-shot: feature source = --gtf, coverage source = --bam
 translonscorer pipeline \
-  --sqlite annotation.translons.sqlite \
+  --gtf annotation.gtf --feature-type CDS \
   --bam sampleA.bam --bam sampleB.bam \
   --out-dir results/ \
   --offset-method global --global-offset 12
@@ -91,12 +97,15 @@ translonscorer pipeline \
 # results/report.parquet now has one row per translon with per-aspect calls
 ```
 
+Swap the feature source freely — `--bed12 my_orfs.bed` to score your own ORF
+set, or `--fasta contigs.fa` to find ORFs de-novo.
+
 Transcriptome-aligned BAMs (reads positioned along the mRNA) are projected to
 genome coordinates — UTRs included, so 5′UTR uORFs land correctly:
 
 ```sh
 translonscorer pipeline \
-  --sqlite annotation.translons.sqlite \
+  --gtf annotation.gtf \
   --bam tx_aligned.bam --transcriptome --annotation annotation.gtf \
   --out-dir results/
 ```
@@ -126,8 +135,10 @@ reproducible matrix run you can copy.
 ### C. Step by step (full control)
 
 ```sh
-# 1. events (once per annotation; reused across all scoring runs)
-translonscorer extract-events --sqlite anno.sqlite --out-dir run/events --chrom chr12
+# 1. events (once per feature set; reused across all scoring runs).
+#    Source can be --gtf / --bed12 / --bigbed / --fasta / --sqlite.
+translonscorer extract-events --gtf annotation.gtf --feature-type CDS \
+    --out-dir run/events --chrom chr12
 
 # 2a. score from BAMs ...
 translonscorer score-bams  --events-dir run/events --bam a.bam --bam b.bam \

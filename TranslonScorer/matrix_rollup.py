@@ -861,6 +861,63 @@ def _read_totals(pdir: Path, cfiles) -> pl.DataFrame:
         return agg.collect().select(["read_id", "count"])
 
 
+def _build_totals_worker(pdir_str: str) -> Tuple[str, int]:
+    """Build one partition's (read_id, count) totals cache. Returns (name, status):
+    status 1=built, 0=no counts, -1=already cached."""
+    pdir = Path(pdir_str)
+    try:
+        mp_, manifest = _manifest(pdir)
+        cfiles = _count_parquets(mp_, manifest)
+    except FileNotFoundError:
+        return (pdir.name, 0)
+    if not cfiles:
+        return (pdir.name, 0)
+    path = _read_totals_path(pdir)
+    if path.exists():
+        return (pdir.name, -1)
+    agg = pl.scan_parquet(cfiles).group_by("read_id").agg(pl.col("count").sum().alias("count"))
+    try:
+        agg.sink_parquet(str(path))
+    except Exception:
+        agg.collect().write_parquet(str(path))
+    return (pdir.name, 1)
+
+
+def build_read_totals_cache(partition_dirs, n_workers: Optional[int] = None) -> dict:
+    """Pre-build the aggregate (read_id, total_count) cache for every partition.
+
+    One-time, parallel. After this, aggregate-tier score-matrix reads the compact
+    per-read totals instead of the full per-sample count matrix. Honours
+    TS_MATRIX_CACHE_DIR for read-only matrices.
+    """
+    if isinstance(partition_dirs, (str, Path)):
+        parent = Path(partition_dirs)
+        dirs = sorted(d for d in parent.iterdir() if d.is_dir() and _discover_bam(d))
+    else:
+        dirs = [Path(d) for d in partition_dirs]
+    dir_strs = [str(d) for d in dirs]
+    if n_workers is None:
+        n_workers = min(len(dir_strs), os.cpu_count() or 1)
+    log_info(f"building read-totals cache for {len(dir_strs)} partitions, {n_workers} worker(s)")
+    built = cached = empty = 0
+    if n_workers <= 1:
+        results = [_build_totals_worker(s) for s in dir_strs]
+    else:
+        ctx = mp.get_context("spawn")
+        with ctx.Pool(n_workers) as pool:
+            results = []
+            for i, r in enumerate(pool.imap_unordered(_build_totals_worker, dir_strs, chunksize=1)):
+                results.append(r)
+                if (i + 1) % 32 == 0:
+                    log_info(f"  cached {i + 1}/{len(dir_strs)} partitions")
+    for _name, status in results:
+        built += status == 1
+        cached += status == -1
+        empty += status == 0
+    log_info(f"read-totals cache: {built} built, {cached} already cached, {empty} empty")
+    return {"built": built, "already_cached": cached, "empty": empty, "partitions": len(dir_strs)}
+
+
 def _cov_worker_init(regions, bam_refs, ref_offset, sample_map, group_level="aggregate") -> None:
     _PCTX.update(
         regions=regions,

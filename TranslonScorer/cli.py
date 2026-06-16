@@ -1554,6 +1554,26 @@ def extract_events_cmd(
         log_info(f"  {t}: {n}")
 
 
+@cli.command("build-matrix-cache")
+@click.option("--matrix-dir", required=True, help="Matrix ROOT directory (all partitions).")
+@click.option("--n-workers", type=int, default=None, help="Worker processes (default: all cores).")
+def build_matrix_cache_cmd(matrix_dir, n_workers):
+    """Pre-build the per-partition (read_id, total_count) cache (one-time).
+
+    After this, aggregate score-matrix reads compact per-read totals instead of
+    the full per-sample count matrix — independent of cohort size. Set
+    TS_MATRIX_CACHE_DIR for a read-only matrix.
+    """
+    setup_logging()
+    from .matrix_rollup import build_read_totals_cache
+
+    summary = build_read_totals_cache(matrix_dir, n_workers=n_workers)
+    log_info(
+        f"cache: {summary['built']} built, {summary['already_cached']} existing, "
+        f"{summary['empty']} empty ({summary['partitions']} partitions)"
+    )
+
+
 @cli.command("score-matrix")
 @click.option("--events-dir", required=True, help="Events directory produced by extract-events.")
 @click.option(

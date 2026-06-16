@@ -35,6 +35,8 @@ import io
 import json
 import multiprocessing as mp
 import os
+import sys
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -825,6 +827,40 @@ def tabulate_profiles(
     ).sort(["gene_id", "pos"])
 
 
+def _read_totals_path(pdir: Path) -> Path:
+    """Cache path for per-partition (read_id, total_count) summed over samples.
+
+    Aggregate-tier coverage never needs the per-sample breakdown, so a read's
+    total collapses 6k sample rows to one — making the aggregate path
+    independent of cohort size. Cache lives next to the partition; override the
+    directory with TS_MATRIX_CACHE_DIR for read-only matrices.
+    """
+    cache_root = os.environ.get("TS_MATRIX_CACHE_DIR")
+    if cache_root:
+        d = Path(cache_root) / pdir.name
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "read_totals.parquet"
+    return pdir / "read_totals.parquet"
+
+
+def _read_totals(pdir: Path, cfiles) -> pl.DataFrame:
+    """(read_id, count) summed over samples — cached on first build, reused after.
+
+    Streaming aggregation keeps memory bounded even at 6k samples. If the cache
+    cannot be written (read-only matrix, no TS_MATRIX_CACHE_DIR), it falls back
+    to computing in-memory each call (still avoids the per-sample materialisation).
+    """
+    path = _read_totals_path(pdir)
+    if path.exists():
+        return pl.read_parquet(path).select(["read_id", "count"])
+    agg = pl.scan_parquet(cfiles).group_by("read_id").agg(pl.col("count").sum().alias("count"))
+    try:
+        agg.sink_parquet(str(path))  # streaming: memory-safe even at 6k samples
+        return pl.read_parquet(path).select(["read_id", "count"])
+    except Exception:
+        return agg.collect().select(["read_id", "count"])
+
+
 def _cov_worker_init(regions, bam_refs, ref_offset, sample_map, group_level="aggregate") -> None:
     _PCTX.update(
         regions=regions,
@@ -851,7 +887,9 @@ def _cov_worker(pdir_str: str) -> bytes:
         return b.getvalue()
     bam_refs = _PCTX["bam_refs"]
     off = _PCTX["ref_offset"]
+    _timing = os.environ.get("TS_COV_TIMING")
     rid, pos, strand = [], [], []
+    _t0 = time.perf_counter()
     with pysam.AlignmentFile(str(bam), "rb") as bf:
         for chrom, start, stop in _PCTX["regions"]:
             fc = (
@@ -879,6 +917,7 @@ def _cov_worker(pdir_str: str) -> bytes:
                     rid.append(r)
                     pos.append(int(rec.reference_start) + off)
                     strand.append(1)
+    t_bam = time.perf_counter() - _t0
     if not rid:
         b = io.BytesIO()
         empty.write_ipc(b)
@@ -899,18 +938,49 @@ def _cov_worker(pdir_str: str) -> bytes:
         b = io.BytesIO()
         empty.write_ipc(b)
         return b.getvalue()
-    counts = pl.read_parquet(cfiles).select(["read_id", "sample_id", "count"])
-    base = (
-        counts.join(aln, on="read_id", how="inner")
-        .join(_PCTX["sample_map"], on="sample_id", how="inner")
-        .with_columns(pl.col("count").cast(pl.Float64))
-    )
     if per_sample:
+        # Per-sample / cluster path: needs the sample dimension — unchanged.
+        _t0 = time.perf_counter()
+        counts = pl.read_parquet(cfiles).select(["read_id", "sample_id", "count"])
+        t_read = time.perf_counter() - _t0
+        _t0 = time.perf_counter()
+        base = counts.join(aln, on="read_id", how="inner")
+        t_join_read = time.perf_counter() - _t0
+        _t0 = time.perf_counter()
+        base = base.join(_PCTX["sample_map"], on="sample_id", how="inner").with_columns(
+            pl.col("count").cast(pl.Float64)
+        )
+        t_join_sample = time.perf_counter() - _t0
+        _t0 = time.perf_counter()
         out = base.group_by(["sample_name", "strand", "pos"]).agg(
             pl.col("count").sum().alias("count")
         )
+        t_group = time.perf_counter() - _t0
+        n_count_rows = counts.height
     else:
+        # Aggregate fast path: per-read totals (summed over samples) — independent
+        # of cohort size; no sample-level read, no sample_map join.
+        _t0 = time.perf_counter()
+        totals = _read_totals(pdir, cfiles)
+        t_read = time.perf_counter() - _t0
+        _t0 = time.perf_counter()
+        base = totals.join(aln, on="read_id", how="inner").with_columns(
+            pl.col("count").cast(pl.Float64)
+        )
+        t_join_read = time.perf_counter() - _t0
+        t_join_sample = 0.0
+        _t0 = time.perf_counter()
         out = base.group_by(["strand", "pos"]).agg(pl.col("count").sum().alias("count"))
+        t_group = time.perf_counter() - _t0
+        n_count_rows = totals.height
+    if _timing:
+        print(
+            f"[cov-timing] {pdir.name} n_reads={len(rid)} count_rows={n_count_rows} "
+            f"bam={t_bam:.3f} read={t_read:.3f} join_read={t_join_read:.3f} "
+            f"join_sample={t_join_sample:.3f} group={t_group:.3f}",
+            file=sys.stderr,
+            flush=True,
+        )
     b = io.BytesIO()
     out.write_ipc(b)
     return b.getvalue()

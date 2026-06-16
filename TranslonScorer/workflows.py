@@ -169,10 +169,23 @@ def _score_events_over_provider(
         cov_df = provider.coverage(regions, site=site)
         if cov_df.is_empty():
             continue
-        cov_df = cov_df.select(["pos", "count"])
-        scored = score_events_vectorised(ev_chrom, cov_df, group=group, tier=tier, thr=thr)
-        if not scored.is_empty():
-            parts.append(scored)
+        # Score each strand against its OWN coverage. Ribo-seq is stranded: a
+        # + event must see only + reads. Collapsing strands (and building a
+        # pos->count dict) would let +/- coverage at the same genomic position
+        # overwrite each other — wrong, and order-dependent (nondeterministic).
+        has_strand = "strand" in cov_df.columns
+        for strand_val in (1, -1):
+            ev_s = ev_chrom.filter(pl.col("strand") == strand_val)
+            if ev_s.is_empty():
+                continue
+            cov_s = (
+                cov_df.filter(pl.col("strand") == strand_val) if has_strand else cov_df
+            ).select(["pos", "count"])
+            # collapse any duplicate positions deterministically
+            cov_s = cov_s.group_by("pos").agg(pl.col("count").sum()).sort("pos")
+            scored = score_events_vectorised(ev_s, cov_s, group=group, tier=tier, thr=thr)
+            if not scored.is_empty():
+                parts.append(scored)
 
     if not parts:
         from TranslonScorer.scoring.evidence import _RECORD_SCHEMA

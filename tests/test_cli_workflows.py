@@ -117,6 +117,50 @@ def test_per_event_regions_match_whole_span():
     assert windowed.sort("event_id").equals(whole.sort("event_id"))
 
 
+def test_score_events_strand_isolation_is_deterministic():
+    """+ and - events must be scored against their OWN strand coverage — never
+    cross-contaminated (the cause of the matrix nondeterminism bug)."""
+    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
+    from TranslonScorer.workflows import _score_events_over_provider
+
+    # two init events at the SAME genomic position, opposite strands
+    events = pl.DataFrame(
+        {
+            "event_id": pl.Series([1, 2], dtype=pl.UInt64),
+            "type": ["init", "init"],
+            "chrom": ["chr1", "chr1"],
+            "strand": [1, -1],
+            "start": [1000, 1000],
+            "end": [1001, 1001],
+            "phase": [None, None],
+        }
+    )
+    # strand-aware coverage: heavy on +, empty on - at the body positions
+    pos = list(range(900, 1100))
+    cov = pl.DataFrame(
+        {
+            "strand": [1] * len(pos) + [-1] * len(pos),
+            "pos": pos + pos,
+            "count": [100.0] * len(pos) + [0.0] * len(pos),
+        }
+    )
+
+    class _StrandProvider:
+        def coverage(self, regions, *, site="A"):
+            return cov
+
+    out1 = _score_events_over_provider(
+        events, _StrandProvider(), site="A", group="g", tier="aggregate", thr=DEFAULT_THRESHOLDS
+    )
+    out2 = _score_events_over_provider(
+        events, _StrandProvider(), site="A", group="g", tier="aggregate", thr=DEFAULT_THRESHOLDS
+    )
+    # deterministic, and the two strands get DIFFERENT n_reads (not mixed)
+    assert out1.sort("event_id").equals(out2.sort("event_id"))
+    nreads = dict(zip(out1["event_id"].to_list(), out1["n_reads"].to_list()))
+    assert nreads[1] != nreads[2]
+
+
 def test_merge_event_regions_merges_and_pads():
     from TranslonScorer.workflows import _EVENT_FLANK_PAD, _merge_event_regions
 

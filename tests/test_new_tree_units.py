@@ -533,6 +533,29 @@ def test_build_gene_spans(tmp_path):
 
 
 @pytest.mark.skipif(not HAS_MATRIX, reason="matrix partition fixture not in data/")
+def test_aggregate_fast_path_equals_per_sample(tmp_path, monkeypatch):
+    """region_coverage aggregate (read_id totals fast path) == per-sample summed."""
+    from TranslonScorer.matrix_rollup import region_coverage
+
+    monkeypatch.setenv("TS_MATRIX_CACHE_DIR", str(tmp_path / "cache"))
+    parts = [str(MATRIX_PART)]
+    # a broad region; n_workers=1 keeps it spawn-free under pytest
+    regions = [("chr1", 0, 250_000_000)]
+    agg = region_coverage(parts, regions, group_level="aggregate", n_workers=1).sort(
+        ["strand", "pos"]
+    )
+    per = region_coverage(parts, regions, group_level="sample", n_workers=1)
+    if per.is_empty():
+        pytest.skip("no reads for region in fixture partition")
+    per_agg = (
+        per.group_by(["strand", "pos"])
+        .agg(pl.col("count").sum().alias("count"))
+        .sort(["strand", "pos"])
+    )
+    assert agg.equals(per_agg)
+
+
+@pytest.mark.skipif(not HAS_MATRIX, reason="matrix partition fixture not in data/")
 def test_matrix_manifest_helpers():
     from TranslonScorer.io.matrix import (
         _count_parquets,

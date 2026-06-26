@@ -1567,20 +1567,47 @@ def extract_events_cmd(
     help="GTF file — alternative to --cds-bigbed for CDS annotation.",
 )
 @click.option("--out-dir", required=True, help="Output directory for the P-site index.")
-@click.option("--chrom", default=None, help="Restrict to one chromosome (for testing).")
+@click.option(
+    "--chrom",
+    default=None,
+    help="Restrict output index to one chromosome (for testing). "
+    "Calibration Phase 1 still uses the full annotation.",
+)
+@click.option(
+    "--skip-calibration",
+    is_flag=True,
+    default=False,
+    help="Skip Phase 1 and use existing offsets.parquet in --out-dir.",
+)
 @click.option("--n-workers", type=int, default=None, help="Worker processes (default: all cores).")
-def build_psite_index_cmd(matrix_dir, cds_bigbed, cds_gtf, out_dir, chrom, n_workers):
+def build_psite_index_cmd(
+    matrix_dir, cds_bigbed, cds_gtf, out_dir, chrom, skip_calibration, n_workers
+):
     """Build a P-site index from the cohort matrix (one-time, fast subsequent queries).
 
-    Scans all partition BAMs once, applies per-(sample, read-length) P-site
-    offsets, and writes a chrom-partitioned Parquet index.  All subsequent
-    scoring and profile queries use the index instead of re-scanning BAMs.
+    Two-phase process:
 
-    Use --chrom chr22 for a first test run before indexing the full genome.
+    \b
+    Phase 1 — calibrate (minutes):
+      Runs build_matrix_rollup → calibrate_offsets → rollup_to_periodicity.
+      Equivalent to RiboMetric applied to all samples via the matrix rollup.
+      Writes out-dir/offsets.parquet and out-dir/qc_per_sample.parquet.
+
+    \b
+    Phase 2 — build index (hours):
+      Scans all partition BAMs, bakes calibrated P-site offsets in at build time.
+      Writes chrom-partitioned Parquet sorted by p_site.
+      All subsequent scoring queries are O(log N) range scans — no BAM rescans.
+
+    Use --chrom chr22 to test Phase 2 on one chromosome.
+    Use --skip-calibration to re-run Phase 2 after editing the annotation
+    without repeating Phase 1.
     """
     setup_logging()
+    from pathlib import Path as _Path
+
     from .io.annotation import build_cds_blocks, build_cds_blocks_from_bigbed
-    from .psite_index import build_psite_index
+    from .psite_index import build_psite_index, calibrate_cohort
 
     if cds_bigbed:
         log_info(f"loading CDS blocks from BigBed: {cds_bigbed}")
@@ -1591,7 +1618,32 @@ def build_psite_index_cmd(matrix_dir, cds_bigbed, cds_gtf, out_dir, chrom, n_wor
     else:
         raise click.UsageError("Provide --cds-bigbed or --cds-gtf for CDS annotation.")
 
-    build_psite_index(matrix_dir, cds_df, out_dir, n_workers=n_workers, chrom=chrom)
+    out_path = _Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    offsets_df = None
+    if not skip_calibration:
+        # Phase 1: calibrate using the FULL annotation (not chrom-filtered)
+        # so all samples get calibrated offsets even for a chrom-restricted build.
+        offsets_df, qc_df = calibrate_cohort(
+            matrix_dir, cds_df, n_workers=n_workers
+        )
+        offsets_df.write_parquet(out_path / "offsets.parquet")
+        qc_df.write_parquet(out_path / "qc_per_sample.parquet")
+        log_info(
+            f"Phase 1 complete: {offsets_df.height} (sample, length) offsets, "
+            f"{qc_df.height} samples QC'd → {out_path}"
+        )
+
+    # Phase 2: build index with baked offsets
+    build_psite_index(
+        matrix_dir,
+        cds_df,
+        out_dir,
+        offsets_df=offsets_df,
+        n_workers=n_workers,
+        chrom=chrom,
+    )
 
 
 @cli.command("build-matrix-cache")

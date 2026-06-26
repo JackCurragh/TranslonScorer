@@ -1,35 +1,40 @@
 """P-site index: build-once, query-many cohort cache.
 
-Design
-------
-Build (once per cohort):
-  Scan each partition BAM, join with count parquets, emit
-  (chrom, pos5, strand, length, sample_id, count) for every in-CDS read.
-  Write to Hive-partitioned Parquet sorted by pos5 within each chrom.
+Two-phase design
+----------------
+Phase 1 — calibrate (minutes, reuses existing map-reduce rollup):
+    build_matrix_rollup() → (sample, length, phase0) rollup
+    calibrate_offsets(target_frame=0) → per-(sample, length) P-site offsets
+    rollup_to_periodicity() → per-sample QC (periodicity score, f0/f1/f2, …)
+    Writes: index_dir/offsets.parquet, index_dir/qc_per_sample.parquet
 
-  ``pos5`` is the raw 5' end of the read (reference_start for +,
-  reference_end-1 for -).  No P-site offset is applied at build time —
-  the offset is a calibration artefact applied analytically at query time.
+Phase 2 — build index (hours, embarrassingly parallel):
+    Reads calibrated offsets from Phase 1.
+    Scans each partition BAM, joins count parquets.
+    For every in-CDS read: p_site = pos5 ± offset[sample_id, length]  (baked in)
+    Writes: index_dir/chrom=X/data.parquet  sorted by p_site
 
-Query (O(log N + hits) per feature, all features on a chrom in one pass):
-  1. Polars range scan on chrom shard with row-group pushdown.
-  2. Vectorised join on calibrated offset table → p_site = pos5 + offset.
-  3. Sweep-line assignment to (feature_id, tx_pos).
-  4. Group-by → FrameRollup or full CoverageIndex.
+Query (O(log N + hits) per chrom, all features in one pass):
+    Range-filter on p_site (uses Parquet row-group pushdown, no offset join)
+    Sweep-line assign to (feature_id, tx_pos)
+    Group → FrameRollup or full CoverageIndex
 
 Storage layout::
 
-    psite_index/
+    index_dir/
+      offsets.parquet         (sample_id UInt16, length UInt8, offset Int8)
+      qc_per_sample.parquet   (sample_id, periodicity_score, f0, f1, f2, …)
+      samples.parquet         (sample_id UInt16, sample_name Utf8)
       chrom=chr1/data.parquet
       chrom=chr22/data.parquet
-      samples.parquet            # (sample_id UInt16, sample_name Utf8)
+      …
 
-Schema per chrom shard (pos5-sorted):
-    pos5      Int32
-    strand    Boolean     (True = '+')
-    length    UInt8
-    sample_id UInt16
-    count     Float32
+Chrom shard schema (p_site-sorted):
+    p_site     Int32    ← calibrated P-site position (offset already applied)
+    strand     Boolean  (True = '+')
+    length     UInt8    (useful for length-stratified profiles)
+    sample_id  UInt16
+    count      Float32
 """
 
 from __future__ import annotations
@@ -51,44 +56,130 @@ from .matrix_qc import _bam_chroms, _build_frame_intervals
 from .utils.logging import log_info
 
 # ---------------------------------------------------------------------------
-# Schema
+# Shard schema
 # ---------------------------------------------------------------------------
 
-_PSITE_SCHEMA = {
-    "pos5": pl.Int32,
+_SHARD_SCHEMA = {
+    "p_site": pl.Int32,
     "strand": pl.Boolean,
     "length": pl.UInt8,
     "sample_id": pl.UInt16,
     "count": pl.Float32,
 }
 
-# Schema returned by query functions
 _ROLLUP_SCHEMA = {
     "sample_id": pl.UInt16,
     "feature_id": pl.Utf8,
     "length": pl.UInt8,
+    "n_reads": pl.Float32,
     "frame0": pl.Float32,
     "frame1": pl.Float32,
     "frame2": pl.Float32,
-    "n_reads": pl.Float32,
 }
 
 # ---------------------------------------------------------------------------
-# Build: worker
+# Phase 1: calibrate offsets + QC from rollup
+# ---------------------------------------------------------------------------
+
+
+def calibrate_cohort(
+    partition_dirs,
+    cds_df: pl.DataFrame,
+    *,
+    n_workers: Optional[int] = None,
+    chrom: Optional[str] = None,
+) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    """Phase 1: compute per-sample calibrated offsets and QC stats.
+
+    Runs build_matrix_rollup (fast, existing map-reduce) then calibrate_offsets
+    and rollup_to_periodicity on the compact rollup — equivalent to running
+    RiboMetric on every sample without touching individual BAM files.
+
+    Returns:
+        offsets_df: (sample_name, length, offset) — one row per (sample, length)
+        qc_df:      per-sample QC table (periodicity_score, f0, f1, f2, …)
+    """
+    from .matrix_rollup import (
+        build_matrix_rollup,
+        calibrate_offsets,
+        rollup_to_periodicity,
+    )
+
+    # If chrom-restricted, we still need a representative CDS set for calibration.
+    # Use the supplied cds_df as-is (caller may have pre-filtered to target chrom,
+    # or may pass the full annotation — both are valid).
+    cal_cds = cds_df
+    if chrom:
+        cal_cds = cds_df.filter(pl.col("chr") == chrom)
+        if cal_cds.is_empty():
+            # try without "chr" prefix
+            alt = chrom[3:] if chrom.startswith("chr") else f"chr{chrom}"
+            cal_cds = cds_df.filter(pl.col("chr") == alt)
+        if cal_cds.is_empty():
+            log_info(
+                f"calibrate_cohort: no CDS entries for chrom={chrom}; "
+                "using full annotation for calibration"
+            )
+            cal_cds = cds_df
+
+    log_info("Phase 1: building matrix rollup for offset calibration …")
+    rollup = build_matrix_rollup(
+        partition_dirs, cal_cds, n_workers=n_workers
+    )
+
+    log_info("Phase 1: calibrating per-(sample, length) P-site offsets …")
+    offsets_dict = calibrate_offsets(rollup, target_frame=0)
+
+    log_info("Phase 1: computing per-sample QC stats …")
+    qc_df = rollup_to_periodicity(rollup, offsets_dict)
+
+    # Build offsets_df: (sample_name Utf8, length Int64, offset Int64)
+    if offsets_dict:
+        offsets_df = pl.DataFrame(
+            {
+                "sample_name": pl.Series(
+                    [s for s, _ in offsets_dict.keys()], dtype=pl.Utf8
+                ),
+                "length": pl.Series(
+                    [int(L) for _, L in offsets_dict.keys()], dtype=pl.Int64
+                ),
+                "offset": pl.Series(list(offsets_dict.values()), dtype=pl.Int64),
+            }
+        )
+    else:
+        offsets_df = pl.DataFrame(
+            schema={"sample_name": pl.Utf8, "length": pl.Int64, "offset": pl.Int64}
+        )
+
+    return offsets_df, qc_df
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: build worker — bakes calibrated offset into p_site at build time
 # ---------------------------------------------------------------------------
 
 _BCTX: Dict = {}
 
 
-def _build_worker_init(frame_ivs, bam_refs, sample_map) -> None:
-    _BCTX.update(frame_ivs=frame_ivs, bam_refs=bam_refs, sample_map=sample_map)
+def _build_worker_init(frame_ivs, bam_refs, sample_map, offset_lookup) -> None:
+    """offset_lookup: {(sample_id: int, length: int): offset: int}"""
+    _BCTX.update(
+        frame_ivs=frame_ivs,
+        bam_refs=bam_refs,
+        sample_map=sample_map,
+        offset_lookup=offset_lookup,
+    )
 
 
 def _build_worker(pdir_str: str) -> bytes:
-    """Scan one partition → IPC bytes of (chrom, pos5, strand, length, sample_id, count)."""
+    """Scan one partition → IPC bytes of (chrom, p_site, strand, length, sample_id, count)."""
+    from collections import defaultdict
+
+    from .matrix_qc import _assign_frames_sweep
+
     pdir = Path(pdir_str)
     bam = _discover_bam(pdir)
-    empty_schema = {"chrom": pl.Utf8, **_PSITE_SCHEMA}
+    empty_schema = {"chrom": pl.Utf8, **_SHARD_SCHEMA}
     empty = pl.DataFrame(schema=empty_schema)
 
     if bam is None:
@@ -99,14 +190,15 @@ def _build_worker(pdir_str: str) -> bytes:
     frame_ivs = _BCTX["frame_ivs"]
     bam_refs = _BCTX["bam_refs"]
     sample_map: pl.DataFrame = _BCTX["sample_map"]
+    offset_lookup: Dict[Tuple[int, int], int] = _BCTX["offset_lookup"]
+    default_offset: int = 15
 
-    # --- scan BAM for in-CDS reads, keep raw position ---
+    # scan BAM for all mapped reads, keep raw 5' end + metadata
     read_id_list: List[int] = []
     pos5_list: List[int] = []
     length_list: List[int] = []
     strand_list: List[bool] = []
     chrom_list: List[str] = []
-    rec_count: Dict[int, int] = {}
 
     with pysam.AlignmentFile(str(bam), "rb") as bf:
         for rec in bf.fetch(until_eof=True):
@@ -118,7 +210,6 @@ def _build_worker(pdir_str: str) -> bytes:
             length = int(rec.query_length or 0)
             if length == 0:
                 continue
-            rec_count[rid] = rec_count.get(rid, 0) + 1
             is_rev = rec.is_reverse
             p5 = int(rec.reference_end) - 1 if is_rev else int(rec.reference_start)
             chrom = _normalise_chrom(rec.reference_name, bam_refs) or rec.reference_name
@@ -133,15 +224,9 @@ def _build_worker(pdir_str: str) -> bytes:
         empty.write_ipc(buf)
         return buf.getvalue()
 
-    # filter to in-CDS reads using frame_ivs membership (any CDS frame ≥ 0)
-    # reuse _assign_frames_sweep just for the membership test
-    from .matrix_qc import _assign_frames_sweep
-
+    # filter to in-CDS reads
     n = len(read_id_list)
     in_cds = np.zeros(n, dtype=bool)
-
-    # group by (chrom, strand) for sweep-line
-    from collections import defaultdict
     grp: Dict[Tuple[str, str], List[int]] = defaultdict(list)
     for i in range(n):
         s = "+" if strand_list[i] else "-"
@@ -164,11 +249,21 @@ def _build_worker(pdir_str: str) -> bytes:
 
     aln = pl.DataFrame(
         {
-            "read_id": pl.Series([read_id_list[i] for i in in_cds_idx], dtype=pl.UInt64),
-            "chrom": pl.Series([chrom_list[i] for i in in_cds_idx], dtype=pl.Utf8),
-            "pos5": pl.Series([pos5_list[i] for i in in_cds_idx], dtype=pl.Int32),
-            "strand": pl.Series([strand_list[i] for i in in_cds_idx], dtype=pl.Boolean),
-            "length": pl.Series([length_list[i] for i in in_cds_idx], dtype=pl.UInt8),
+            "read_id": pl.Series(
+                [read_id_list[i] for i in in_cds_idx], dtype=pl.UInt64
+            ),
+            "chrom": pl.Series(
+                [chrom_list[i] for i in in_cds_idx], dtype=pl.Utf8
+            ),
+            "pos5": pl.Series(
+                [pos5_list[i] for i in in_cds_idx], dtype=pl.Int32
+            ),
+            "strand": pl.Series(
+                [strand_list[i] for i in in_cds_idx], dtype=pl.Boolean
+            ),
+            "length": pl.Series(
+                [length_list[i] for i in in_cds_idx], dtype=pl.UInt8
+            ),
         }
     )
 
@@ -184,17 +279,43 @@ def _build_worker(pdir_str: str) -> bytes:
         return buf.getvalue()
 
     counts = pl.read_parquet(cfiles).select(["read_id", "sample_id", "count"])
-    out = (
+    joined = (
         counts.join(aln, on="read_id", how="inner")
         .join(sample_map.select("sample_id"), on="sample_id", how="inner")
         .with_columns(pl.col("count").cast(pl.Float32))
-        .group_by(["chrom", "pos5", "strand", "length", "sample_id"])
+    )
+
+    if joined.is_empty():
+        buf = io.BytesIO()
+        empty.write_ipc(buf)
+        return buf.getvalue()
+
+    # bake calibrated offset into p_site at build time
+    sid_arr = joined["sample_id"].to_numpy()
+    len_arr = joined["length"].to_numpy()
+    pos5_arr = joined["pos5"].to_numpy()
+    strand_arr = joined["strand"].to_numpy()
+
+    offset_arr = np.array(
+        [offset_lookup.get((int(s), int(l)), default_offset)
+         for s, l in zip(sid_arr, len_arr)],
+        dtype=np.int32,
+    )
+    # + strand: p_site = pos5 + offset; - strand: p_site = pos5 - offset
+    p_site_arr = np.where(strand_arr, pos5_arr.astype(np.int64) + offset_arr,
+                          pos5_arr.astype(np.int64) - offset_arr).astype(np.int32)
+
+    out = (
+        joined.with_columns(pl.Series("p_site", p_site_arr, dtype=pl.Int32))
+        .group_by(["chrom", "p_site", "strand", "length", "sample_id"])
         .agg(pl.col("count").sum())
         .with_columns(
-            pl.col("pos5").cast(pl.Int32),
+            pl.col("p_site").cast(pl.Int32),
             pl.col("length").cast(pl.UInt8),
             pl.col("sample_id").cast(pl.UInt16),
+            pl.col("count").cast(pl.Float32),
         )
+        .drop("pos5")
     )
 
     buf = io.BytesIO()
@@ -203,7 +324,7 @@ def _build_worker(pdir_str: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Build: orchestrator
+# Phase 2: orchestrator
 # ---------------------------------------------------------------------------
 
 
@@ -211,27 +332,39 @@ def build_psite_index(
     partition_dirs,
     cds_df: pl.DataFrame,
     out_dir: str | Path,
+    offsets_df: Optional[pl.DataFrame] = None,
     *,
     n_workers: Optional[int] = None,
     chrom: Optional[str] = None,
+    default_offset: int = 15,
 ) -> None:
-    """Build the P-site index from partition BAMs.
+    """Phase 2: build the P-site index using calibrated offsets.
 
-    Scans every partition once, joins read counts, and writes
-    chrom-partitioned Parquet to ``out_dir``.  Subsequent calls with a
-    different annotation or ``chrom`` filter append to / overwrite only the
-    affected shards.
+    If offsets_df is None, reads from out_dir/offsets.parquet (written by
+    calibrate_cohort / Phase 1).  Raises if neither is available.
 
     Args:
         partition_dirs: path to global_partitioned directory, or list of dirs.
-        cds_df:         CDS blocks (from build_cds_blocks or build_cds_blocks_from_bigbed)
-                        used to restrict the index to in-CDS reads.
-        out_dir:        where to write the index.
+        cds_df:         CDS blocks used to restrict the index to in-CDS reads.
+        out_dir:        where to write (and read Phase 1 outputs from).
+        offsets_df:     (sample_name, length, offset) table from Phase 1.
+                        If None, loaded from out_dir/offsets.parquet.
         n_workers:      worker processes (default: cpu_count).
-        chrom:          restrict to one chromosome (useful for testing).
+        chrom:          restrict output to one chromosome (for testing).
+        default_offset: fallback for (sample, length) pairs not in offsets_df.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # load offsets if not supplied
+    if offsets_df is None:
+        off_path = out_dir / "offsets.parquet"
+        if not off_path.exists():
+            raise FileNotFoundError(
+                f"No offsets.parquet in {out_dir}. Run calibrate_cohort first "
+                "(or pass offsets_df directly)."
+            )
+        offsets_df = pl.read_parquet(off_path)
 
     if isinstance(partition_dirs, (str, Path)):
         parent = Path(partition_dirs)
@@ -246,19 +379,49 @@ def build_psite_index(
     bam_refs = _bam_chroms(_discover_bam(dirs[0]))
     frame_ivs = _build_frame_intervals(cds_df, cds_df, bam_refs)
     if chrom:
-        frame_ivs = {k: v for k, v in frame_ivs.items() if k[0] == chrom or k[0] == f"chr{chrom}"}
+        # restrict CDS intervals to target chrom — reads on other chroms are skipped
+        frame_ivs = {
+            k: v for k, v in frame_ivs.items()
+            if k[0] == chrom or k[0] == f"chr{chrom}"
+        }
 
     mp0, manifest0 = _manifest(dirs[0])
     sample_map = _samples_df(mp0, manifest0).select(
         pl.col("sample_id").cast(pl.UInt16), pl.col("sample_name")
     )
+    sample_map.write_parquet(out_dir / "samples.parquet")
+
+    # build offset_lookup keyed by (sample_id: int, length: int)
+    # join offsets_df (sample_name, length, offset) with sample_map to get sample_id
+    offset_lookup: Dict[Tuple[int, int], int] = {}
+    if not offsets_df.is_empty():
+        merged = offsets_df.join(sample_map, on="sample_name", how="inner")
+        for row in merged.iter_rows(named=True):
+            offset_lookup[(int(row["sample_id"]), int(row["length"]))] = int(row["offset"])
+
+    # write numeric offsets table for reference / querying
+    if offset_lookup:
+        pl.DataFrame(
+            {
+                "sample_id": pl.Series(
+                    [k[0] for k in offset_lookup], dtype=pl.UInt16
+                ),
+                "length": pl.Series(
+                    [k[1] for k in offset_lookup], dtype=pl.UInt8
+                ),
+                "offset": pl.Series(
+                    list(offset_lookup.values()), dtype=pl.Int8
+                ),
+            }
+        ).write_parquet(out_dir / "offsets_numeric.parquet")
 
     if n_workers is None:
         n_workers = min(len(dirs), os.cpu_count() or 1)
 
     log_info(
-        f"build_psite_index: {len(dirs)} partitions, "
+        f"Phase 2 build_psite_index: {len(dirs)} partitions, "
         f"{sum(len(v) for v in frame_ivs.values()):,} CDS intervals, "
+        f"{len(offset_lookup):,} (sample, length) offsets, "
         f"{n_workers} worker(s) → {out_dir}"
     )
 
@@ -266,7 +429,7 @@ def build_psite_index(
     dir_strs = [str(d) for d in dirs]
 
     if n_workers <= 1:
-        _build_worker_init(frame_ivs, bam_refs, sample_map)
+        _build_worker_init(frame_ivs, bam_refs, sample_map, offset_lookup)
         for ds in dir_strs:
             df = pl.read_ipc(io.BytesIO(_build_worker(ds)))
             if not df.is_empty():
@@ -276,9 +439,11 @@ def build_psite_index(
         with ctx.Pool(
             n_workers,
             initializer=_build_worker_init,
-            initargs=(frame_ivs, bam_refs, sample_map),
+            initargs=(frame_ivs, bam_refs, sample_map, offset_lookup),
         ) as pool:
-            for i, ipc in enumerate(pool.imap_unordered(_build_worker, dir_strs, chunksize=1)):
+            for i, ipc in enumerate(
+                pool.imap_unordered(_build_worker, dir_strs, chunksize=1)
+            ):
                 df = pl.read_ipc(io.BytesIO(ipc))
                 if not df.is_empty():
                     parts.append(df)
@@ -292,12 +457,12 @@ def build_psite_index(
     combined = pl.concat(parts)
     log_info(f"  {combined.height:,} raw rows; grouping and writing per-chrom shards …")
 
-    # aggregate duplicates that arise from merging partition outputs
     combined = (
-        combined.group_by(["chrom", "pos5", "strand", "length", "sample_id"])
+        combined
+        .group_by(["chrom", "p_site", "strand", "length", "sample_id"])
         .agg(pl.col("count").sum())
         .with_columns(
-            pl.col("pos5").cast(pl.Int32),
+            pl.col("p_site").cast(pl.Int32),
             pl.col("length").cast(pl.UInt8),
             pl.col("sample_id").cast(pl.UInt16),
             pl.col("count").cast(pl.Float32),
@@ -310,11 +475,12 @@ def build_psite_index(
         shard_dir.mkdir(exist_ok=True)
         (
             shard.drop("chrom")
-            .sort("pos5")
-            .write_parquet(shard_dir / "data.parquet", statistics=True, compression="zstd")
+            .sort("p_site")
+            .write_parquet(
+                shard_dir / "data.parquet", statistics=True, compression="zstd"
+            )
         )
 
-    sample_map.write_parquet(out_dir / "samples.parquet")
     log_info(f"build_psite_index: done — {out_dir}")
 
 
@@ -324,7 +490,6 @@ def build_psite_index(
 
 
 def load_samples(index_dir: str | Path) -> pl.DataFrame:
-    """Return (sample_id UInt16, sample_name Utf8) table."""
     return pl.read_parquet(Path(index_dir) / "samples.parquet")
 
 
@@ -343,19 +508,9 @@ def _load_shard(index_dir: Path, chrom: str) -> Optional[pl.DataFrame]:
     return pl.read_parquet(shard)
 
 
-# ---------------------------------------------------------------------------
-# Query: FrameRollup from P-site index
-# ---------------------------------------------------------------------------
-
-
 def _exon_intervals_for_chrom(
     cds_df: pl.DataFrame, chrom: str
 ) -> List[Tuple[str, str, int, int, int, List[Tuple[int, int, int]]]]:
-    """Return per-feature exon block info for a single chrom.
-
-    Returns list of (feature_id, strand, genomic_min, genomic_max, n_exons,
-                     [(exon_start, exon_stop, tran_start), ...])
-    """
     sub = cds_df.filter(pl.col("chr") == chrom)
     if sub.is_empty():
         return []
@@ -367,59 +522,43 @@ def _exon_intervals_for_chrom(
         exons = list(zip(starts, stops, tran_starts))
         g_min = min(s for s, _, _ in exons)
         g_max = max(e for _, e, _ in exons)
-        out.append((str(row["tran_id"]), str(row["strand"]), g_min, g_max, len(exons), exons))
+        out.append(
+            (str(row["tran_id"]), str(row["strand"]), g_min, g_max, len(exons), exons)
+        )
     return out
 
 
-def _apply_offsets_vectorised(
-    pos5_arr: np.ndarray,
-    strand_arr: np.ndarray,
-    length_arr: np.ndarray,
-    sample_id_arr: np.ndarray,
-    offsets_by_sl: Dict[Tuple[int, int], int],
-    default_offset: int,
-) -> np.ndarray:
-    """Vectorised P-site computation: p_site = pos5 ± offset[sample_id, length]."""
-    # build offset lookup as two arrays (unique (sample,length) pairs)
-    unique_sl = set(zip(sample_id_arr.tolist(), length_arr.tolist()))
-    sl_to_off = {(s, l): offsets_by_sl.get((s, l), default_offset) for s, l in unique_sl}
-
-    offsets_arr = np.array(
-        [sl_to_off[(int(s), int(l))] for s, l in zip(sample_id_arr, length_arr)],
-        dtype=np.int32,
-    )
-    # + strand: p_site = pos5 + offset; - strand: p_site = pos5 - offset
-    return np.where(strand_arr, pos5_arr.astype(np.int64) + offsets_arr,
-                    pos5_arr.astype(np.int64) - offsets_arr)
+# ---------------------------------------------------------------------------
+# Query: assign p_site reads to features (vectorised)
+# ---------------------------------------------------------------------------
 
 
 def _assign_psite_to_features(
-    pos5_arr: np.ndarray,
+    p_site_arr: np.ndarray,
     strand_arr: np.ndarray,
     features: List[Tuple[str, str, int, int, int, List[Tuple[int, int, int]]]],
-    offsets_by_sl: Dict[Tuple[int, int], int],
     length_arr: np.ndarray,
     sample_id_arr: np.ndarray,
     count_arr: np.ndarray,
-    default_offset: int = 15,
 ) -> pl.DataFrame:
-    """Map each P-site read to (feature_id, tx_pos) using exon blocks.
+    """Map pre-offset-corrected p_site reads to (feature_id, tx_pos).
 
-    Applies offsets vectorised per unique (sample_id, length) pair, then
-    does one sweep per feature (sorted-shard filter + exon lookup).
+    Since offsets are baked into p_site at index build time, no offset
+    table is needed here — just range filter + exon projection.
 
     Returns (feature_id, sample_id, length, tx_pos, count).
     """
-    empty = pl.DataFrame(schema={
-        "feature_id": pl.Utf8, "sample_id": pl.UInt16,
-        "length": pl.UInt8, "tx_pos": pl.Int32, "count": pl.Float32,
-    })
-    if len(pos5_arr) == 0 or not features:
-        return empty
-
-    p_site = _apply_offsets_vectorised(
-        pos5_arr, strand_arr, length_arr, sample_id_arr, offsets_by_sl, default_offset
+    empty = pl.DataFrame(
+        schema={
+            "feature_id": pl.Utf8,
+            "sample_id": pl.UInt16,
+            "length": pl.UInt8,
+            "tx_pos": pl.Int32,
+            "count": pl.Float32,
+        }
     )
+    if len(p_site_arr) == 0 or not features:
+        return empty
 
     feat_ids: List[str] = []
     samp_ids: List[int] = []
@@ -427,34 +566,34 @@ def _assign_psite_to_features(
     tx_positions: List[int] = []
     counts: List[float] = []
 
-    # pre-separate + / - indices for fast strand filter
     plus_mask = strand_arr.astype(bool)
     minus_mask = ~plus_mask
 
     for fid, strand, g_min, g_max, _, exons in features:
         strand_mask = plus_mask if strand == "+" else minus_mask
-        in_span = strand_mask & (p_site >= g_min) & (p_site < g_max)
+        in_span = strand_mask & (p_site_arr >= g_min) & (p_site_arr < g_max)
         idxs = np.where(in_span)[0]
         if len(idxs) == 0:
             continue
 
-        # vectorised exon lookup: build exon boundary arrays for this feature
         ex_starts = np.array([e[0] for e in exons], dtype=np.int64)
         ex_stops = np.array([e[1] for e in exons], dtype=np.int64)
         ex_tran = np.array([e[2] for e in exons], dtype=np.int32)
 
-        ps_sub = p_site[idxs]  # (k,)
-        # for each read, find first exon containing it
-        # broadcast: (k, n_exons)
-        in_exon = (ps_sub[:, None] >= ex_starts[None, :]) & (ps_sub[:, None] < ex_stops[None, :])
-        exon_idx = np.argmax(in_exon, axis=1)  # (k,) index of first True per row
-        hit_mask = in_exon[np.arange(len(idxs)), exon_idx]  # True if any exon matched
+        ps_sub = p_site_arr[idxs]
+        in_exon = (ps_sub[:, None] >= ex_starts[None, :]) & (
+            ps_sub[:, None] < ex_stops[None, :]
+        )
+        exon_idx = np.argmax(in_exon, axis=1)
+        hit_mask = in_exon[np.arange(len(idxs)), exon_idx]
 
         hit_idxs = idxs[hit_mask]
         hit_exon = exon_idx[hit_mask]
-        hit_ps = p_site[hit_idxs]
+        hit_ps = p_site_arr[hit_idxs]
 
-        tx_pos_arr = ex_tran[hit_exon] + (hit_ps - ex_starts[hit_exon]).astype(np.int32)
+        tx_pos_arr = ex_tran[hit_exon] + (hit_ps - ex_starts[hit_exon]).astype(
+            np.int32
+        )
 
         feat_ids.extend([fid] * len(hit_idxs))
         samp_ids.extend(sample_id_arr[hit_idxs].tolist())
@@ -464,107 +603,112 @@ def _assign_psite_to_features(
 
     if not feat_ids:
         return empty
-    return pl.DataFrame({
-        "feature_id": pl.Series(feat_ids, dtype=pl.Utf8),
-        "sample_id": pl.Series(samp_ids, dtype=pl.UInt16),
-        "length": pl.Series(lens, dtype=pl.UInt8),
-        "tx_pos": pl.Series(tx_positions, dtype=pl.Int32),
-        "count": pl.Series(counts, dtype=pl.Float32),
-    })
+    return pl.DataFrame(
+        {
+            "feature_id": pl.Series(feat_ids, dtype=pl.Utf8),
+            "sample_id": pl.Series(samp_ids, dtype=pl.UInt16),
+            "length": pl.Series(lens, dtype=pl.UInt8),
+            "tx_pos": pl.Series(tx_positions, dtype=pl.Int32),
+            "count": pl.Series(counts, dtype=pl.Float32),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public query API
+# ---------------------------------------------------------------------------
+
+
+def _query_chrom(
+    index_dir: Path,
+    chrom: str,
+    features: List[Tuple],
+) -> Optional[pl.DataFrame]:
+    shard = _load_shard(index_dir, chrom)
+    if shard is None or not features:
+        return None
+
+    # p_site is already offset-corrected — range filter is a simple BETWEEN
+    g_min_all = min(g_min for _, _, g_min, _, _, _ in features)
+    g_max_all = max(g_max for _, _, _, g_max, _, _ in features)
+    window = shard.filter(pl.col("p_site").is_between(g_min_all, g_max_all))
+    if window.is_empty():
+        return None
+
+    return _assign_psite_to_features(
+        window["p_site"].to_numpy(),
+        window["strand"].to_numpy(),
+        features,
+        window["length"].to_numpy(),
+        window["sample_id"].to_numpy(),
+        window["count"].to_numpy(),
+    )
 
 
 def query_frame_rollup(
     index_dir: str | Path,
     cds_df: pl.DataFrame,
-    offsets: Dict[Tuple[int, int], int],
     *,
     chroms: Optional[List[str]] = None,
-    default_offset: int = 15,
 ) -> pl.DataFrame:
     """Query the P-site index → FrameRollup.
 
-    Args:
-        index_dir:      path to built P-site index.
-        cds_df:         CDS blocks for the features to score.
-        offsets:        {(sample_id, length): offset} calibrated offsets.
-        chroms:         restrict to these chromosomes (default: all).
-        default_offset: fallback offset for uncalibrated (sample, length) pairs.
+    Offsets are already baked into the index — no offset table needed.
 
-    Returns:
-        DataFrame with columns (sample_id, feature_id, length, n_reads,
-        frame0, frame1, frame2).
+    Returns (sample_id, feature_id, length, n_reads, frame0, frame1, frame2).
     """
     index_dir = Path(index_dir)
     target_chroms = chroms or available_chroms(index_dir)
 
     parts: List[pl.DataFrame] = []
     for chrom in target_chroms:
-        shard = _load_shard(index_dir, chrom)
-        if shard is None:
-            continue
         features = _exon_intervals_for_chrom(cds_df, chrom)
-        if not features:
-            continue
-
-        # find max possible offset for pre-filter padding
-        max_off = max(offsets.values(), default=default_offset) + 5
-        g_min_all = min(g_min for _, _, g_min, _, _, _ in features) - max_off
-        g_max_all = max(g_max for _, _, _, g_max, _, _ in features) + max_off
-
-        # fast range filter using sorted pos5
-        window = shard.filter(pl.col("pos5").is_between(g_min_all, g_max_all))
-        if window.is_empty():
-            continue
-
-        assigned = _assign_psite_to_features(
-            window["pos5"].to_numpy(),
-            window["strand"].to_numpy(),
-            features,
-            offsets,
-            window["length"].to_numpy(),
-            window["sample_id"].to_numpy(),
-            window["count"].to_numpy(),
-            default_offset=default_offset,
-        )
-        if not assigned.is_empty():
-            parts.append(assigned)
+        result = _query_chrom(index_dir, chrom, features)
+        if result is not None and not result.is_empty():
+            parts.append(result)
 
     if not parts:
         return pl.DataFrame(schema=_ROLLUP_SCHEMA)
 
     assigned_all = pl.concat(parts)
     rollup = (
-        assigned_all.with_columns((pl.col("tx_pos") % 3).cast(pl.Int8).alias("frame"))
+        assigned_all.with_columns(
+            (pl.col("tx_pos") % 3).cast(pl.Int8).alias("frame")
+        )
         .group_by(["feature_id", "sample_id", "length", "frame"])
         .agg(pl.col("count").sum())
-        .pivot(on="frame", index=["feature_id", "sample_id", "length"], values="count",
-               aggregate_function="sum")
+        .pivot(
+            on="frame",
+            index=["feature_id", "sample_id", "length"],
+            values="count",
+            aggregate_function="sum",
+        )
     )
 
     for col in ["0", "1", "2"]:
         if col not in rollup.columns:
             rollup = rollup.with_columns(pl.lit(0.0).cast(pl.Float32).alias(col))
 
-    rollup = (
-        rollup.rename({c: f"frame{c}" for c in ["0", "1", "2"] if c in rollup.columns})
-        .with_columns(
-            (pl.col("frame0").fill_null(0.0) +
-             pl.col("frame1").fill_null(0.0) +
-             pl.col("frame2").fill_null(0.0)).alias("n_reads")
-        )
+    rollup = rollup.rename(
+        {c: f"frame{c}" for c in ["0", "1", "2"] if c in rollup.columns}
+    ).with_columns(
+        (
+            pl.col("frame0").fill_null(0.0)
+            + pl.col("frame1").fill_null(0.0)
+            + pl.col("frame2").fill_null(0.0)
+        ).alias("n_reads")
     )
-    return rollup.select(["sample_id", "feature_id", "length", "n_reads",
-                          "frame0", "frame1", "frame2"])
+    return rollup.select(
+        ["sample_id", "feature_id", "length", "n_reads", "frame0", "frame1", "frame2"]
+    )
 
 
 def query_coverage_index(
     index_dir: str | Path,
     cds_df: pl.DataFrame,
-    offsets: Dict[Tuple[int, int], int],
     feature_ids: Optional[List[str]] = None,
     *,
     chroms: Optional[List[str]] = None,
-    default_offset: int = 15,
 ) -> pl.DataFrame:
     """Query the P-site index → per-position coverage.
 
@@ -576,36 +720,23 @@ def query_coverage_index(
 
     parts: List[pl.DataFrame] = []
     for chrom in target_chroms:
-        shard = _load_shard(index_dir, chrom)
-        if shard is None:
-            continue
         features = _exon_intervals_for_chrom(cds_df, chrom)
         if fid_set:
             features = [f for f in features if f[0] in fid_set]
-        if not features:
-            continue
-
-        max_off = max(offsets.values(), default=default_offset) + 5
-        g_min_all = min(g_min for _, _, g_min, _, _, _ in features) - max_off
-        g_max_all = max(g_max for _, _, _, g_max, _, _ in features) + max_off
-        window = shard.filter(pl.col("pos5").is_between(g_min_all, g_max_all))
-        if window.is_empty():
-            continue
-
-        assigned = _assign_psite_to_features(
-            window["pos5"].to_numpy(), window["strand"].to_numpy(), features, offsets,
-            window["length"].to_numpy(), window["sample_id"].to_numpy(),
-            window["count"].to_numpy(), default_offset=default_offset,
-        )
-        if not assigned.is_empty():
-            parts.append(assigned)
+        result = _query_chrom(index_dir, chrom, features)
+        if result is not None and not result.is_empty():
+            parts.append(result)
 
     if not parts:
-        return pl.DataFrame(schema={
-            "feature_id": pl.Utf8, "sample_id": pl.UInt16,
-            "length": pl.UInt8, "tx_pos": pl.Int32, "count": pl.Float32,
-        })
-
+        return pl.DataFrame(
+            schema={
+                "feature_id": pl.Utf8,
+                "sample_id": pl.UInt16,
+                "length": pl.UInt8,
+                "tx_pos": pl.Int32,
+                "count": pl.Float32,
+            }
+        )
     return (
         pl.concat(parts)
         .group_by(["feature_id", "sample_id", "length", "tx_pos"])

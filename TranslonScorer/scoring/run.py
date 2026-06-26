@@ -39,6 +39,79 @@ DEFAULT_THRESHOLDS = ScoreThresholds()
 
 
 # ---------------------------------------------------------------------------
+# FrameRollup-based elongation scorer (Step 2 — NFR2 path)
+# ---------------------------------------------------------------------------
+
+
+def score_elongation_from_rollup(
+    events: pl.DataFrame,
+    scored_rollup: pl.DataFrame,
+    *,
+    thr: ScoreThresholds = DEFAULT_THRESHOLDS,
+) -> Dict[int, dict]:
+    """Map FrameRollup scores (feature-level) to elongation evidence per event_id.
+
+    `scored_rollup` is the output of score_frame_rollup: columns
+    (sample_name, feature_id, length, n_reads, frame0_count, elong_in_frame, ...).
+    For each elongation event, aggregates across samples and lengths to produce
+    an overall elong_in_frame metric, then applies eligibility/call thresholds.
+
+    Contention and per-position breadth are not available from the rollup;
+    identifiability is None and breadth is 1.0 (rollup covers the full CDS span).
+    """
+    if events.is_empty() or scored_rollup.is_empty():
+        return {}
+
+    # Aggregate scored_rollup to feature level: weighted elong_in_frame
+    agg = (
+        scored_rollup.group_by("feature_id")
+        .agg(
+            pl.col("n_reads").sum().alias("n_reads"),
+            pl.col("frame0_count").sum().alias("frame0_count"),
+        )
+        .with_columns(
+            (pl.col("frame0_count") / pl.col("n_reads")).alias("elong_in_frame")
+        )
+    )
+    fid_to_row = {r["feature_id"]: r for r in agg.iter_rows(named=True)}
+
+    elong = events.filter(pl.col("type") == "elongation")
+    out: Dict[int, dict] = {}
+    for r in elong.iter_rows(named=True):
+        eid = r["event_id"]
+        fid = r.get("feature_id")
+        score_row = fid_to_row.get(fid)
+        n = float(score_row["n_reads"]) if score_row else 0.0
+        metric = float(score_row["elong_in_frame"]) if score_row else 0.0
+        span_nt = int(r["end"] - r["start"])
+
+        if n < thr.min_reads:
+            eligibility, call = "INSUFFICIENT", None
+        elif metric >= thr.elong_in_frame:
+            eligibility, call = "ELIGIBLE", "SUPPORTED"
+        else:
+            eligibility, call = "ELIGIBLE", "UNSUPPORTED"
+
+        out[int(eid)] = {
+            "n_reads": n,
+            "covered_nt": 0,
+            "metric": metric,
+            "metric_name": "elong_in_frame",
+            "overall_in_frame": metric,
+            "breadth": 1.0,
+            "span_nt": span_nt,
+            "clean_in_frame": metric,
+            "contended_nt": 0,
+            "identifiability": None,
+            "competitor_share": {},
+            "noise_share": 0.0,
+            "eligibility": eligibility,
+            "call": call,
+        }
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Prefix-sum helpers — canonical implementation in coverage/profile.py
 # ---------------------------------------------------------------------------
 from TranslonScorer.coverage.profile import (  # noqa: E402, F401

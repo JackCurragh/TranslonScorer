@@ -239,6 +239,89 @@ def score_matrix_workflow(
 
 
 # ---------------------------------------------------------------------------
+# score-matrix-rollup  (FrameRollup path — NFR2, FR2/FR3)
+# ---------------------------------------------------------------------------
+
+
+def score_matrix_rollup_workflow(
+    events_dir: str,
+    partition_dirs,
+    store_dir: str,
+    cds_df: pl.DataFrame,
+    *,
+    data_version: str,
+    sample_names: Optional[List[str]] = None,
+    n_workers: Optional[int] = None,
+    multimap_mode: str = "unique",
+    annotation_version: str = "",
+    thr: ScoreThresholds = DEFAULT_THRESHOLDS,
+) -> str:
+    """Score elongation events using the FrameRollup (calibrated per-sample, per-length offsets).
+
+    Replaces the flat-offset MatrixProvider path for the elongation aspect.
+    init_rise / term_drop scoring is not yet wired here (retained in score_matrix_workflow).
+
+    Parameters
+    ----------
+    cds_df : output of build_cds_blocks(), used to build the FrameRollup.
+    """
+    from TranslonScorer.matrix_rollup import (
+        build_frame_rollup,
+        calibrate_offsets,
+        score_frame_rollup,
+    )
+    from TranslonScorer.scoring.evidence import _RECORD_SCHEMA, event_record
+    from TranslonScorer.scoring.run import score_elongation_from_rollup
+
+    events = read_events(events_dir)
+    if events.is_empty():
+        from TranslonScorer.scoring.evidence import _RECORD_SCHEMA as _S
+
+        return persist_scores(pl.DataFrame(schema=_S), store_dir, data_version=data_version)
+
+    # Build FrameRollup for CDS features referenced by events
+    rollup = build_frame_rollup(
+        partition_dirs,
+        cds_df,
+        multimap_mode=multimap_mode,
+        sample_names=sample_names,
+        n_workers=n_workers,
+    )
+
+    # Calibrate per-(sample, length) offsets with target_frame=0
+    agg = rollup.group_by(["sample_name", "length", "strand", "phase0"]).agg(
+        pl.col("count").sum()
+    )
+    offsets = calibrate_offsets(agg, target_frame=0)
+
+    # Score: aggregate across samples → per-(feature_id, length) elong_in_frame
+    scored = score_frame_rollup(rollup, offsets, default_offset=12)
+
+    # Map feature-level scores to events
+    elong_ev = score_elongation_from_rollup(events, scored, thr=thr)
+
+    # Serialise to long-form record table
+    rows = []
+    for r in events.filter(pl.col("type") == "elongation").iter_rows(named=True):
+        raw = elong_ev.get(r["event_id"])
+        if raw is None:
+            continue
+        rows.append(event_record(r["event_id"], "elongation", "aggregate", "aggregate", raw, thr.version))
+
+    result = (
+        pl.from_dicts(rows, schema=_RECORD_SCHEMA)
+        if rows
+        else pl.DataFrame(schema=_RECORD_SCHEMA)
+    )
+    return persist_scores(
+        result,
+        store_dir,
+        data_version=data_version,
+        annotation_version=annotation_version,
+    )
+
+
+# ---------------------------------------------------------------------------
 # score-bams
 # ---------------------------------------------------------------------------
 

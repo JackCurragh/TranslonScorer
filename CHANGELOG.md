@@ -6,16 +6,40 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-26
+
 ### Added
-- Scalable matrix query engine (`pipeline/matrix_rollup.py`): offset-independent
-  alignment index, map-reduce frame rollup, multimapping strategies
-  (`unique` / guilty-by-association), per-sample offset calibration, oxbow
-  reader, and region-scoped positional profiles for clustering. See
-  `docs/matrix_query_engine.md`.
-- Per-read-length frame-dominance emission in `pipeline/matrix_qc.py`
-  (`frame_dominance_matrix`).
-- Release tooling: bump2version config, CI + PyPI Trusted-Publishing workflows,
-  this changelog, and `CITATION.cff`.
+- **FrameRollup scoring path** (`matrix_rollup.py`): reads projected to
+  transcriptome coordinates, `phase0 = tx_pos % 3` stored offset-free.
+  `build_frame_rollup` replaces the flat-offset genomic scan for elongation
+  scoring.
+- **`calibrate_offsets(target_frame=0)`**: per-(sample, length) P-site offset
+  calibration that correctly finds offsets mapping in-frame reads to frame 0.
+  Fixes the root cause of the ~33% random-floor periodicity on mixed-protocol
+  cohorts. Optimised: evaluates 3 mod-3 classes instead of 9 raw offsets.
+- **`score_frame_rollup`**: fully vectorised Polars implementation (join +
+  pivot) replacing the Python dict accumulation loop.
+- **`prevalence_from_rollup`**: per-feature sample-axis prevalence (FR5) — 
+  fraction of samples showing in-frame periodicity above threshold. Pure Polars.
+- **`score_elongation_from_rollup`** (`scoring/run.py`): maps feature-level
+  FrameRollup scores to per-event elongation evidence in the standard schema.
+- **`score_matrix_rollup_workflow`** (`workflows.py`): end-to-end FrameRollup
+  scoring pipeline wired for use from the CLI.
+- **`build_coverage_index`**: full `(sample, feature_id, tx_pos, length) →
+  count` primary substrate (FR6) for per-translon read profiles and clustering.
+  Shares `_fr_worker_init` / `_ci_worker` parallelism with `build_frame_rollup`.
+- **`profile_from_index`**: aggregate CoverageIndex to `(feature_id, tx_pos) →
+  count` with optional per-sample and per-length filters and normalisation.
+- **`score-matrix --gtf`** CLI option: pass a GTF to activate the FrameRollup
+  path with calibrated offsets; legacy flat-offset path retained as fallback.
+- FR3 positive-control gate test: canonical GAPDH CDS scores SUPPORTED via
+  FrameRollup. 25 tests in `tests/test_frame_rollup.py` (all green).
+
+### Fixed
+- Matrix elongation frame scoring was at the random 33% floor for mixed-protocol
+  cohorts. Flat `ref_offset=15` applied to samples with calibrated offsets in
+  different mod-3 classes (12, 13, 14) averages to 1/3. Fixed by
+  `build_frame_rollup` + `calibrate_offsets(target_frame=0)`.
 
 ## [0.1.1]
 

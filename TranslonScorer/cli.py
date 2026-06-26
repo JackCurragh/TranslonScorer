@@ -1615,6 +1615,16 @@ def build_matrix_cache_cmd(matrix_dir, n_workers):
 @click.option(
     "--n-workers", type=int, default=None, help="Worker processes for partition scanning."
 )
+@click.option(
+    "--gtf",
+    default=None,
+    help=(
+        "GTF annotation file.  When provided the FrameRollup scoring path is used: "
+        "reads are projected to transcriptome coordinates, P-site offsets are "
+        "calibrated per (sample, length), and frame scoring is offset-correct. "
+        "Strongly recommended for matrix scoring (fixes the flat-offset frame bug)."
+    ),
+)
 def score_matrix_cmd(
     events_dir,
     matrix_dir,
@@ -1626,15 +1636,20 @@ def score_matrix_cmd(
     sample_names,
     site,
     n_workers,
+    gtf,
 ):
     """Score extracted events against the sparse annotation-scale matrix.
 
     The matrix is sharded by read sequence; point --matrix-dir at the root and
     all partitions are scanned together (there is no valid single-partition use).
+
+    Pass --gtf to use the FrameRollup path (calibrated per-sample P-site offsets,
+    transcriptome-coordinate frame scoring).  Without --gtf the legacy flat-offset
+    path is used (retained for backwards compatibility only).
     """
     setup_logging()
     from .io.matrix import discover_partitions
-    from .workflows import score_matrix_workflow
+    from .workflows import score_matrix_rollup_workflow, score_matrix_workflow
 
     if bool(matrix_dir) == bool(partitions):
         raise click.BadParameter(
@@ -1645,17 +1660,33 @@ def score_matrix_cmd(
     )
     log_info(f"Scoring against {len(part_dirs)} matrix partitions")
 
-    written = score_matrix_workflow(
-        events_dir,
-        part_dirs,
-        store_dir,
-        data_version=data_version,
-        annotation_version=annotation_version,
-        ref_offset=ref_offset,
-        sample_names=list(sample_names) or None,
-        n_workers=n_workers,
-        site=site,
-    )
+    if gtf:
+        from .io.annotation import build_cds_blocks
+
+        log_info(f"FrameRollup path: loading CDS from {gtf}")
+        cds_df = build_cds_blocks(gtf)
+        written = score_matrix_rollup_workflow(
+            events_dir,
+            part_dirs,
+            store_dir,
+            cds_df,
+            data_version=data_version,
+            annotation_version=annotation_version,
+            sample_names=list(sample_names) or None,
+            n_workers=n_workers,
+        )
+    else:
+        log_info("Legacy flat-offset path (no --gtf); frame scoring may be inaccurate")
+        written = score_matrix_workflow(
+            events_dir,
+            part_dirs,
+            store_dir,
+            data_version=data_version,
+            annotation_version=annotation_version,
+            ref_offset=ref_offset,
+            sample_names=list(sample_names) or None,
+            n_workers=n_workers,
+        )
     log_info(f"Scores written: {written or '(no events scored)'}")
 
 

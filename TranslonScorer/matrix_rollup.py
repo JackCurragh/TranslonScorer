@@ -1405,24 +1405,71 @@ def calibrate_offsets(
     offset_lo: int = 10,
     offset_hi: int = 18,
     min_reads: int = 50,
+    target_frame: Optional[int] = None,
 ) -> Dict[Tuple[str, int], int]:
-    """Per-(sample, length) offset maximising dominant-frame fraction."""
+    """Per-(sample, length) offset maximising frame fraction.
+
+    target_frame: if given, maximise the fraction in that specific frame rather
+    than the dominant frame.  Use target_frame=0 with FrameRollup data (where
+    phase0 = tx_pos % 3 and in-frame reads have phase0=0).
+
+    Implementation note: since phase0 ∈ {0,1,2} and frame rotation is periodic
+    with period 3, only 3 distinct offset classes exist.  We evaluate one
+    representative per class then return the first actual offset in [offset_lo,
+    offset_hi] that belongs to the winning class.
+    """
     offsets: Dict[Tuple[str, int], int] = {}
     if rollup.is_empty():
         return offsets
-    for (sample, length), grp in rollup.group_by(["sample_name", "length"]):
-        rows = list(grp.select(["strand", "phase0", "count"]).iter_rows())
-        total = sum(c for _, _, c in rows)
+
+    # Pre-aggregate: (sample, length, phase0) → total count
+    # This collapses strand (strand sign is absorbed into phase0 convention for FrameRollup;
+    # for the old rollup, + and - reads have the same phase0 formula already).
+    agg = (
+        rollup.group_by(["sample_name", "length", "phase0"])
+        .agg(pl.col("count").sum())
+        .filter(pl.col("count") > 0)
+    )
+
+    # Evaluate three representative offsets (one per mod-3 class)
+    # and pick the winning class, then map back to the lowest actual offset.
+    import numpy as _np
+
+    # For each (sample, length): build c[0..2] count vector, score each mod class
+    # frame_for_p0_at_o = (p0 + o) % 3.  For mod class r = o%3:
+    #   frame assigned to phase0 p0  =  (p0 + r) % 3
+    #   count in frame f = c[(f - r) % 3]
+
+    for (sample, length), grp in agg.group_by(["sample_name", "length"]):
+        c = [0.0, 0.0, 0.0]
+        total = 0.0
+        for row in grp.iter_rows(named=True):
+            p0 = int(row["phase0"]) % 3
+            v = float(row["count"])
+            c[p0] += v
+            total += v
         if total < min_reads:
             continue
-        best_o, best_dom = offset_lo, -1.0
-        for o in range(offset_lo, offset_hi + 1):
-            fc = [0.0, 0.0, 0.0]
-            for strand, phase0, c in rows:
-                fc[_frame_at(int(phase0), strand, o)] += c
-            dom = max(fc) / total
-            if dom > best_dom:
-                best_dom, best_o = dom, o
+
+        # Score each of the 3 mod classes (r=0,1,2)
+        best_r, best_score = 0, -1.0
+        for r in range(3):
+            if target_frame is not None:
+                # Count reads that land in target_frame: phase0 p0 → frame (p0+r)%3 == target_frame
+                # i.e., p0 = (target_frame - r) % 3
+                score = c[(target_frame - r) % 3] / total
+            else:
+                # Dominant frame fraction
+                fc = [c[(f - r) % 3] for f in range(3)]
+                score = max(fc) / total
+            if score > best_score:
+                best_score, best_r = score, r
+
+        # Find the first actual offset in [offset_lo, offset_hi] with o % 3 == best_r
+        best_o = next(
+            (o for o in range(offset_lo, offset_hi + 1) if o % 3 == best_r),
+            offset_lo,
+        )
         offsets[(str(sample), int(length))] = best_o
     return offsets
 
@@ -1508,3 +1555,696 @@ def periodicity_qc_scalable(
     else:
         offsets = calibrate_offsets(rollup)
     return rollup_to_periodicity(rollup, offsets, default_offset=fixed_offset)
+
+
+# ---------------------------------------------------------------------------
+# Feature-scoped, length-resolved FrameRollup (Step 1 of redesign)
+#
+# Primary substrate for calibrated frame scoring (design doc §3-§4):
+#   CoverageIndex:  (sample, feature_id, tx_pos, length)  → count   [not materialised]
+#   FrameRollup:    (sample, feature_id, length, strand, phase0) → count
+#
+# phase0 = tx_pos % 3  where tx_pos = 5'-end position in CDS-relative coords.
+# Offset is analytic at query time: frame = (phase0 + offset) % 3.
+# Never baked — recalibration needs no rebuild (NFR2).
+#
+# Architecture mirrors build_matrix_rollup: one spawn-parallel pass per
+# partition, partial rollups summed in the parent.  Full (sample×position) nnz
+# is never materialised (NFR4).
+# ---------------------------------------------------------------------------
+
+_FR_SCHEMA = {
+    "sample_name": pl.Utf8,
+    "feature_id": pl.Utf8,
+    "length": pl.Int64,
+    "strand": pl.Utf8,
+    "phase0": pl.Int8,
+    "count": pl.Float64,
+}
+
+_FCTX: Dict = {}
+
+
+def build_feature_exon_index(
+    cds_df: pl.DataFrame,
+    bam_refs: set,
+) -> Tuple[Dict[Tuple[str, str], List[Tuple[int, int, str, int]]], Dict[str, str]]:
+    """Build a per-(chrom,strand) exon index for transcript-coordinate projection.
+
+    Returns
+    -------
+    feature_ivs : {(chrom, strand): [(exon_start, exon_stop, feature_id, tran_start_of_exon), ...]}
+        Sorted by exon_start.  All tran_start values are CDS-relative (bp from
+        first CDS base); feature_id is the transcript identifier from cds_df.
+    feature_id_map : {feature_id: feature_id}  (identity; reserved for future aliasing)
+    """
+    raw: Dict[Tuple[str, str], List[Tuple[int, int, str, int]]] = {}
+    for row in cds_df.iter_rows(named=True):
+        chrom = str(row.get("chr", row.get("chrom", "")))
+        norm = _normalise_chrom(chrom, bam_refs)
+        if norm is None:
+            continue
+        strand = str(row["strand"])
+        fid = str(row.get("tran_id", row.get("feature_id", row.get("gene_id", ""))))
+        starts = row["start"]
+        stops = row["stop"]
+        ts_list = row["tran_start"]
+        bucket = raw.setdefault((norm, strand), [])
+        for gs, ge, ts in zip(starts, stops, ts_list):
+            bucket.append((int(gs), int(ge), fid, int(ts)))
+    sorted_ivs = {k: sorted(v, key=lambda x: x[0]) for k, v in raw.items()}
+    return sorted_ivs, {}
+
+
+def _assign_tx_positions(
+    ids: List[int],
+    five_primes: np.ndarray,
+    strand: str,
+    exon_ivs: List[Tuple[int, int, str, int]],
+) -> List[Tuple[int, str, int]]:
+    """Sweep-line assignment of 5'-end positions to (feature_id, tx_pos).
+
+    For + strand: tx_pos = tran_start_of_exon + (five_prime - exon_genomic_start)
+    For - strand: tx_pos = tran_start_of_exon + (exon_genomic_stop - 1 - five_prime)
+
+    Returns list of (local_idx, feature_id, tx_pos) — one entry per
+    (read, feature) hit.  A single read may appear multiple times if its 5'-end
+    overlaps exons from several features (isoforms at the same locus).
+    Caller applies multimapper policy.
+    """
+    if not exon_ivs or len(ids) == 0:
+        return []
+    order = np.argsort(five_primes)
+    sorted_pos = five_primes[order].tolist()
+    sorted_ids = [ids[i] for i in order]
+    results: List[Tuple[int, str, int]] = []
+    n = len(exon_ivs)
+    ptr = 0
+    # active: (exon_stop, feature_id, exon_ref_start, tran_start)
+    # exon_ref_start = genomic exon start for +, genomic exon stop for -
+    active: List[Tuple[int, str, int, int]] = []
+
+    for pos, idx in zip(sorted_pos, sorted_ids):
+        while ptr < n and exon_ivs[ptr][0] <= pos:
+            es, ee, fid, ts = exon_ivs[ptr]
+            ref_start = es if strand == "+" else ee
+            active.append((ee, fid, ref_start, ts))
+            ptr += 1
+        active = [t for t in active if t[0] > pos]
+        for ee, fid, ref_start, ts in active:
+            if strand == "+":
+                tx_pos = ts + (pos - ref_start)
+            else:
+                tx_pos = ts + (ref_start - 1 - pos)
+            if tx_pos >= 0:
+                results.append((idx, fid, tx_pos))
+    return results
+
+
+def _scan_partition_tx(
+    bam_path,
+    feature_ivs: Dict[Tuple[str, str], List[Tuple[int, int, str, int]]],
+    bam_refs: set,
+) -> pl.DataFrame:
+    """Scan one partition BAM; for each alignment project 5'-end to transcript coords.
+
+    Returns DataFrame with columns: read_id, feature_id, tx_pos, length, strand, n_align.
+    A single read may yield multiple rows if its 5'-end overlaps exons from several
+    features (isoforms at the same locus).
+    """
+    out_rids: List[int] = []
+    out_fids: List[str] = []
+    out_txpos: List[int] = []
+    out_lens: List[int] = []
+    out_strands: List[str] = []
+    out_nalign: List[int] = []
+
+    rec_count: collections.Counter = collections.Counter()
+    # Collect all alignments first to count NH per read_id
+    alns: List[Tuple[int, int, str, str, int]] = []  # (rid, length, strand, chrom, five_prime)
+
+    with pysam.AlignmentFile(str(bam_path), "rb") as bam:
+        for rec in bam.fetch(until_eof=True):
+            if rec.is_unmapped or rec.reference_name is None:
+                continue
+            rid = _parse_read_id(rec.query_name)
+            if rid is None:
+                continue
+            length = int(rec.query_length or 0)
+            if length == 0:
+                continue
+            rec_count[rid] += 1
+            strand = "-" if rec.is_reverse else "+"
+            chrom = _normalise_chrom(rec.reference_name, bam_refs) or rec.reference_name
+            if rec.is_reverse:
+                five_prime = int(rec.reference_end) - 1
+            else:
+                five_prime = int(rec.reference_start)
+            alns.append((rid, length, strand, chrom, five_prime))
+
+    if not alns:
+        return pl.DataFrame(
+            schema={
+                "read_id": pl.UInt64,
+                "feature_id": pl.Utf8,
+                "tx_pos": pl.Int32,
+                "length": pl.Int64,
+                "strand": pl.Utf8,
+                "n_align": pl.Int32,
+            }
+        )
+
+    # Group by (chrom, strand) and sweep-assign tx positions
+    groups: Dict[Tuple[str, str], Tuple[List[int], List[int], List[int], List[int]]] = (
+        collections.defaultdict(lambda: ([], [], [], []))
+    )
+    for i, (rid, length, strand, chrom, five_prime) in enumerate(alns):
+        g = groups[(chrom, strand)]
+        g[0].append(i)
+        g[1].append(rid)
+        g[2].append(five_prime)
+        g[3].append(length)
+
+    for (chrom, strand), (idxs, rids, five_primes, lengths) in groups.items():
+        ivs = feature_ivs.get((chrom, strand))
+        if not ivs:
+            continue
+        arr = np.array(five_primes, dtype=np.int64)
+        hits = _assign_tx_positions(list(range(len(idxs))), arr, strand, ivs)
+        for local_idx, fid, tx_pos in hits:
+            rid = rids[local_idx]
+            length = lengths[local_idx]
+            out_rids.append(rid)
+            out_fids.append(fid)
+            out_txpos.append(tx_pos)
+            out_lens.append(length)
+            out_strands.append(strand)
+            out_nalign.append(rec_count[rid])
+
+    return pl.DataFrame(
+        {
+            "read_id": pl.Series(out_rids, dtype=pl.UInt64),
+            "feature_id": pl.Series(out_fids, dtype=pl.Utf8),
+            "tx_pos": pl.Series(out_txpos, dtype=pl.Int32),
+            "length": pl.Series(out_lens, dtype=pl.Int64),
+            "strand": pl.Series(out_strands, dtype=pl.Utf8),
+            "n_align": pl.Series(out_nalign, dtype=pl.Int32),
+        }
+    )
+
+
+def _fr_worker_init(feature_ivs, bam_refs, sample_map, multimap_mode) -> None:
+    _FCTX.update(
+        feature_ivs=feature_ivs,
+        bam_refs=bam_refs,
+        sample_map=sample_map,
+        multimap_mode=multimap_mode,
+    )
+
+
+def _fr_worker(pdir_str: str) -> bytes:
+    """Scan one partition → (sample, feature_id, length, strand, phase0) partial rollup."""
+    pdir = Path(pdir_str)
+    bam = _discover_bam(pdir)
+    empty = pl.DataFrame(schema=_FR_SCHEMA)
+    if bam is None:
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
+
+    aln = _scan_partition_tx(bam, _FCTX["feature_ivs"], _FCTX["bam_refs"])
+
+    try:
+        mp_, manifest = _manifest(pdir)
+        cfiles = _count_parquets(mp_, manifest)
+    except FileNotFoundError:
+        cfiles = []
+
+    if aln.is_empty() or not cfiles:
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
+
+    counts = pl.read_parquet(cfiles).select(["read_id", "sample_id", "count"])
+    base = (
+        counts.join(aln, on="read_id", how="inner")
+        .join(_FCTX["sample_map"], on="sample_id", how="inner")
+        .with_columns(pl.col("count").cast(pl.Float64))
+    )
+
+    mode = _FCTX["multimap_mode"]
+    if mode == "unique":
+        base = base.filter(pl.col("n_align") == 1)
+
+    out = (
+        base.with_columns((pl.col("tx_pos") % 3).cast(pl.Int8).alias("phase0"))
+        .group_by(["sample_name", "feature_id", "length", "strand", "phase0"])
+        .agg(pl.col("count").sum().alias("count"))
+    )
+
+    b = io.BytesIO()
+    out.write_ipc(b)
+    return b.getvalue()
+
+
+def build_frame_rollup(
+    partition_dirs,
+    cds_df: pl.DataFrame,
+    *,
+    multimap_mode: str = "unique",
+    sample_names: Optional[List[str]] = None,
+    n_workers: Optional[int] = None,
+) -> pl.DataFrame:
+    """Build the feature-scoped, length-resolved FrameRollup (primary scoring substrate).
+
+    Scans each partition BAM once, projects each read's 5'-end to CDS-relative
+    (transcript) coordinates, derives phase0 = tx_pos % 3, joins per-sample
+    counts, and reduces to a small rollup keyed by
+    (sample_name, feature_id, length, strand, phase0).
+
+    Offset is NOT applied here (NFR2): calibrate per-(sample,length) offsets
+    separately with `calibrate_offsets(rollup)` and apply analytically via
+    `frame = (phase0 + offset) % 3` at query time.
+
+    Parameters
+    ----------
+    partition_dirs : path to the matrix directory or list of partition dirs.
+    cds_df         : CDS exon DataFrame from `build_cds_blocks` — must have
+                     (tran_id|feature_id, chr, strand, start[list], stop[list],
+                     tran_start[list]).
+    multimap_mode  : "unique" (default) — drop reads with n_align > 1.
+    sample_names   : filter to this sample subset (None = all).
+    n_workers      : parallel workers (default = min(n_partitions, cpu_count)).
+
+    Returns
+    -------
+    DataFrame with schema _FR_SCHEMA:
+        sample_name, feature_id, length, strand, phase0, count
+    """
+    if isinstance(partition_dirs, (str, Path)):
+        parent = Path(partition_dirs)
+        dirs = sorted(d for d in parent.iterdir() if d.is_dir() and _discover_bam(d))
+    else:
+        dirs = [Path(d) for d in partition_dirs if _discover_bam(Path(d))]
+
+    if not dirs:
+        return pl.DataFrame(schema=_FR_SCHEMA)
+
+    bam_refs = _bam_chroms(_discover_bam(dirs[0]))
+    feature_ivs, _ = build_feature_exon_index(cds_df, bam_refs)
+
+    mp0, manifest0 = _manifest(dirs[0])
+    sample_map = _samples_df(mp0, manifest0).select(["sample_id", "sample_name"])
+    if sample_names:
+        sample_map = sample_map.filter(pl.col("sample_name").is_in(sample_names))
+
+    if n_workers is None:
+        n_workers = min(len(dirs), os.cpu_count() or 1)
+
+    log_info(
+        f"build_frame_rollup ({multimap_mode}): {len(dirs)} partitions, {n_workers} worker(s)"
+    )
+
+    dir_strs = [str(d) for d in dirs]
+    if n_workers <= 1:
+        _fr_worker_init(feature_ivs, bam_refs, sample_map, multimap_mode)
+        parts = [pl.read_ipc(io.BytesIO(_fr_worker(s))) for s in dir_strs]
+    else:
+        ctx = mp.get_context("spawn")
+        with ctx.Pool(
+            n_workers,
+            initializer=_fr_worker_init,
+            initargs=(feature_ivs, bam_refs, sample_map, multimap_mode),
+        ) as pool:
+            parts = [
+                pl.read_ipc(io.BytesIO(b))
+                for b in pool.imap_unordered(_fr_worker, dir_strs, chunksize=1)
+            ]
+
+    parts = [p for p in parts if not p.is_empty()]
+    if not parts:
+        return pl.DataFrame(schema=_FR_SCHEMA)
+
+    return (
+        pl.concat(parts)
+        .group_by(["sample_name", "feature_id", "length", "strand", "phase0"])
+        .agg(pl.col("count").sum().alias("count"))
+    )
+
+
+# ---------------------------------------------------------------------------
+# CoverageIndex — full (sample, feature_id, tx_pos, length) substrate (FR6)
+# ---------------------------------------------------------------------------
+
+_CI_SCHEMA = {
+    "sample_name": pl.Utf8,
+    "feature_id": pl.Utf8,
+    "tx_pos": pl.Int32,
+    "length": pl.Int64,
+    "strand": pl.Utf8,
+    "count": pl.Float64,
+}
+
+
+def _ci_worker(pdir_str: str) -> bytes:
+    """Scan one partition → (sample, feature_id, tx_pos, length, strand) coverage counts.
+
+    Identical to _fr_worker but keeps tx_pos rather than collapsing to phase0 = tx_pos % 3.
+    Shares _FCTX (set by _fr_worker_init).
+    """
+    pdir = Path(pdir_str)
+    bam = _discover_bam(pdir)
+    empty = pl.DataFrame(schema=_CI_SCHEMA)
+    if bam is None:
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
+
+    aln = _scan_partition_tx(bam, _FCTX["feature_ivs"], _FCTX["bam_refs"])
+
+    try:
+        mp_, manifest = _manifest(pdir)
+        cfiles = _count_parquets(mp_, manifest)
+    except FileNotFoundError:
+        cfiles = []
+
+    if aln.is_empty() or not cfiles:
+        b = io.BytesIO()
+        empty.write_ipc(b)
+        return b.getvalue()
+
+    counts = pl.read_parquet(cfiles).select(["read_id", "sample_id", "count"])
+    base = (
+        counts.join(aln, on="read_id", how="inner")
+        .join(_FCTX["sample_map"], on="sample_id", how="inner")
+        .with_columns(pl.col("count").cast(pl.Float64))
+    )
+
+    if _FCTX["multimap_mode"] == "unique":
+        base = base.filter(pl.col("n_align") == 1)
+
+    out = (
+        base.group_by(["sample_name", "feature_id", "tx_pos", "length", "strand"])
+        .agg(pl.col("count").sum().alias("count"))
+    )
+    b = io.BytesIO()
+    out.write_ipc(b)
+    return b.getvalue()
+
+
+def build_coverage_index(
+    partition_dirs,
+    cds_df: pl.DataFrame,
+    *,
+    multimap_mode: str = "unique",
+    sample_names: Optional[List[str]] = None,
+    n_workers: Optional[int] = None,
+) -> pl.DataFrame:
+    """Build the full per-position CoverageIndex in transcriptome coordinates (FR6).
+
+    Like build_frame_rollup but retains tx_pos rather than collapsing to phase0.
+    Enables per-translon read-profile extraction for clustering and differential
+    translation analysis.
+
+    Returns
+    -------
+    DataFrame with schema _CI_SCHEMA:
+        sample_name, feature_id, tx_pos, length, strand, count
+    """
+    if isinstance(partition_dirs, (str, Path)):
+        parent = Path(partition_dirs)
+        dirs = sorted(d for d in parent.iterdir() if d.is_dir() and _discover_bam(d))
+    else:
+        dirs = [Path(d) for d in partition_dirs if _discover_bam(Path(d))]
+
+    if not dirs:
+        return pl.DataFrame(schema=_CI_SCHEMA)
+
+    bam_refs = _bam_chroms(_discover_bam(dirs[0]))
+    feature_ivs, _ = build_feature_exon_index(cds_df, bam_refs)
+
+    mp0, manifest0 = _manifest(dirs[0])
+    sample_map = _samples_df(mp0, manifest0).select(["sample_id", "sample_name"])
+    if sample_names:
+        sample_map = sample_map.filter(pl.col("sample_name").is_in(sample_names))
+
+    if n_workers is None:
+        n_workers = min(len(dirs), os.cpu_count() or 1)
+
+    log_info(
+        f"build_coverage_index ({multimap_mode}): {len(dirs)} partitions, {n_workers} worker(s)"
+    )
+
+    dir_strs = [str(d) for d in dirs]
+    if n_workers <= 1:
+        _fr_worker_init(feature_ivs, bam_refs, sample_map, multimap_mode)
+        parts = [pl.read_ipc(io.BytesIO(_ci_worker(s))) for s in dir_strs]
+    else:
+        ctx = mp.get_context("spawn")
+        with ctx.Pool(
+            n_workers,
+            initializer=_fr_worker_init,
+            initargs=(feature_ivs, bam_refs, sample_map, multimap_mode),
+        ) as pool:
+            parts = [
+                pl.read_ipc(io.BytesIO(b))
+                for b in pool.imap_unordered(_ci_worker, dir_strs, chunksize=1)
+            ]
+
+    parts = [p for p in parts if not p.is_empty()]
+    if not parts:
+        return pl.DataFrame(schema=_CI_SCHEMA)
+
+    return (
+        pl.concat(parts)
+        .group_by(["sample_name", "feature_id", "tx_pos", "length", "strand"])
+        .agg(pl.col("count").sum().alias("count"))
+    )
+
+
+def profile_from_index(
+    cov_index: pl.DataFrame,
+    *,
+    sample_name: Optional[str] = None,
+    lengths: Optional[List[int]] = None,
+    normalise: bool = False,
+) -> pl.DataFrame:
+    """Aggregate CoverageIndex to a per-(feature_id, tx_pos) read profile (FR6).
+
+    Parameters
+    ----------
+    cov_index   : output of build_coverage_index
+    sample_name : restrict to one sample (None = aggregate all samples)
+    lengths     : restrict to these read lengths (None = all)
+    normalise   : if True, divide each feature's profile by its total count
+
+    Returns
+    -------
+    DataFrame: feature_id, tx_pos, count  (sorted by feature_id, tx_pos)
+    """
+    df = cov_index
+    if sample_name is not None:
+        df = df.filter(pl.col("sample_name") == sample_name)
+    if lengths is not None:
+        df = df.filter(pl.col("length").is_in(lengths))
+
+    profile = (
+        df.group_by(["feature_id", "tx_pos"])
+        .agg(pl.col("count").sum())
+        .sort(["feature_id", "tx_pos"])
+    )
+
+    if normalise:
+        totals = profile.group_by("feature_id").agg(
+            pl.col("count").sum().alias("_total")
+        )
+        profile = (
+            profile.join(totals, on="feature_id")
+            .with_columns((pl.col("count") / pl.col("_total")).alias("count"))
+            .drop("_total")
+        )
+
+    return profile
+
+
+_SCORE_FR_SCHEMA = {
+    "sample_name": pl.Utf8,
+    "feature_id": pl.Utf8,
+    "length": pl.Int64,
+    "n_reads": pl.Float64,
+    "frame0_count": pl.Float64,
+    "frame1_count": pl.Float64,
+    "frame2_count": pl.Float64,
+    "elong_in_frame": pl.Float64,
+    "dominant_frame": pl.Int32,
+}
+
+
+def score_frame_rollup(
+    rollup: pl.DataFrame,
+    offsets: Dict[Tuple[str, int], int],
+    *,
+    default_offset: int = 12,
+) -> pl.DataFrame:
+    """Apply per-(sample,length) offsets analytically and compute frame metrics.
+
+    frame = (phase0 + offset) % 3
+
+    Returns per-(sample, feature_id, length) elongation metrics:
+        sample_name, feature_id, length, n_reads, frame0_count, frame1_count,
+        frame2_count, elong_in_frame, dominant_frame
+    """
+    if rollup.is_empty():
+        return pl.DataFrame(schema=_SCORE_FR_SCHEMA)
+
+    # Build offset lookup as a small DataFrame for a join (avoids Python loop)
+    if offsets:
+        off_df = pl.DataFrame(
+            {
+                "sample_name": [s for s, _ in offsets],
+                "length": [L for _, L in offsets],
+                "_offset": list(offsets.values()),
+            },
+            schema={"sample_name": pl.Utf8, "length": pl.Int64, "_offset": pl.Int64},
+        )
+        df = rollup.join(off_df, on=["sample_name", "length"], how="left").with_columns(
+            pl.col("_offset").fill_null(default_offset)
+        )
+    else:
+        df = rollup.with_columns(pl.lit(default_offset, dtype=pl.Int64).alias("_offset"))
+
+    # Compute frame = (phase0 + offset) % 3 — purely vectorised
+    df = df.with_columns(
+        ((pl.col("phase0").cast(pl.Int64) + pl.col("_offset")) % 3).cast(pl.Int8).alias("_frame")
+    )
+
+    # Pivot: sum counts per frame for each (sample, feature_id, length) key
+    grouped = (
+        df.group_by(["sample_name", "feature_id", "length", "strand", "_frame"])
+        .agg(pl.col("count").sum())
+    )
+    pivoted = (
+        grouped.pivot(
+            on="_frame",
+            index=["sample_name", "feature_id", "length", "strand"],
+            values="count",
+            aggregate_function="sum",
+        )
+        .rename(
+            {
+                str(i): f"frame{i}_count"
+                for i in range(3)
+                if str(i) in grouped["_frame"].cast(pl.Utf8).unique().to_list()
+            }
+        )
+    )
+    # Ensure all three frame columns exist (some may be absent if no reads in that frame)
+    for col in ["frame0_count", "frame1_count", "frame2_count"]:
+        if col not in pivoted.columns:
+            pivoted = pivoted.with_columns(pl.lit(0.0, dtype=pl.Float64).alias(col))
+    pivoted = pivoted.with_columns(
+        [pl.col(c).fill_null(0.0) for c in ["frame0_count", "frame1_count", "frame2_count"]]
+    )
+
+    # Derived metrics
+    return pivoted.with_columns(
+        (pl.col("frame0_count") + pl.col("frame1_count") + pl.col("frame2_count")).alias("n_reads")
+    ).with_columns(
+        (pl.col("frame0_count") / pl.col("n_reads")).alias("elong_in_frame"),
+        pl.when(
+            (pl.col("frame0_count") >= pl.col("frame1_count"))
+            & (pl.col("frame0_count") >= pl.col("frame2_count"))
+        )
+        .then(pl.lit(0, dtype=pl.Int32))
+        .when(pl.col("frame1_count") >= pl.col("frame2_count"))
+        .then(pl.lit(1, dtype=pl.Int32))
+        .otherwise(pl.lit(2, dtype=pl.Int32))
+        .alias("dominant_frame"),
+    ).select(list(_SCORE_FR_SCHEMA.keys()))
+
+
+def prevalence_from_rollup(
+    scored: pl.DataFrame,
+    *,
+    min_reads_per_sample: int = 50,
+    elong_in_frame_thr: float = 0.5,
+    dominant_lengths: Optional[List[int]] = None,
+) -> pl.DataFrame:
+    """Per-feature prevalence: fraction of samples with strong in-frame periodicity (FR5).
+
+    Groups the `score_frame_rollup` output by (sample, feature_id), aggregates
+    across read lengths (weighted by n_reads), and counts samples that meet the
+    minimum-reads and elong_in_frame thresholds.
+
+    Parameters
+    ----------
+    scored              : output of score_frame_rollup
+    min_reads_per_sample: minimum reads in a sample for it to be eligible
+    elong_in_frame_thr  : fraction threshold for a sample to count as "supported"
+    dominant_lengths    : if given, only aggregate these read lengths for scoring
+
+    Returns
+    -------
+    DataFrame with columns:
+        feature_id, n_eligible_samples, n_supported_samples, prevalence,
+        mean_elong_in_frame, mean_n_reads
+    """
+    if scored.is_empty():
+        return pl.DataFrame(
+            schema={
+                "feature_id": pl.Utf8,
+                "n_eligible_samples": pl.Int64,
+                "n_supported_samples": pl.Int64,
+                "prevalence": pl.Float64,
+                "mean_elong_in_frame": pl.Float64,
+                "mean_n_reads": pl.Float64,
+            }
+        )
+
+    df = scored
+    if dominant_lengths is not None:
+        df = df.filter(pl.col("length").is_in(dominant_lengths))
+
+    # Per-(sample, feature_id): weighted elong_in_frame across lengths
+    per_sample = (
+        df.group_by(["sample_name", "feature_id"])
+        .agg(
+            pl.col("n_reads").sum().alias("n_reads"),
+            pl.col("frame0_count").sum().alias("frame0_count"),
+        )
+        .with_columns(
+            (pl.col("frame0_count") / pl.col("n_reads")).alias("elong_in_frame")
+        )
+    )
+
+    # Mark eligible samples and compute per-feature aggregates — pure Polars
+    result = (
+        per_sample.with_columns(
+            (pl.col("n_reads") >= min_reads_per_sample).alias("_eligible"),
+        )
+        .filter(pl.col("_eligible"))
+        .with_columns(
+            (pl.col("elong_in_frame") >= elong_in_frame_thr).cast(pl.Int64).alias("_supported"),
+        )
+        .group_by("feature_id")
+        .agg(
+            pl.len().alias("n_eligible_samples"),
+            pl.col("_supported").sum().alias("n_supported_samples"),
+            pl.col("elong_in_frame").mean().alias("mean_elong_in_frame"),
+            pl.col("n_reads").mean().alias("mean_n_reads"),
+        )
+        .with_columns(
+            (pl.col("n_supported_samples") / pl.col("n_eligible_samples")).alias("prevalence")
+        )
+        .select(
+            [
+                "feature_id",
+                "n_eligible_samples",
+                "n_supported_samples",
+                "prevalence",
+                "mean_elong_in_frame",
+                "mean_n_reads",
+            ]
+        )
+    )
+    return result

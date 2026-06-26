@@ -1554,6 +1554,46 @@ def extract_events_cmd(
         log_info(f"  {t}: {n}")
 
 
+@cli.command("build-psite-index")
+@click.option("--matrix-dir", required=True, help="Matrix ROOT directory (global_partitioned).")
+@click.option(
+    "--cds-bigbed",
+    default=None,
+    help="ORF/CDS annotation BigBed (BED12) — restricts index to in-CDS reads.",
+)
+@click.option(
+    "--cds-gtf",
+    default=None,
+    help="GTF file — alternative to --cds-bigbed for CDS annotation.",
+)
+@click.option("--out-dir", required=True, help="Output directory for the P-site index.")
+@click.option("--chrom", default=None, help="Restrict to one chromosome (for testing).")
+@click.option("--n-workers", type=int, default=None, help="Worker processes (default: all cores).")
+def build_psite_index_cmd(matrix_dir, cds_bigbed, cds_gtf, out_dir, chrom, n_workers):
+    """Build a P-site index from the cohort matrix (one-time, fast subsequent queries).
+
+    Scans all partition BAMs once, applies per-(sample, read-length) P-site
+    offsets, and writes a chrom-partitioned Parquet index.  All subsequent
+    scoring and profile queries use the index instead of re-scanning BAMs.
+
+    Use --chrom chr22 for a first test run before indexing the full genome.
+    """
+    setup_logging()
+    from .io.annotation import build_cds_blocks, build_cds_blocks_from_bigbed
+    from .psite_index import build_psite_index
+
+    if cds_bigbed:
+        log_info(f"loading CDS blocks from BigBed: {cds_bigbed}")
+        cds_df = build_cds_blocks_from_bigbed(cds_bigbed)
+    elif cds_gtf:
+        log_info(f"loading CDS blocks from GTF: {cds_gtf}")
+        cds_df = build_cds_blocks(cds_gtf)
+    else:
+        raise click.UsageError("Provide --cds-bigbed or --cds-gtf for CDS annotation.")
+
+    build_psite_index(matrix_dir, cds_df, out_dir, n_workers=n_workers, chrom=chrom)
+
+
 @cli.command("build-matrix-cache")
 @click.option("--matrix-dir", required=True, help="Matrix ROOT directory (all partitions).")
 @click.option("--n-workers", type=int, default=None, help="Worker processes (default: all cores).")

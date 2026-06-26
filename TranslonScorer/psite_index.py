@@ -315,7 +315,6 @@ def _build_worker(pdir_str: str) -> bytes:
             pl.col("sample_id").cast(pl.UInt16),
             pl.col("count").cast(pl.Float32),
         )
-        .drop("pos5")
     )
 
     buf = io.BytesIO()

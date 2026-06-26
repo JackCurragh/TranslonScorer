@@ -1559,19 +1559,28 @@ def extract_events_cmd(
 @click.option(
     "--cds-bigbed",
     default=None,
-    help="ORF/CDS annotation BigBed (BED12) — restricts index to in-CDS reads.",
+    help="ORF/CDS annotation BigBed (BED12) — restricts Phase 2 index to in-CDS reads.",
 )
 @click.option(
     "--cds-gtf",
     default=None,
-    help="GTF file — alternative to --cds-bigbed for CDS annotation.",
+    help="GTF — used for Phase 2 CDS filtering (and Phase 1 calibration if "
+    "--calibration-gtf is not supplied).",
+)
+@click.option(
+    "--calibration-gtf",
+    default=None,
+    help="GTF used exclusively for Phase 1 offset calibration. "
+    "Use a canonical CDS annotation (e.g. GENCODE) when --cds-bigbed points to a "
+    "comprehensive ORF catalog — canonical CDS gives much stronger frame signal for "
+    "calibration than novel/non-canonical ORFs.",
 )
 @click.option("--out-dir", required=True, help="Output directory for the P-site index.")
 @click.option(
     "--chrom",
     default=None,
     help="Restrict output index to one chromosome (for testing). "
-    "Calibration Phase 1 still uses the full annotation.",
+    "Phase 1 calibration always uses the full annotation.",
 )
 @click.option(
     "--skip-calibration",
@@ -1581,7 +1590,7 @@ def extract_events_cmd(
 )
 @click.option("--n-workers", type=int, default=None, help="Worker processes (default: all cores).")
 def build_psite_index_cmd(
-    matrix_dir, cds_bigbed, cds_gtf, out_dir, chrom, skip_calibration, n_workers
+    matrix_dir, cds_bigbed, cds_gtf, calibration_gtf, out_dir, chrom, skip_calibration, n_workers
 ):
     """Build a P-site index from the cohort matrix (one-time, fast subsequent queries).
 
@@ -1590,18 +1599,28 @@ def build_psite_index_cmd(
     \b
     Phase 1 — calibrate (minutes):
       Runs build_matrix_rollup → calibrate_offsets → rollup_to_periodicity.
-      Equivalent to RiboMetric applied to all samples via the matrix rollup.
+      Uses --calibration-gtf if provided, otherwise --cds-gtf / --cds-bigbed.
+      Canonical CDS (GENCODE GTF) gives much stronger periodicity signal than
+      a comprehensive ORF catalog for calibration.
       Writes out-dir/offsets.parquet and out-dir/qc_per_sample.parquet.
 
     \b
     Phase 2 — build index (hours):
       Scans all partition BAMs, bakes calibrated P-site offsets in at build time.
+      Uses --cds-bigbed / --cds-gtf to restrict the index to in-CDS reads.
       Writes chrom-partitioned Parquet sorted by p_site.
       All subsequent scoring queries are O(log N) range scans — no BAM rescans.
 
+    Typical usage for a comprehensive ORF catalog:
+
+    \b
+      build-psite-index \\
+        --cds-bigbed transcod.bigBed \\
+        --calibration-gtf gencode.v45.gtf \\
+        --out-dir psite_index/
+
     Use --chrom chr22 to test Phase 2 on one chromosome.
-    Use --skip-calibration to re-run Phase 2 after editing the annotation
-    without repeating Phase 1.
+    Use --skip-calibration to re-run Phase 2 after editing the annotation.
     """
     setup_logging()
     from pathlib import Path as _Path
@@ -1609,14 +1628,22 @@ def build_psite_index_cmd(
     from .io.annotation import build_cds_blocks, build_cds_blocks_from_bigbed
     from .psite_index import build_psite_index, calibrate_cohort
 
+    # Phase 2 annotation (what to index)
     if cds_bigbed:
-        log_info(f"loading CDS blocks from BigBed: {cds_bigbed}")
+        log_info(f"loading index CDS blocks from BigBed: {cds_bigbed}")
         cds_df = build_cds_blocks_from_bigbed(cds_bigbed)
     elif cds_gtf:
-        log_info(f"loading CDS blocks from GTF: {cds_gtf}")
+        log_info(f"loading index CDS blocks from GTF: {cds_gtf}")
         cds_df = build_cds_blocks(cds_gtf)
     else:
         raise click.UsageError("Provide --cds-bigbed or --cds-gtf for CDS annotation.")
+
+    # Phase 1 annotation (what to calibrate against) — separate from Phase 2
+    if calibration_gtf:
+        log_info(f"loading calibration CDS from GTF: {calibration_gtf}")
+        cal_cds_df = build_cds_blocks(calibration_gtf)
+    else:
+        cal_cds_df = cds_df  # fall back to same annotation
 
     out_path = _Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -1626,7 +1653,7 @@ def build_psite_index_cmd(
         # Phase 1: calibrate using the FULL annotation (not chrom-filtered)
         # so all samples get calibrated offsets even for a chrom-restricted build.
         offsets_df, qc_df = calibrate_cohort(
-            matrix_dir, cds_df, n_workers=n_workers
+            matrix_dir, cal_cds_df, n_workers=n_workers
         )
         offsets_df.write_parquet(out_path / "offsets.parquet")
         qc_df.write_parquet(out_path / "qc_per_sample.parquet")

@@ -435,6 +435,8 @@ def pipeline_workflow(
     transcriptome: bool = False,
     exon_df: Optional[pl.DataFrame] = None,
     policy: Optional[ConsequentialityPolicy] = None,
+    cds_df: Optional[pl.DataFrame] = None,
+    n_workers: Optional[int] = None,
     # feature source for extract-events (exactly one; forwarded verbatim)
     **source_kwargs,
 ) -> Dict[str, str]:
@@ -445,6 +447,10 @@ def pipeline_workflow(
     paths produced. Exactly one of ``partition_dirs`` (matrix) or ``bams`` is the
     coverage source; ``source_kwargs`` selects the feature source for
     extract-events (sqlite_path | gtf_path | bed12_path | bigbed_path | fasta_path).
+
+    cds_df: if provided (from build_cds_blocks or build_cds_blocks_from_bigbed),
+    matrix mode uses the FrameRollup path with per-(sample,length) calibrated
+    P-site offsets.  Without it the legacy flat-offset path is used.
     """
     if bool(partition_dirs) == bool(bams):
         raise ValueError("provide exactly one of partition_dirs (matrix) or bams")
@@ -461,15 +467,27 @@ def pipeline_workflow(
         **source_kwargs,
     )
     if partition_dirs:
-        score_matrix_workflow(
-            events_dir,
-            list(partition_dirs),
-            store_dir,
-            data_version=data_version,
-            sample_names=sample_names,
-            site=site,
-            annotation_version=annotation_version,
-        )
+        if cds_df is not None:
+            score_matrix_rollup_workflow(
+                events_dir,
+                list(partition_dirs),
+                store_dir,
+                cds_df,
+                data_version=data_version,
+                sample_names=sample_names,
+                annotation_version=annotation_version,
+                n_workers=n_workers,
+            )
+        else:
+            score_matrix_workflow(
+                events_dir,
+                list(partition_dirs),
+                store_dir,
+                data_version=data_version,
+                sample_names=sample_names,
+                site=site,
+                annotation_version=annotation_version,
+            )
     else:
         score_bams_workflow(
             events_dir,

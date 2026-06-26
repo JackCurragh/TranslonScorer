@@ -2007,6 +2007,30 @@ def consequential_cmd(
     show_default=True,
     help="Consequential expression-percentile floor.",
 )
+@click.option(
+    "--cds-bigbed",
+    "cds_bigbed_path",
+    default=None,
+    help=(
+        "BigBed file providing CDS exon structure for FrameRollup scoring "
+        "(calibrated per-sample P-site offsets, transcriptome-coordinate frame "
+        "scoring).  Pass the same BigBed used as the feature source (--bigbed) "
+        "or a separate CDS annotation BigBed.  Activates the FrameRollup path "
+        "instead of the legacy flat-offset path."
+    ),
+)
+@click.option(
+    "--cds-gtf",
+    "cds_gtf_path",
+    default=None,
+    help=(
+        "GTF file providing CDS exon structure for FrameRollup scoring. "
+        "Use instead of --cds-bigbed when the feature source is a GTF or sqlite."
+    ),
+)
+@click.option(
+    "--n-workers", type=int, default=None, help="Worker processes for matrix partition scanning."
+)
 def pipeline_cmd(
     out_dir,
     gtf_path,
@@ -2031,6 +2055,9 @@ def pipeline_cmd(
     annotation,
     min_tier_confidence,
     min_expression_percentile,
+    cds_bigbed_path,
+    cds_gtf_path,
+    n_workers,
 ):
     """One-shot event-scoring run: extract-events → score (matrix or BAMs) → report.
 
@@ -2067,6 +2094,18 @@ def pipeline_cmd(
         min_tier_confidence=min_tier_confidence,
         min_expression_percentile=min_expression_percentile,
     )
+    cds_df = None
+    if cds_bigbed_path or cds_gtf_path:
+        if cds_bigbed_path and cds_gtf_path:
+            raise click.BadParameter("provide only one of --cds-bigbed or --cds-gtf, not both")
+        if cds_bigbed_path:
+            from .io.annotation import build_cds_blocks_from_bigbed
+            log_info(f"FrameRollup path: loading CDS blocks from BigBed {cds_bigbed_path}")
+            cds_df = build_cds_blocks_from_bigbed(cds_bigbed_path)
+        else:
+            from .io.annotation import build_cds_blocks
+            log_info(f"FrameRollup path: loading CDS blocks from GTF {cds_gtf_path}")
+            cds_df = build_cds_blocks(cds_gtf_path)
     paths = pipeline_workflow(
         out_dir,
         partition_dirs=partition_dirs,
@@ -2080,6 +2119,8 @@ def pipeline_cmd(
         sample_names=list(sample_names) or None,
         site=site,
         transcriptome=transcriptome,
+        cds_df=cds_df,
+        n_workers=n_workers,
         exon_df=exon_df,
         policy=policy,
         # feature source forwarded to extract-events

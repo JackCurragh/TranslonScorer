@@ -86,6 +86,77 @@ def _blocks_from_gtf(gtf_path: str, feature_type: str) -> pl.DataFrame:
     )
 
 
+def build_cds_blocks_from_bigbed(bigbed_path: str) -> pl.DataFrame:
+    """Per-ORF CDS exon blocks from a BED12/bigBed file (5'->3') with tran_start.
+
+    BED12 block columns (blockSizes, blockStarts relative to chromStart) define
+    the exon structure of each ORF.  tran_start is computed as cumulative exon
+    lengths in transcription order — identical to the convention used by
+    build_cds_blocks() for GTF data, so the result is directly usable by
+    build_frame_rollup() / build_coverage_index().
+
+    Returns: tran_id, gene_id, chr, strand, start[list], stop[list], tran_start[list]
+    """
+    try:
+        import pyBigWig
+    except ImportError as exc:
+        raise ImportError(
+            "build_cds_blocks_from_bigbed requires pyBigWig "
+            "(pip install 'TranslonScorer[bigwig]')"
+        ) from exc
+
+    bb = pyBigWig.open(bigbed_path)
+    if not bb.isBigBed():
+        raise ValueError(f"{bigbed_path} is not a bigBed file")
+
+    recs = []
+    for chrom, length in bb.chroms().items():
+        for cs, _ce, rest in bb.entries(chrom, 0, int(length)) or []:
+            f = rest.split("\t")
+            if len(f) < 9:
+                continue
+            name = f[0] or f"{chrom}:{cs}"
+            strand = f[2]
+            sizes = [int(x) for x in f[7].strip(",").split(",") if x]
+            starts = [int(x) for x in f[8].strip(",").split(",") if x]
+            if not sizes or len(sizes) != len(starts):
+                continue
+            blocks = sorted((cs + st, cs + st + sz) for st, sz in zip(starts, sizes))
+            if strand == "-":
+                blocks = list(reversed(blocks))
+            # cumulative tran_start from block sizes in transcription order
+            acc, tran_starts = 0, []
+            for b_start, b_stop in blocks:
+                tran_starts.append(acc)
+                acc += b_stop - b_start
+            recs.append(
+                {
+                    "tran_id": name,
+                    "gene_id": name,
+                    "chr": chrom,
+                    "strand": strand,
+                    "start": [b[0] for b in blocks],
+                    "stop": [b[1] for b in blocks],
+                    "tran_start": tran_starts,
+                }
+            )
+    bb.close()
+
+    if not recs:
+        return pl.DataFrame(
+            schema={
+                "tran_id": pl.Utf8,
+                "gene_id": pl.Utf8,
+                "chr": pl.Utf8,
+                "strand": pl.Utf8,
+                "start": pl.List(pl.Int64),
+                "stop": pl.List(pl.Int64),
+                "tran_start": pl.List(pl.Int64),
+            }
+        )
+    return pl.from_dicts(recs)
+
+
 def build_cds_blocks(gtf_path: str) -> pl.DataFrame:
     """Per-transcript CDS exon blocks (5'->3') with CDS-relative tran_start."""
     return _blocks_from_gtf(gtf_path, "CDS")

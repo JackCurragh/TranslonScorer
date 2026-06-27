@@ -177,7 +177,7 @@ def calibrate_cohort(
             length_all.group_by(["sample_name", "length"])
             .agg(pl.col("count").sum())
         )
-        for sname, grp in length_hist.group_by("sample_name"):
+        for (sname,), grp in length_hist.group_by("sample_name"):
             lc = {int(row["length"]): float(row["count"]) for row in grp.iter_rows(named=True)}
             reads_qc_rows.setdefault(str(sname), {}).update(
                 _length_distribution_metrics(lc)

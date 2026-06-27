@@ -1471,6 +1471,26 @@ def calibrate_offsets(
             offset_lo,
         )
         offsets[(str(sample), int(length))] = best_o
+
+    # Fallback: for (sample, length) pairs below min_reads threshold, use the
+    # cohort-modal offset for that length rather than the caller's default_offset=15
+    # (which is outside the calibrated range 10-18 and will misassign frames).
+    modal_offset: Dict[int, int] = {}
+    if offsets:
+        from collections import Counter
+        length_votes: Dict[int, Counter] = {}
+        for (_, length), off in offsets.items():
+            length_votes.setdefault(length, Counter())[off] += 1
+        modal_offset = {length: ctr.most_common(1)[0][0] for length, ctr in length_votes.items()}
+
+    all_lengths = (
+        agg.select(["sample_name", "length"]).unique().iter_rows()
+    )
+    for sample, length in all_lengths:
+        key = (str(sample), int(length))
+        if key not in offsets and int(length) in modal_offset:
+            offsets[key] = modal_offset[int(length)]
+
     return offsets
 
 

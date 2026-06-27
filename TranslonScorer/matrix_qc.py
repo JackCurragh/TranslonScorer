@@ -144,33 +144,35 @@ def fast_reads_qc(
     reads_path = _reads_parquet_path(mp_dir, manifest)
     samples = _samples_df(mp_dir, manifest)
 
+    # 5' dinucleotide is the first 2 nt of the partition's 4-nt sequence prefix —
+    # derive it from the directory name to avoid reading sequence at all for that end.
+    dinuc_5p = Path(mp_dir).name[:2]
+
     counts_lf = pl.scan_parquet(count_files)
     reads_lf = pl.scan_parquet(reads_path).select(["read_id", "length", "sequence"])
     sample_lf = samples.lazy().select(["sample_id", "sample_name", "study_id"])
 
-    # Aggregate inside the lazy plan — never materialise the full per-read join
+    # Length + 3' dinuc: aggregate fully inside the lazy plan before collect
     agg_lf = (
         counts_lf.join(reads_lf, on="read_id", how="inner")
         .join(sample_lf, on="sample_id", how="inner")
-        .with_columns([
-            pl.col("sequence").str.slice(0, 2).alias("dinuc_5p"),
-            pl.col("sequence").str.slice(-2).alias("dinuc_3p"),
-        ])
-        .group_by(["sample_name", "study_id", "length", "dinuc_5p", "dinuc_3p"])
+        .with_columns(pl.col("sequence").str.slice(-2).alias("dinuc_3p"))
+        .group_by(["sample_name", "study_id", "length", "dinuc_3p"])
         .agg(pl.col("count").sum().cast(pl.Float64))
     )
 
-    agg = agg_lf.collect()
+    agg = agg_lf.collect(streaming=True)
+
+    empty_len = pl.DataFrame(schema={
+        "sample_name": pl.Utf8, "study_id": pl.Utf8,
+        "length": pl.UInt32, "count": pl.Float64,
+    })
+    empty_dinuc = pl.DataFrame(schema={
+        "sample_name": pl.Utf8, "end": pl.Utf8,
+        "dinuc": pl.Utf8, "count": pl.Float64,
+    })
 
     if agg.is_empty():
-        empty_len = pl.DataFrame(schema={
-            "sample_name": pl.Utf8, "study_id": pl.Utf8,
-            "length": pl.UInt32, "count": pl.Float64,
-        })
-        empty_dinuc = pl.DataFrame(schema={
-            "sample_name": pl.Utf8, "end": pl.Utf8,
-            "dinuc": pl.Utf8, "count": pl.Float64,
-        })
         return empty_len, empty_dinuc
 
     length_df = (
@@ -179,13 +181,18 @@ def fast_reads_qc(
         .agg(pl.col("count").sum())
     )
 
+    # 5' dinuc: all reads in this partition share the same 5' dinucleotide
     five_df = (
-        agg.rename({"dinuc_5p": "dinuc"})
-        .group_by(["sample_name", "dinuc"])
+        agg.select(["sample_name", "count"])
+        .group_by("sample_name")
         .agg(pl.col("count").sum())
-        .with_columns(pl.lit("5p").alias("end"))
+        .with_columns([
+            pl.lit("5p").alias("end"),
+            pl.lit(dinuc_5p).alias("dinuc"),
+        ])
         .select(["sample_name", "end", "dinuc", "count"])
     )
+
     three_df = (
         agg.rename({"dinuc_3p": "dinuc"})
         .group_by(["sample_name", "dinuc"])
@@ -193,6 +200,7 @@ def fast_reads_qc(
         .with_columns(pl.lit("3p").alias("end"))
         .select(["sample_name", "end", "dinuc", "count"])
     )
+
     dinuc_df = pl.concat([five_df, three_df])
 
     return length_df, dinuc_df

@@ -148,14 +148,21 @@ def fast_reads_qc(
     reads_lf = pl.scan_parquet(reads_path).select(["read_id", "length", "sequence"])
     sample_lf = samples.lazy().select(["sample_id", "sample_name", "study_id"])
 
-    joined = (
+    # Aggregate inside the lazy plan — never materialise the full per-read join
+    agg_lf = (
         counts_lf.join(reads_lf, on="read_id", how="inner")
         .join(sample_lf, on="sample_id", how="inner")
-        .select(["sample_name", "study_id", "length", "sequence", "count"])
-        .collect()
+        .with_columns([
+            pl.col("sequence").str.slice(0, 2).alias("dinuc_5p"),
+            pl.col("sequence").str.slice(-2).alias("dinuc_3p"),
+        ])
+        .group_by(["sample_name", "study_id", "length", "dinuc_5p", "dinuc_3p"])
+        .agg(pl.col("count").sum().cast(pl.Float64))
     )
 
-    if joined.is_empty():
+    agg = agg_lf.collect()
+
+    if agg.is_empty():
         empty_len = pl.DataFrame(schema={
             "sample_name": pl.Utf8, "study_id": pl.Utf8,
             "length": pl.UInt32, "count": pl.Float64,
@@ -167,24 +174,22 @@ def fast_reads_qc(
         return empty_len, empty_dinuc
 
     length_df = (
-        joined.select(["sample_name", "study_id", "length", "count"])
+        agg.select(["sample_name", "study_id", "length", "count"])
         .group_by(["sample_name", "study_id", "length"])
-        .agg(pl.col("count").sum().cast(pl.Float64))
+        .agg(pl.col("count").sum())
     )
 
     five_df = (
-        joined
-        .with_columns(pl.col("sequence").str.slice(0, 2).alias("dinuc"))
+        agg.rename({"dinuc_5p": "dinuc"})
         .group_by(["sample_name", "dinuc"])
-        .agg(pl.col("count").sum().cast(pl.Float64))
+        .agg(pl.col("count").sum())
         .with_columns(pl.lit("5p").alias("end"))
         .select(["sample_name", "end", "dinuc", "count"])
     )
     three_df = (
-        joined
-        .with_columns(pl.col("sequence").str.slice(-2).alias("dinuc"))
+        agg.rename({"dinuc_3p": "dinuc"})
         .group_by(["sample_name", "dinuc"])
-        .agg(pl.col("count").sum().cast(pl.Float64))
+        .agg(pl.col("count").sum())
         .with_columns(pl.lit("3p").alias("end"))
         .select(["sample_name", "end", "dinuc", "count"])
     )

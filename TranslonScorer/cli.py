@@ -1744,6 +1744,17 @@ def build_matrix_cache_cmd(matrix_dir, n_workers):
         "Strongly recommended for matrix scoring (fixes the flat-offset frame bug)."
     ),
 )
+@click.option(
+    "--psite-index",
+    "psite_index_dir",
+    default=None,
+    help=(
+        "Directory produced by build-psite-index.  When provided, P-site offsets are "
+        "loaded from offsets.parquet and (if present) only (sample, length) pairs "
+        "listed in usable_sample_lengths.parquet are used for frame scoring.  "
+        "Requires --gtf."
+    ),
+)
 def score_matrix_cmd(
     events_dir,
     matrix_dir,
@@ -1756,6 +1767,7 @@ def score_matrix_cmd(
     site,
     n_workers,
     gtf,
+    psite_index_dir,
 ):
     """Score extracted events against the sparse annotation-scale matrix.
 
@@ -1793,8 +1805,11 @@ def score_matrix_cmd(
             annotation_version=annotation_version,
             sample_names=list(sample_names) or None,
             n_workers=n_workers,
+            psite_index_dir=psite_index_dir,
         )
     else:
+        if psite_index_dir:
+            raise click.UsageError("--psite-index requires --gtf")
         log_info("Legacy flat-offset path (no --gtf); frame scoring may be inaccurate")
         written = score_matrix_workflow(
             events_dir,

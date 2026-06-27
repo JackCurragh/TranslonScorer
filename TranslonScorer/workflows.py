@@ -255,6 +255,7 @@ def score_matrix_rollup_workflow(
     multimap_mode: str = "unique",
     annotation_version: str = "",
     thr: ScoreThresholds = DEFAULT_THRESHOLDS,
+    psite_index_dir: Optional[str] = None,
 ) -> str:
     """Score elongation events using the FrameRollup (calibrated per-sample, per-length offsets).
 
@@ -288,11 +289,32 @@ def score_matrix_rollup_workflow(
         n_workers=n_workers,
     )
 
-    # Calibrate per-(sample, length) offsets with target_frame=0
-    agg = rollup.group_by(["sample_name", "length", "strand", "phase0"]).agg(
-        pl.col("count").sum()
-    )
-    offsets = calibrate_offsets(agg, target_frame=0)
+    # Load or calibrate per-(sample, length) offsets
+    if psite_index_dir is not None:
+        offsets_path = Path(psite_index_dir) / "offsets.parquet"
+        usable_path = Path(psite_index_dir) / "usable_sample_lengths.parquet"
+        offsets_df = pl.read_parquet(offsets_path)
+        offsets = {
+            (str(r["sample_name"]), int(r["length"])): int(r["offset"])
+            for r in offsets_df.iter_rows(named=True)
+        }
+        if usable_path.exists():
+            usable_df = (
+                pl.read_parquet(usable_path)
+                .rename({"sample_id": "sample_name"})
+                .select(["sample_name", pl.col("length").cast(pl.Int64)])
+                .with_columns(pl.lit(True).alias("_keep"))
+            )
+            rollup = (
+                rollup.join(usable_df, on=["sample_name", "length"], how="left")
+                .filter(pl.col("_keep").fill_null(False))
+                .drop("_keep")
+            )
+    else:
+        agg = rollup.group_by(["sample_name", "length", "strand", "phase0"]).agg(
+            pl.col("count").sum()
+        )
+        offsets = calibrate_offsets(agg, target_frame=0)
 
     # Score: aggregate across samples → per-(feature_id, length) elong_in_frame
     scored = score_frame_rollup(rollup, offsets, default_offset=12)

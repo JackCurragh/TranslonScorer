@@ -218,8 +218,9 @@ def calibrate_cohort(
         for row in qc_df.iter_rows(named=True):
             sid = str(row["sample_id"])
             rfd = _json.loads(row.get("read_frame_distribution") or "{}")
+            # rfd format: {length_str: [f0_count, f1_count, f2_count]}
             rfd_int: Dict[int, Dict[int, float]] = {
-                int(L): {int(f): float(c) for f, c in fd.items()}
+                int(L): {i: float(c) for i, c in enumerate(fd)}
                 for L, fd in rfd.items()
             }
             offsets_for_sample = {

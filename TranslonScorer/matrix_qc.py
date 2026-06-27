@@ -130,6 +130,69 @@ def fast_length_qc(
     return pl.from_dicts(rows).sort("sample_id") if rows else _empty_length_schema()
 
 
+def fast_reads_qc(
+    partition_dir: str | Path,
+) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    """Single-pass reads × matrix join returning raw per-sample aggregates.
+
+    Returns:
+        length_df : (sample_name, study_id, length, count) — raw histogram rows
+        dinuc_df  : (sample_name, end, dinuc, count) — 5p/3p dinucleotide counts
+    """
+    mp_dir, manifest = _manifest(partition_dir)
+    count_files = _count_parquets(mp_dir, manifest)
+    reads_path = _reads_parquet_path(mp_dir, manifest)
+    samples = _samples_df(mp_dir, manifest)
+
+    counts_lf = pl.scan_parquet(count_files)
+    reads_lf = pl.scan_parquet(reads_path).select(["read_id", "length", "sequence"])
+    sample_lf = samples.lazy().select(["sample_id", "sample_name", "study_id"])
+
+    joined = (
+        counts_lf.join(reads_lf, on="read_id", how="inner")
+        .join(sample_lf, on="sample_id", how="inner")
+        .select(["sample_name", "study_id", "length", "sequence", "count"])
+        .collect()
+    )
+
+    if joined.is_empty():
+        empty_len = pl.DataFrame(schema={
+            "sample_name": pl.Utf8, "study_id": pl.Utf8,
+            "length": pl.UInt32, "count": pl.Float64,
+        })
+        empty_dinuc = pl.DataFrame(schema={
+            "sample_name": pl.Utf8, "end": pl.Utf8,
+            "dinuc": pl.Utf8, "count": pl.Float64,
+        })
+        return empty_len, empty_dinuc
+
+    length_df = (
+        joined.select(["sample_name", "study_id", "length", "count"])
+        .group_by(["sample_name", "study_id", "length"])
+        .agg(pl.col("count").sum().cast(pl.Float64))
+    )
+
+    five_df = (
+        joined
+        .with_columns(pl.col("sequence").str.slice(0, 2).alias("dinuc"))
+        .group_by(["sample_name", "dinuc"])
+        .agg(pl.col("count").sum().cast(pl.Float64))
+        .with_columns(pl.lit("5p").alias("end"))
+        .select(["sample_name", "end", "dinuc", "count"])
+    )
+    three_df = (
+        joined
+        .with_columns(pl.col("sequence").str.slice(-2).alias("dinuc"))
+        .group_by(["sample_name", "dinuc"])
+        .agg(pl.col("count").sum().cast(pl.Float64))
+        .with_columns(pl.lit("3p").alias("end"))
+        .select(["sample_name", "end", "dinuc", "count"])
+    )
+    dinuc_df = pl.concat([five_df, three_df])
+
+    return length_df, dinuc_df
+
+
 def _empty_length_schema() -> pl.DataFrame:
     return pl.DataFrame(
         schema={

@@ -52,7 +52,7 @@ import pysam
 from .io.annotation import build_gene_spans
 from .io.bam import normalise_chrom as _normalise_chrom
 from .io.matrix import _count_parquets, _discover_bam, _manifest, _parse_read_id, _samples_df
-from .matrix_qc import _bam_chroms, _build_frame_intervals
+from .matrix_qc import _bam_chroms, _build_frame_intervals, fast_reads_qc
 from .utils.logging import log_info
 
 # ---------------------------------------------------------------------------
@@ -89,30 +89,53 @@ def calibrate_cohort(
     n_workers: Optional[int] = None,
     chrom: Optional[str] = None,
 ) -> Tuple[pl.DataFrame, pl.DataFrame]:
-    """Phase 1: compute per-sample calibrated offsets and QC stats.
+    """Phase 1: compute per-sample calibrated offsets and comprehensive QC.
 
-    Runs build_matrix_rollup (fast, existing map-reduce) then calibrate_offsets
-    and rollup_to_periodicity on the compact rollup — equivalent to running
-    RiboMetric on every sample without touching individual BAM files.
+    Runs three parallel streams and merges results:
+      1. Matrix rollup → per-(sample,length) frame counts → periodicity QC + offsets
+      2. fast_reads_qc across all partitions → length distribution metrics
+      3. fast_reads_qc (same scan) → ligation bias metrics
+
+    The combined QC mirrors RiboMetric's per-sample output without BAMs:
+      periodicity_score, f0/f1/f2, n_cds_reads, recommended_offsets
+      total_reads, peak_length, mean_length, rpf_28_32_prop
+      rld_IQR_metric, rld_CV_metric, rld_normality_metric,
+      rld_max_prop_metric, rld_bimodality
+      ligation_bias_KL_5p/3p, ligation_bias_score_5p/3p,
+      ligation_bias_max_abs_5p/3p
+      prop_cds, recommended_lengths, n_recommended,
+      recommended_read_proportion, library_type
 
     Returns:
         offsets_df: (sample_name, length, offset) — one row per (sample, length)
-        qc_df:      per-sample QC table (periodicity_score, f0, f1, f2, …)
+        qc_df:      comprehensive per-sample QC table
     """
+    import json as _json
+
     from .matrix_rollup import (
         build_matrix_rollup,
         calibrate_offsets,
         rollup_to_periodicity,
     )
+    from .qc import (
+        _classify_library,
+        _length_distribution_metrics,
+        _ligation_bias_metrics,
+        _recommend_read_lengths,
+    )
 
-    # If chrom-restricted, we still need a representative CDS set for calibration.
-    # Use the supplied cds_df as-is (caller may have pre-filtered to target chrom,
-    # or may pass the full annotation — both are valid).
+    # Resolve partition_dirs to a list of Path objects
+    if isinstance(partition_dirs, (str, Path)):
+        parent = Path(partition_dirs)
+        pdirs: List[Path] = sorted(d for d in parent.iterdir() if d.is_dir())
+    else:
+        pdirs = [Path(d) for d in partition_dirs]
+
+    # Phase 1a: offset calibration via matrix rollup
     cal_cds = cds_df
     if chrom:
         cal_cds = cds_df.filter(pl.col("chr") == chrom)
         if cal_cds.is_empty():
-            # try without "chr" prefix
             alt = chrom[3:] if chrom.startswith("chr") else f"chr{chrom}"
             cal_cds = cds_df.filter(pl.col("chr") == alt)
         if cal_cds.is_empty():
@@ -123,17 +146,124 @@ def calibrate_cohort(
             cal_cds = cds_df
 
     log_info("Phase 1: building matrix rollup for offset calibration …")
-    rollup = build_matrix_rollup(
-        partition_dirs, cal_cds, n_workers=n_workers
-    )
+    rollup = build_matrix_rollup(pdirs, cal_cds, n_workers=n_workers)
 
     log_info("Phase 1: calibrating per-(sample, length) P-site offsets …")
     offsets_dict = calibrate_offsets(rollup, target_frame=0)
 
-    log_info("Phase 1: computing per-sample QC stats …")
+    log_info("Phase 1: computing periodicity QC …")
     qc_df = rollup_to_periodicity(rollup, offsets_dict)
 
-    # Build offsets_df: (sample_name Utf8, length Int64, offset Int64)
+    # Phase 1b: length distribution + ligation bias across all partitions
+    log_info(f"Phase 1: scanning {len(pdirs)} partition(s) for reads QC …")
+    len_parts: List[pl.DataFrame] = []
+    dinuc_parts: List[pl.DataFrame] = []
+    for pdir in pdirs:
+        try:
+            ld, dd = fast_reads_qc(pdir)
+            if not ld.is_empty():
+                len_parts.append(ld)
+            if not dd.is_empty():
+                dinuc_parts.append(dd)
+        except Exception as e:
+            log_info(f"  skipping {pdir.name}: {e}")
+
+    reads_qc_rows: Dict[str, dict] = {}
+
+    if len_parts:
+        length_all = pl.concat(len_parts)
+        # Aggregate length histogram per sample across partitions
+        length_hist = (
+            length_all.group_by(["sample_name", "length"])
+            .agg(pl.col("count").sum())
+        )
+        for sname, grp in length_hist.group_by("sample_name"):
+            lc = {int(row["length"]): float(row["count"]) for row in grp.iter_rows(named=True)}
+            reads_qc_rows.setdefault(str(sname), {}).update(
+                _length_distribution_metrics(lc)
+            )
+            reads_qc_rows[str(sname)]["_rld"] = lc
+
+    if dinuc_parts:
+        dinuc_all = pl.concat(dinuc_parts)
+        # Cohort-wide background: aggregate across all samples per (end, dinuc)
+        cohort_bg = (
+            dinuc_all.group_by(["end", "dinuc"])
+            .agg(pl.col("count").sum())
+        )
+        def _to_freq(df: pl.DataFrame) -> Dict[str, float]:
+            total = float(df["count"].sum()) or 1.0
+            return {row["dinuc"]: row["count"] / total for row in df.iter_rows(named=True)}
+
+        bg5 = _to_freq(cohort_bg.filter(pl.col("end") == "5p"))
+        bg3 = _to_freq(cohort_bg.filter(pl.col("end") == "3p"))
+
+        # Per-sample dinucleotide aggregation
+        dinuc_agg = (
+            dinuc_all.group_by(["sample_name", "end", "dinuc"])
+            .agg(pl.col("count").sum())
+        )
+        for (sname,), grp in dinuc_agg.group_by(["sample_name"]):
+            five = {row["dinuc"]: float(row["count"])
+                    for row in grp.filter(pl.col("end") == "5p").iter_rows(named=True)}
+            three = {row["dinuc"]: float(row["count"])
+                     for row in grp.filter(pl.col("end") == "3p").iter_rows(named=True)}
+            reads_qc_rows.setdefault(str(sname), {}).update(
+                _ligation_bias_metrics(five, three, bg5, bg3)
+            )
+
+    # Phase 1c: derive composite metrics and merge everything
+    if reads_qc_rows:
+        perio_lookup: Dict[str, dict] = {}
+        for row in qc_df.iter_rows(named=True):
+            sid = str(row["sample_id"])
+            rfd = _json.loads(row.get("read_frame_distribution") or "{}")
+            rfd_int: Dict[int, Dict[int, float]] = {
+                int(L): {int(f): float(c) for f, c in fd.items()}
+                for L, fd in rfd.items()
+            }
+            offsets_for_sample = {
+                int(L): int(off)
+                for (sn, L), off in offsets_dict.items()
+                if sn == sid
+            }
+            perio_lookup[sid] = {
+                "rfd": rfd_int,
+                "n_cds_reads": row.get("n_cds_reads", 0),
+                "offsets": offsets_for_sample,
+            }
+
+        extra_rows = []
+        for sname, stats in reads_qc_rows.items():
+            rld = stats.pop("_rld", {})
+            total = stats.get("total_reads", 0.0)
+            pinfo = perio_lookup.get(sname, {})
+            n_cds = float(pinfo.get("n_cds_reads", 0))
+            prop_cds = n_cds / total if total > 0 else 0.0
+
+            rec = _recommend_read_lengths(
+                pinfo.get("rfd", {}),
+                rld,
+                offsets=pinfo.get("offsets"),
+            )
+            stats["prop_cds"] = prop_cds
+            stats["recommended_lengths"] = _json.dumps(rec["recommended_lengths"])
+            stats["n_recommended"] = rec["n_recommended"]
+            stats["recommended_read_proportion"] = rec["recommended_read_proportion"]
+            extra_rows.append({"sample_id": sname, **stats})
+
+        extra_df = pl.from_dicts(extra_rows)
+        qc_df = qc_df.join(extra_df, on="sample_id", how="left")
+
+        # library_type requires periodicity_score + prop_cds
+        if "periodicity_score" in qc_df.columns and "prop_cds" in qc_df.columns:
+            lib_types = [
+                _classify_library(float(r["periodicity_score"] or 0.0), float(r["prop_cds"] or 0.0))
+                for r in qc_df.select(["periodicity_score", "prop_cds"]).iter_rows(named=True)
+            ]
+            qc_df = qc_df.with_columns(pl.Series("library_type", lib_types, dtype=pl.Utf8))
+
+    # Build offsets_df
     if offsets_dict:
         offsets_df = pl.DataFrame(
             {

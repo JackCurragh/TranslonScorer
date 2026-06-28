@@ -13,12 +13,45 @@ _build_frame_intervals — per-(chrom,strand) CDS exon intervals with phase
 
 from __future__ import annotations
 
+import bisect
 import collections
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import polars as pl
 
 from TranslonScorer.io.bam import normalise_chrom as _normalise_chrom
+
+# ---------------------------------------------------------------------------
+# Splice-context helpers
+# ---------------------------------------------------------------------------
+
+# Type alias: per-(chrom, strand) sorted list of (donor, acceptor) intron coords.
+# strand is '+' or '-'. donor = exon_end (0-based excl), acceptor = next_exon_start.
+SpliceContext = Dict[Tuple[str, str], List[Tuple[int, int]]]
+
+
+def build_splice_context(gtf_path: str) -> SpliceContext:
+    """Derive all transcript introns from GTF exon features.
+
+    Returns {(chrom, strand): sorted_unique_introns}.  Strand is '+' or '-'.
+    Donor = 3'-end of upstream exon (0-based exclusive), acceptor = 5'-start of
+    downstream exon — the same convention used for intra-ORF junctions in
+    extract_events().
+    """
+    from TranslonScorer.io.annotation import _blocks_from_gtf
+
+    exon_df = _blocks_from_gtf(gtf_path, feature_type="exon")
+    raw: Dict[Tuple[str, str], Set[Tuple[int, int]]] = {}
+    for row in exon_df.iter_rows(named=True):
+        chrom = str(row["chr"])
+        strand = str(row["strand"])
+        exons = sorted(zip(row["start"], row["stop"]))
+        for i in range(len(exons) - 1):
+            donor = exons[i][1]
+            acceptor = exons[i + 1][0]
+            if acceptor > donor:
+                raw.setdefault((chrom, strand), set()).add((donor, acceptor))
+    return {k: sorted(v) for k, v in raw.items()}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,11 +72,120 @@ def _eid(key: pl.Expr) -> pl.Expr:
 # ---------------------------------------------------------------------------
 
 
+def _context_junction_events(
+    t: pl.DataFrame,
+    intra_junctions: Set[Tuple[str, int, int, int]],
+    splice_context: SpliceContext,
+    flank: int = 200,
+) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    """Junction events from the host-transcript splice map that lie outside the ORF blocks.
+
+    ``t`` has columns: translon_id, chrom, strand (Int64), bed_start, bed_end.
+    ``intra_junctions`` is the set of (chrom, strand_int, donor, acceptor) already
+    captured from the ORF's own block adjacencies — these are skipped.
+    ``flank`` — genomic window beyond the ORF start/stop to search (default 200 nt,
+    covering any RPF footprint + init/term scoring flank).
+
+    Returns (junction_events_df, feature_event_df) in the same schema as the
+    intra-ORF junction tables, with rank=-1 to mark context junctions.
+    """
+    ctx_rows: List[Tuple] = []  # (translon_id, chrom, strand_str, donor, acceptor)
+
+    for row in t.iter_rows(named=True):
+        chrom: str = row["chrom"]
+        strand_int: int = int(row["strand"])
+        strand_str = "+" if strand_int > 0 else "-"
+        orf_start: int = int(row["bed_start"])
+        orf_end: int = int(row["bed_end"])
+        tid = row["translon_id"]
+
+        junctions = splice_context.get((chrom, strand_str), [])
+        if not junctions:
+            continue
+
+        win_s = orf_start - flank
+        win_e = orf_end + flank
+
+        # Binary-search left boundary to avoid a full scan
+        donors = [j[0] for j in junctions]
+        lo = bisect.bisect_left(donors, win_s)
+        for donor, acceptor in junctions[lo:]:
+            if donor > win_e:
+                break
+            if (chrom, strand_int, donor, acceptor) in intra_junctions:
+                continue
+            ctx_rows.append((tid, chrom, strand_int, donor, acceptor))
+
+    if not ctx_rows:
+        empty_ev = pl.DataFrame(
+            schema={
+                "event_id": pl.UInt64,
+                "type": pl.Utf8,
+                "chrom": pl.Utf8,
+                "strand": pl.Int64,
+                "start": pl.Int64,
+                "end": pl.Int64,
+                "phase": pl.Int64,
+            }
+        )
+        empty_fe = pl.DataFrame(
+            schema={
+                "feature_id": pl.Utf8,
+                "event_id": pl.UInt64,
+                "role": pl.Utf8,
+                "rank": pl.Int64,
+                "phase": pl.Int64,
+            }
+        )
+        return empty_ev, empty_fe
+
+    ctx_df = (
+        pl.DataFrame(
+            ctx_rows,
+            schema=["translon_id", "chrom", "strand", "donor", "acceptor"],
+            orient="row",
+        )
+        .with_columns(
+            pl.concat_str(
+                [
+                    pl.lit("J"),
+                    pl.col("chrom"),
+                    pl.col("strand").cast(pl.Utf8),
+                    pl.col("donor").cast(pl.Utf8),
+                    pl.col("acceptor").cast(pl.Utf8),
+                ],
+                separator="|",
+            ).alias("_k")
+        )
+        .with_columns(_eid(pl.col("_k")))
+    )
+
+    ctx_junc_events = ctx_df.unique("event_id").select(
+        "event_id",
+        pl.lit("junction").alias("type"),
+        "chrom",
+        "strand",
+        pl.col("donor").cast(pl.Int64).alias("start"),
+        pl.col("acceptor").cast(pl.Int64).alias("end"),
+        pl.lit(None, dtype=pl.Int64).alias("phase"),
+    )
+    ctx_fe_junc = ctx_df.select(
+        pl.col("translon_id").alias("feature_id"),
+        "event_id",
+        pl.lit("junction").alias("role"),
+        pl.lit(-1, dtype=pl.Int64).alias("rank"),
+        pl.lit(None, dtype=pl.Int64).alias("phase"),
+    )
+    return ctx_junc_events, ctx_fe_junc
+
+
 def extract_events(
     blocks: pl.DataFrame,
     translons: pl.DataFrame,
     *,
     annotation_version: str = "",
+    splice_context: Optional[SpliceContext] = None,
+    context_flank: int = 200,
 ) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """Return (events, feature_event, event_overlap).
 
@@ -51,6 +193,15 @@ def extract_events(
                        bed_start, bed_end, seq_region_strand, block_length_nt
     translons columns: translon_id, bed_chrom, bed_start, bed_end, seq_region_strand
     """
+    # Normalised translons (needed early for context junction lookup)
+    t_base = translons.rename({"seq_region_strand": "strand", "bed_chrom": "chrom"}).with_columns(
+        [
+            pl.col("bed_start").cast(pl.Int64),
+            pl.col("bed_end").cast(pl.Int64),
+            pl.col("strand").cast(pl.Int64),
+        ]
+    )
+
     b = blocks.rename({"seq_region_strand": "strand", "bed_chrom": "chrom"}).with_columns(
         [
             pl.col("bed_start").cast(pl.Int64),
@@ -147,6 +298,31 @@ def extract_events(
         junc_events = elong_events.clear()
         fe_junc = fe_elong.clear()
 
+    # Context junctions — splice sites from the host transcript outside the ORF blocks
+    if splice_context is not None:
+        if bj.height:
+            intra_set: Set[Tuple[str, int, int, int]] = set(
+                zip(
+                    bj["chrom"].to_list(),
+                    bj["strand"].cast(pl.Int64).to_list(),
+                    bj["bed_end"].to_list(),
+                    bj["next_start"].to_list(),
+                )
+            )
+        else:
+            intra_set = set()
+        ctx_junc_events, ctx_fe_junc = _context_junction_events(
+            t_base, intra_set, splice_context, flank=context_flank
+        )
+        # Only add events not already in the intra-ORF set (dedup by event_id)
+        if ctx_junc_events.height:
+            existing = set(junc_events["event_id"].to_list()) if junc_events.height else set()
+            ctx_junc_events = ctx_junc_events.filter(
+                ~pl.col("event_id").is_in(list(existing))
+            )
+            junc_events = pl.concat([junc_events, ctx_junc_events])
+            fe_junc = pl.concat([fe_junc, ctx_fe_junc])
+
     # Init / term events (translon 5' / 3' ends)
     t = (
         translons.rename({"seq_region_strand": "strand", "bed_chrom": "chrom"})
@@ -220,6 +396,8 @@ def write_events(
     *,
     annotation_version: str = "",
     chroms: Optional[List[str]] = None,
+    context_gtf: Optional[str] = None,
+    context_flank: int = 200,
 ) -> dict:
     """Extract events per chromosome from in-memory blocks/translons and write Parquet.
 
@@ -227,6 +405,13 @@ def write_events(
     (GTF/GFF, BED12, FASTA ORFs, the annotation sqlite, …) as long as they carry
     the canonical columns expected by :func:`extract_events`. Writes
     events/, feature_event/, event_overlap/ Parquet shards (one per chrom).
+
+    ``context_gtf`` — optional GTF providing full transcript exon models.  When
+    given, splice junctions from the host transcript that fall outside the ORF
+    blocks but within ``context_flank`` nt of the ORF start/stop are added as
+    additional junction events.  Required for ORFs that start near a splice site
+    (e.g. uORFs 5 bp downstream of a junction) so the surrounding splicing
+    context is captured and scoreable.
     """
     from pathlib import Path
 
@@ -244,6 +429,10 @@ def write_events(
         wanted = set(chroms)
         all_chroms = [c for c in all_chroms if c in wanted]
 
+    splice_ctx: Optional[SpliceContext] = None
+    if context_gtf is not None:
+        splice_ctx = build_splice_context(context_gtf)
+
     n_ev = n_fe = n_ov = 0
     by_type: dict = {}
     for chrom in all_chroms:
@@ -251,7 +440,13 @@ def write_events(
         t = translons.filter(pl.col("bed_chrom") == chrom)
         if b.is_empty():
             continue
-        events, fe, overlap = extract_events(b, t, annotation_version=annotation_version)
+        events, fe, overlap = extract_events(
+            b,
+            t,
+            annotation_version=annotation_version,
+            splice_context=splice_ctx,
+            context_flank=context_flank,
+        )
         safe = str(chrom).replace("/", "_")
         events.write_parquet(out / "events" / f"{safe}.parquet")
         fe.write_parquet(out / "feature_event" / f"{safe}.parquet")

@@ -64,6 +64,8 @@ def extract_events_workflow(
     max_len: int = 1_000_000,
     annotation_version: str = "",
     chroms: Optional[List[str]] = None,
+    context_gtf: Optional[str] = None,
+    context_flank: int = 200,
 ) -> dict:
     """Extract deduplicated genomic events from any feature source.
 
@@ -103,7 +105,13 @@ def extract_events_workflow(
             max_len=max_len,
         )
     return write_events(
-        blocks, translons, out_dir, annotation_version=annotation_version, chroms=chroms
+        blocks,
+        translons,
+        out_dir,
+        annotation_version=annotation_version,
+        chroms=chroms,
+        context_gtf=context_gtf,
+        context_flank=context_flank,
     )
 
 

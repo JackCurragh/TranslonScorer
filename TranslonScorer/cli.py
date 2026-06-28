@@ -1501,6 +1501,28 @@ def inspect_cmd(parquet_path: str, limit: int, expand: bool, out_csv: Optional[s
     multiple=True,
     help="Restrict extraction to these chromosome(s) (repeatable; default: all).",
 )
+@click.option(
+    "--context-gtf",
+    "context_gtf",
+    default=None,
+    help=(
+        "GTF annotation providing full transcript exon models for splice context. "
+        "Required when the feature source (--bigbed / --bed12) is an ORF catalog "
+        "whose entries only encode internal exon structure: without this flag, "
+        "splice junctions in the 5'-UTR or 3'-UTR of the host transcript (e.g. a "
+        "junction immediately upstream of a start codon) are not extracted and "
+        "cannot be scored.  Adds context junction events within --context-flank nt "
+        "of each ORF's genomic boundaries."
+    ),
+)
+@click.option(
+    "--context-flank",
+    "context_flank",
+    type=int,
+    default=200,
+    show_default=True,
+    help="Window (nt) around each ORF to search for host-transcript context junctions.",
+)
 def extract_events_cmd(
     out_dir,
     gtf_path,
@@ -1515,6 +1537,8 @@ def extract_events_cmd(
     max_len,
     annotation_version,
     chroms,
+    context_gtf,
+    context_flank,
 ):
     """Extract deduplicated genomic events from a feature source.
 
@@ -1544,6 +1568,8 @@ def extract_events_cmd(
         max_len=max_len,
         annotation_version=annotation_version,
         chroms=list(chroms) or None,
+        context_gtf=context_gtf or None,
+        context_flank=context_flank,
     )
     log_info(
         f"Extracted events: {summary['events']} events, "

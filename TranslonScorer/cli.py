@@ -170,6 +170,104 @@ def cli():
     """
 
 
+@cli.command("build-cache")
+@click.option(
+    "--partition-dir", "-p", required=True,
+    help="Root of global_partitioned directory (contains per-prefix subdirs with BAMs and counts).",
+)
+@click.option(
+    "--out-dir", "-o", required=True,
+    help="Output root; L0b written to <out-dir>/l0b/, L1 to <out-dir>/l1/.",
+)
+@click.option("--genome-id", default="GRCh38.p14", show_default=True, help="Genome assembly ID.")
+@click.option("--junction-set-id", default="GENCODE_v44", show_default=True, help="Junction set label.")
+@click.option("--l0a-version", default="2026-06", show_default=True, help="L0a data-release version.")
+@click.option("--aligner-cfg-hash", default="default", show_default=True, help="Aligner config fingerprint.")
+@click.option(
+    "--chroms", multiple=True,
+    help="Chromosomes to build (repeat flag; default: all in BAM header).",
+)
+@click.option("--workers", default=4, show_default=True, help="Parallel chromosome workers.")
+@click.option("--samtools-threads", default=2, show_default=True, help="Threads per samtools call (L0b only).")
+@click.option(
+    "--skip-l0b", is_flag=True, default=False,
+    help="Skip L0b build (use when L0b already exists in <out-dir>/l0b/).",
+)
+@click.option(
+    "--skip-l1", is_flag=True, default=False,
+    help="Skip L1 build.",
+)
+def build_cache(
+    partition_dir, out_dir, genome_id, junction_set_id, l0a_version,
+    aligner_cfg_hash, chroms, workers, samtools_threads, skip_l0b, skip_l1,
+):
+    """Build the durable evidence cache: L0b alignment loci + L1 raw 5′ positional index.
+
+    This is the one-time (per junction-set release) build that scans the partitioned BAMs
+    and produces the Parquet artefacts everything else reads from.
+
+    Example (full genome):
+
+      translonscorer build-cache \\
+        --partition-dir /data/global_partitioned \\
+        --out-dir /cache/GRCh38_v44 \\
+        --workers 8
+
+    Example (resume / subset):
+
+      translonscorer build-cache \\
+        --partition-dir /data/global_partitioned \\
+        --out-dir /cache/GRCh38_v44 \\
+        --skip-l0b \\
+        --chroms chr1 --chroms chr2 \\
+        --workers 4
+    """
+    import logging
+    from pathlib import Path
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    from .l0b import build_l0b
+    from .l0b.contracts import VersionKey
+    from .l1 import build_l1
+
+    key = VersionKey(
+        genome_id=genome_id,
+        aligner_cfg_hash=aligner_cfg_hash,
+        junction_set_id=junction_set_id,
+        l0a_version=l0a_version,
+        multimap_policy="unique_only",
+    )
+
+    partition_path = Path(partition_dir)
+    out_path = Path(out_dir)
+    l0b_path = out_path / "l0b"
+    l1_path = out_path / "l1"
+    chrom_list = list(chroms) or None
+
+    if not skip_l0b:
+        logging.info("=== Building L0b ===")
+        build_l0b(
+            partition_path, l0b_path, key,
+            chroms=chrom_list,
+            workers=workers,
+            samtools_threads=samtools_threads,
+        )
+    else:
+        logging.info("Skipping L0b (--skip-l0b set); expecting shards in %s", l0b_path)
+
+    if not skip_l1:
+        logging.info("=== Building L1 ===")
+        build_l1(
+            l0b_path, partition_path, l1_path, key,
+            chroms=chrom_list,
+            workers=workers,
+        )
+    else:
+        logging.info("Skipping L1 (--skip-l1 set)")
+
+    logging.info("Cache build complete. L0b → %s  L1 → %s", l0b_path, l1_path)
+
+
 @cli.command("process-bam")
 @click.option("--bam", "-b", required=True, help="Input BAM file (genomic or transcriptomic).")
 @click.option(

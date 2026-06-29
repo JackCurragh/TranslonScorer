@@ -441,15 +441,25 @@ def build_l0b(
     out_dir = out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Discover BAMs
-    bam_paths: list[Path] = sorted(
-        p for subdir in partition_dir.iterdir()
-        if subdir.is_dir()
-        for p in subdir.glob(bam_glob)
-    )
+    # Discover BAMs — exactly one per partition subdir.
+    bam_paths: list[Path] = []
+    ambiguous: list[tuple[str, list[str]]] = []
+    for subdir in sorted(p for p in partition_dir.iterdir() if p.is_dir()):
+        matches = sorted(subdir.glob(bam_glob))
+        if len(matches) > 1:
+            ambiguous.append((subdir.name, [m.name for m in matches]))
+        bam_paths.extend(matches)
+    if ambiguous:
+        sample = ambiguous[0]
+        raise ValueError(
+            f"bam_glob {bam_glob!r} matches multiple BAMs in {len(ambiguous)} "
+            f"partition dir(s) — this would double-count reads. "
+            f"e.g. {sample[0]}/: {sample[1]}. "
+            f"Pass a more specific --bam-glob (e.g. 'unique_reads.*.filtered.bam')."
+        )
     if not bam_paths:
         raise FileNotFoundError(f"No BAMs matching {bam_glob!r} under {partition_dir}")
-    log.info("Found %d partition BAMs", len(bam_paths))
+    log.info("Found %d partition BAMs (one per partition)", len(bam_paths))
 
     # samtools merge -R (per-chrom region fetch) needs every input indexed.
     _ensure_indexed(bam_paths, threads=samtools_threads)
@@ -479,7 +489,19 @@ def build_l0b(
     total_rows = 0
     errors: list[str] = []
 
-    with ProcessPoolExecutor(max_workers=workers) as pool:
+    # Recycle each worker after one chromosome so per-process RSS (pyarrow /
+    # malloc arenas that don't return memory to the OS) cannot accumulate across
+    # the ~hundreds of chroms a long-lived worker would otherwise handle.
+    # max_tasks_per_child is Python 3.11+; degrade gracefully on older runtimes.
+    pool_kwargs: dict = {"max_workers": workers}
+    try:
+        import inspect
+        if "max_tasks_per_child" in inspect.signature(ProcessPoolExecutor).parameters:
+            pool_kwargs["max_tasks_per_child"] = 1
+    except (ValueError, TypeError):
+        pass
+
+    with ProcessPoolExecutor(**pool_kwargs) as pool:
         futures = {
             pool.submit(
                 _chrom_worker,

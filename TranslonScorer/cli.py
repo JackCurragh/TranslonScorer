@@ -190,6 +190,12 @@ def cli():
 @click.option("--workers", default=4, show_default=True, help="Parallel chromosome workers.")
 @click.option("--samtools-threads", default=2, show_default=True, help="Threads per samtools call (L0b only).")
 @click.option(
+    "--bam-glob", default="unique_reads.*.bam", show_default=True,
+    help="Glob (per partition subdir) for the canonical BAM. Must match exactly "
+         "one file per partition — e.g. 'unique_reads.*.filtered.bam' if both a "
+         "raw and a filtered BAM are present.",
+)
+@click.option(
     "--skip-l0b", is_flag=True, default=False,
     help="Skip L0b build (use when L0b already exists in <out-dir>/l0b/).",
 )
@@ -199,7 +205,7 @@ def cli():
 )
 def build_cache(
     partition_dir, out_dir, genome_id, junction_set_id, l0a_version,
-    aligner_cfg_hash, chroms, workers, samtools_threads, skip_l0b, skip_l1,
+    aligner_cfg_hash, chroms, workers, samtools_threads, bam_glob, skip_l0b, skip_l1,
 ):
     """Build the durable evidence cache: L0b alignment loci + L1 raw 5′ positional index.
 
@@ -251,6 +257,7 @@ def build_cache(
             chroms=chrom_list,
             workers=workers,
             samtools_threads=samtools_threads,
+            bam_glob=bam_glob,
         )
     else:
         logging.info("Skipping L0b (--skip-l0b set); expecting shards in %s", l0b_path)

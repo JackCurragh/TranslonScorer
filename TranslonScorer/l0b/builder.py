@@ -331,6 +331,8 @@ def _merge_sort_chrom(
     sort_cmd = [
         "samtools", "sort",
         f"--threads={threads}",
+        "-m", "768M",                       # cap per-thread RAM; spill beyond it
+        "-T", str(work_dir / f".sort_{chrom}"),  # spill to work_dir (disk), not /tmp (often tmpfs/RAM)
         "-o", str(out_bam),
         "-",
     ]

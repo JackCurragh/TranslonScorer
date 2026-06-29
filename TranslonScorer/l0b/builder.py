@@ -17,7 +17,7 @@ import os
 import re
 import subprocess
 import tempfile
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Generator, Sequence
 
@@ -267,6 +267,43 @@ def _get_chroms(bam_paths: list[Path]) -> list[str]:
         return [sq["SN"] for sq in bam.header.to_dict().get("SQ", [])]
 
 
+def _ensure_indexed(bam_paths: list[Path], threads: int = 4) -> None:
+    """Ensure every input BAM has a coordinate index (.bai/.csi).
+
+    ``samtools merge -R <chrom>`` does region-based random retrieval and
+    requires each input to be indexed.  Indexing is idempotent and the
+    indices are reusable across runs, so we create any that are missing.
+    Inputs must be coordinate-sorted (they are, from the matrix pipeline);
+    ``samtools index`` will fail loudly if one is not.
+    """
+    missing = [
+        p for p in bam_paths
+        if not (p.with_suffix(p.suffix + ".bai").exists()
+                or p.with_suffix(p.suffix + ".csi").exists())
+    ]
+    if not missing:
+        return
+    log.info("Indexing %d/%d partition BAMs missing an index", len(missing), len(bam_paths))
+
+    def _index_one(p: Path) -> None:
+        proc = subprocess.run(
+            ["samtools", "index", f"-@{threads}", str(p)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"samtools index failed for {p} (is it coordinate-sorted?): "
+                f"{proc.stderr.decode()}"
+            )
+
+    # Index in parallel, but bound concurrency to the CPU budget so we don't
+    # spawn one samtools per BAM (each index uses `threads` threads).
+    cpu = os.cpu_count() or 4
+    max_parallel = max(1, min(len(missing), cpu // max(1, threads)))
+    with ThreadPoolExecutor(max_workers=max_parallel) as pool:
+        list(pool.map(_index_one, missing))
+
+
 def _merge_sort_chrom(
     bam_paths: list[Path],
     chrom: str,
@@ -413,6 +450,9 @@ def build_l0b(
     if not bam_paths:
         raise FileNotFoundError(f"No BAMs matching {bam_glob!r} under {partition_dir}")
     log.info("Found %d partition BAMs", len(bam_paths))
+
+    # samtools merge -R (per-chrom region fetch) needs every input indexed.
+    _ensure_indexed(bam_paths, threads=samtools_threads)
 
     # Chromosome list
     all_chroms = _get_chroms(bam_paths)

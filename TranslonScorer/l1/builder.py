@@ -52,10 +52,12 @@ def _counts_glob(partition_dir: Path, counts_subdir: str) -> str:
 def _build_pos_stream(
     l0b_shard: Path,
     counts_lf: pl.LazyFrame,
-) -> pl.DataFrame:
-    """Build the positional L1 stream for one chromosome.
+) -> pl.LazyFrame:
+    """Lazy plan for the positional L1 stream of one chromosome.
 
-    Uses Polars streaming engine — no full materialisation of the cross-product.
+    Returned as a LazyFrame so the caller can ``sink_parquet`` it — streaming the
+    result straight to disk instead of materialising it (and the join hash table)
+    in RAM, which OOMs at full cohort scale.
     """
     l0b = (
         pl.scan_parquet(str(l0b_shard))
@@ -68,26 +70,24 @@ def _build_pos_stream(
         )
     )
 
-    result = (
+    return (
         l0b.join(counts_lf, on="read_id", how="inner")
         .group_by("pos5", "strand", "length", "sample_id")
         .agg(pl.col("count").sum())
         .sort("pos5")
         .cast({"strand": pl.Int8, "length": pl.Int16, "sample_id": pl.UInt32, "count": pl.UInt32})
-        .collect(engine="streaming")
     )
-    return result
 
 
 def _build_junc_stream(
     l0b_shard: Path,
-    counts_df: pl.DataFrame,
+    counts_lf: pl.LazyFrame,
 ) -> pl.DataFrame:
     """Build the junction L1 stream for one chromosome.
 
-    Junction build collects the spliced L0b rows first (small), then joins to
-    an already-collected counts table, because Polars streaming does not
-    support ``explode`` in a lazy context.
+    Collects the spliced L0b rows first (small — only junction-spanning reads),
+    then pulls *only those reads'* counts via a semi-join, instead of
+    materialising the entire cohort count matrix (which OOMs at scale).
     """
     spliced = (
         pl.scan_parquet(str(l0b_shard))
@@ -113,6 +113,14 @@ def _build_junc_stream(
             pl.col("junctions_crossed").struct.field("donor"),
             pl.col("junctions_crossed").struct.field("acceptor"),
         )
+    )
+
+    # Only the spliced reads' counts — semi-join keeps the materialised counts
+    # tiny (junction-spanning reads are a small fraction of the cohort).
+    read_ids = exploded.select(pl.col("read_id").unique())
+    counts_df = (
+        counts_lf.join(read_ids.lazy(), on="read_id", how="semi")
+        .collect(engine="streaming")
     )
 
     result = (
@@ -170,20 +178,17 @@ def _chrom_worker(
     glob_str = _counts_glob(Path(partition_dir), counts_subdir)
 
     # ------------------------------------------------------------------
-    # Positional stream — fully lazy / streaming
+    # Positional stream — stream result straight to disk (no materialisation)
     # ------------------------------------------------------------------
     counts_lf = pl.scan_parquet(glob_str).select("read_id", "sample_id", "count")
-    pos_df = _build_pos_stream(shard, counts_lf)
-    pos_df.write_parquet(str(pos_path), compression="zstd", statistics=True)
-    n_pos = len(pos_df)
-    del pos_df
+    _build_pos_stream(shard, counts_lf).sink_parquet(str(pos_path), compression="zstd")
+    n_pos = pl.scan_parquet(str(pos_path)).select(pl.len()).collect().item()
 
     # ------------------------------------------------------------------
-    # Junction stream — collect counts once (reuse for junction join)
+    # Junction stream — only spliced reads' counts (semi-join, not full matrix)
     # ------------------------------------------------------------------
-    counts_df = pl.scan_parquet(glob_str).select("read_id", "sample_id", "count").collect()
-    junc_df = _build_junc_stream(shard, counts_df)
-    del counts_df
+    counts_lf = pl.scan_parquet(glob_str).select("read_id", "sample_id", "count")
+    junc_df = _build_junc_stream(shard, counts_lf)
     junc_df.write_parquet(str(junc_path), compression="zstd", statistics=True)
     n_junc = len(junc_df)
 
@@ -263,7 +268,16 @@ def build_l1(
             f"No counts directories matching 'global.*_{counts_subdir}' under {partition_dir}"
         )
 
-    with ProcessPoolExecutor(max_workers=workers) as pool:
+    # Recycle workers after each chrom so per-process RSS can't accumulate.
+    pool_kwargs: dict = {"max_workers": workers}
+    try:
+        import inspect
+        if "max_tasks_per_child" in inspect.signature(ProcessPoolExecutor).parameters:
+            pool_kwargs["max_tasks_per_child"] = 1
+    except (ValueError, TypeError):
+        pass
+
+    with ProcessPoolExecutor(**pool_kwargs) as pool:
         futures = {
             pool.submit(
                 _chrom_worker,

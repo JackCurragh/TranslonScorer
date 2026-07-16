@@ -49,11 +49,11 @@ import numpy as np
 import polars as pl
 import pysam
 
-from .io.annotation import build_gene_spans
-from .io.bam import normalise_chrom as _normalise_chrom
-from .io.matrix import _count_parquets, _discover_bam, _manifest, _parse_read_id, _samples_df
-from .matrix_qc import _bam_chroms, _build_frame_intervals, fast_reads_qc
-from .utils.logging import log_info
+from ..io.annotation import build_gene_spans
+from ..io.bam import normalise_chrom as _normalise_chrom
+from ..io.matrix import _count_parquets, _discover_bam, _manifest, _parse_read_id, _samples_df
+from .qc import _bam_chroms, _build_frame_intervals, fast_reads_qc
+from ..utils.logging import log_info
 
 # ---------------------------------------------------------------------------
 # Shard schema
@@ -112,12 +112,12 @@ def calibrate_cohort(
     """
     import json as _json
 
-    from .matrix_rollup import (
+    from .rollup import (
         build_matrix_rollup,
         calibrate_offsets,
         rollup_to_periodicity,
     )
-    from .qc import (
+    from ..qc import (
         _classify_library,
         _length_distribution_metrics,
         _ligation_bias_metrics,
@@ -306,7 +306,7 @@ def _build_worker(pdir_str: str) -> bytes:
     """Scan one partition → IPC bytes of (chrom, p_site, strand, length, sample_id, count)."""
     from collections import defaultdict
 
-    from .matrix_qc import _assign_frames_sweep
+    from .qc import _assign_frames_sweep
 
     pdir = Path(pdir_str)
     bam = _discover_bam(pdir)

@@ -44,7 +44,7 @@ import numpy as np
 import polars as pl
 import pysam
 
-from .matrix_qc import (
+from .qc import (
     _assign_frames_sweep,
     _bam_chroms,
     _build_frame_intervals,
@@ -56,7 +56,7 @@ from .matrix_qc import (
     _ribometric_frame_scores,
     _samples_df,
 )
-from .utils.logging import log_info
+from ..utils.logging import log_info
 
 _INDEX_SCHEMA = {
     "read_id": pl.UInt64,
@@ -1501,7 +1501,7 @@ def rollup_to_periodicity(
     default_offset: int = 15,
 ) -> pl.DataFrame:
     """Apply per-(sample, length) offsets to the rollup → periodicity_qc schema."""
-    from .matrix_qc import _empty_periodicity_schema
+    from .qc import _empty_periodicity_schema
 
     if rollup.is_empty():
         return _empty_periodicity_schema()

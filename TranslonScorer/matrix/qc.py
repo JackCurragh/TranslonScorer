@@ -53,7 +53,7 @@ from TranslonScorer.io.matrix import (  # noqa: F401, E402
     _samples_df,
 )
 
-from .utils.logging import log_info, log_warning
+from ..utils.logging import log_info, log_warning
 
 # ---------------------------------------------------------------------------
 # Tier 1: length distribution QC (no BAM)

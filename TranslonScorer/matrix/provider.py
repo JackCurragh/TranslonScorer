@@ -111,7 +111,7 @@ class MatrixProvider:
             raise ValueError(f"site must be 'P' or 'A', got {site!r}")
 
         if self._psite_index_dir is not None:
-            from TranslonScorer.psite_index import query_genomic_coverage
+            from TranslonScorer.matrix.psite_index import query_genomic_coverage
 
             return query_genomic_coverage(
                 self._psite_index_dir,
@@ -121,7 +121,7 @@ class MatrixProvider:
                 group_level="sample" if by_sample else "aggregate",
             )
 
-        from TranslonScorer.matrix_rollup import region_coverage
+        from TranslonScorer.matrix.rollup import region_coverage
 
         a_shift = 3 if site == "A" else 0
         query_regions = [Region(r.chrom, r.start - a_shift, r.end - a_shift) for r in regions]
@@ -170,7 +170,7 @@ class MatrixProvider:
         -------
         DataFrame with columns junction_id, kind, count[, group].
         """
-        from TranslonScorer.matrix_rollup import tabulate_junctions
+        from TranslonScorer.matrix.rollup import tabulate_junctions
 
         group_level = "sample" if by_sample else "aggregate"
         return tabulate_junctions(

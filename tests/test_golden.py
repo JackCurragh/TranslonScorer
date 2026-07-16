@@ -417,7 +417,7 @@ def test_clustering_normalise_profiles():
     """normalise_profiles total_count method: each row sums to ~1e6."""
     import numpy as np
 
-    from TranslonScorer.clustering import normalise_profiles
+    from TranslonScorer.matrix.clustering import normalise_profiles
 
     mat = np.array([[10.0, 20.0, 30.0], [5.0, 5.0, 5.0]])
     out = normalise_profiles(mat, method="total_count")
@@ -430,7 +430,7 @@ def test_clustering_cluster_profiles_smoke():
     """cluster_profiles: 4 samples → 2 clusters, none excluded."""
     import numpy as np
 
-    from TranslonScorer.clustering import cluster_profiles
+    from TranslonScorer.matrix.clustering import cluster_profiles
 
     mat = np.array(
         [
@@ -448,7 +448,7 @@ def test_clustering_cluster_profiles_smoke():
 
 def test_clustering_build_profile_matrix_smoke():
     """build_profile_matrix round-trips a tidy profile DataFrame."""
-    from TranslonScorer.clustering import build_profile_matrix
+    from TranslonScorer.matrix.clustering import build_profile_matrix
 
     profiles = pl.DataFrame(
         {
@@ -493,8 +493,8 @@ def test_consequential_apply_policy():
 
 
 def test_matrix_qc_public_surface_importable():
-    """TranslonScorer.matrix_qc re-exports the periodicity/frame helpers."""
-    from TranslonScorer.matrix_qc import (
+    """TranslonScorer.matrix.qc re-exports the periodicity/frame helpers."""
+    from TranslonScorer.matrix.qc import (
         _compute_periodicity_from_frames,
         _empty_periodicity_schema,
         frame_dominance_matrix,
@@ -508,7 +508,7 @@ def test_matrix_qc_public_surface_importable():
 
 def test_pipeline_shim_clustering_importable():
     """pipeline/profile_clustering.py shim: public API importable from old path."""
-    from TranslonScorer.clustering import (
+    from TranslonScorer.matrix.clustering import (
         cluster_profiles,
         normalise_profiles,
     )
@@ -643,7 +643,7 @@ def test_gapdh_golden_via_provider():
     alter the scoring arithmetic.
     """
     from TranslonScorer.coverage.base import CoverageProvider
-    from TranslonScorer.coverage.matrix import DictCoverageProvider
+    from TranslonScorer.matrix.provider import DictCoverageProvider
 
     provider = DictCoverageProvider(_gapdh_coverage())
     assert isinstance(provider, CoverageProvider)
@@ -682,7 +682,7 @@ def test_provider_protocol_compliance():
         SupportsMappability,
         SupportsSites,
     )
-    from TranslonScorer.coverage.matrix import DictCoverageProvider, MatrixProvider
+    from TranslonScorer.matrix.provider import DictCoverageProvider, MatrixProvider
 
     provider = DictCoverageProvider({})
     assert isinstance(provider, CoverageProvider)

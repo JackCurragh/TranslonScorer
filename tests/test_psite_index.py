@@ -12,7 +12,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from TranslonScorer.psite_index import (
+from TranslonScorer.matrix.psite_index import (
     _assign_psite_to_features,
     _exon_intervals_for_chrom,
     available_chroms,

@@ -20,9 +20,9 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from TranslonScorer.coverage.matrix import MatrixProvider
+from TranslonScorer.matrix.provider import MatrixProvider
 from TranslonScorer.model import Region, ScoreThresholds
-from TranslonScorer.psite_index import query_genomic_coverage
+from TranslonScorer.matrix.psite_index import query_genomic_coverage
 from TranslonScorer.workflows import _score_events_over_provider
 
 _THR = ScoreThresholds()
@@ -168,7 +168,7 @@ def test_matrix_provider_psite_index_mode(tmp_path: Path):
 def test_matrix_provider_default_mode_unaffected(monkeypatch, tmp_path: Path):
     """Backward compatibility: without psite_index_dir, coverage() still goes
     through the original region_coverage/ref_offset path unchanged."""
-    import TranslonScorer.coverage.matrix as matrix_mod
+    import TranslonScorer.matrix.provider as matrix_mod
 
     called = {}
 
@@ -176,7 +176,7 @@ def test_matrix_provider_default_mode_unaffected(monkeypatch, tmp_path: Path):
         called["ref_offset"] = ref_offset
         return pl.DataFrame({"pos": [42], "count": [1.0]})
 
-    monkeypatch.setattr("TranslonScorer.matrix_rollup.region_coverage", _fake_region_coverage)
+    monkeypatch.setattr("TranslonScorer.matrix.rollup.region_coverage", _fake_region_coverage)
     provider = matrix_mod.MatrixProvider([str(tmp_path)], ref_offset=15)
     cov = provider.coverage([Region("chr1", 0, 100)], site="P")
     assert called["ref_offset"] == 15

@@ -1757,7 +1757,7 @@ def build_psite_index_cmd(
     from pathlib import Path as _Path
 
     from .io.annotation import build_cds_blocks, build_cds_blocks_from_bigbed
-    from .psite_index import build_psite_index, calibrate_cohort
+    from .matrix.psite_index import build_psite_index, calibrate_cohort
 
     # Phase 2 annotation (what to index)
     if cds_bigbed:
@@ -1815,7 +1815,7 @@ def build_matrix_cache_cmd(matrix_dir, n_workers):
     TS_MATRIX_CACHE_DIR for a read-only matrix.
     """
     setup_logging()
-    from .matrix_rollup import build_read_totals_cache
+    from .matrix.rollup import build_read_totals_cache
 
     summary = build_read_totals_cache(matrix_dir, n_workers=n_workers)
     log_info(

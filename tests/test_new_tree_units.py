@@ -535,7 +535,7 @@ def test_build_gene_spans(tmp_path):
 @pytest.mark.skipif(not HAS_MATRIX, reason="matrix partition fixture not in data/")
 def test_aggregate_fast_path_equals_per_sample(tmp_path, monkeypatch):
     """region_coverage aggregate (read_id totals fast path) == per-sample summed."""
-    from TranslonScorer.matrix_rollup import region_coverage
+    from TranslonScorer.matrix.rollup import region_coverage
 
     monkeypatch.setenv("TS_MATRIX_CACHE_DIR", str(tmp_path / "cache"))
     parts = [str(MATRIX_PART)]

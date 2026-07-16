@@ -60,7 +60,7 @@ def _simple_cds(chrom="chr1", strand="+", starts=(100, 200), stops=(130, 230)) -
 
 
 def test_build_feature_exon_index_plus_strand():
-    from TranslonScorer.matrix_rollup import build_feature_exon_index
+    from TranslonScorer.matrix.rollup import build_feature_exon_index
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -75,7 +75,7 @@ def test_build_feature_exon_index_plus_strand():
 
 def test_build_feature_exon_index_chrom_normalisation():
     """chr-prefixed and bare chrom names both appear in bam_refs → normalised correctly."""
-    from TranslonScorer.matrix_rollup import build_feature_exon_index
+    from TranslonScorer.matrix.rollup import build_feature_exon_index
 
     cds = _simple_cds(chrom="1")  # bare chrom
     fivs, _ = build_feature_exon_index(cds, {"chr1", "1"})
@@ -84,7 +84,7 @@ def test_build_feature_exon_index_chrom_normalisation():
 
 
 def test_build_feature_exon_index_minus_strand():
-    from TranslonScorer.matrix_rollup import build_feature_exon_index
+    from TranslonScorer.matrix.rollup import build_feature_exon_index
 
     cds = _simple_cds(strand="-", starts=(200, 100), stops=(230, 130))
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -93,7 +93,7 @@ def test_build_feature_exon_index_minus_strand():
 
 def test_build_feature_exon_index_gapdh():
     """GAPDH-shaped 8-exon CDS builds without error."""
-    from TranslonScorer.matrix_rollup import build_feature_exon_index
+    from TranslonScorer.matrix.rollup import build_feature_exon_index
 
     fivs, _ = build_feature_exon_index(_gapdh_cds(), {"chr12", "12"})
     key = next(k for k in fivs if k[1] == "+")
@@ -107,7 +107,7 @@ def test_build_feature_exon_index_gapdh():
 
 def test_assign_tx_positions_cds_start():
     """5'-end at CDS start position → tx_pos=0."""
-    from TranslonScorer.matrix_rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -122,7 +122,7 @@ def test_assign_tx_positions_cds_start():
 
 def test_assign_tx_positions_within_exon():
     """5'-end 10 nt into first exon → tx_pos=10."""
-    from TranslonScorer.matrix_rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -134,7 +134,7 @@ def test_assign_tx_positions_within_exon():
 
 def test_assign_tx_positions_second_exon():
     """5'-end at start of second exon → tx_pos=30 (first exon length)."""
-    from TranslonScorer.matrix_rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -146,7 +146,7 @@ def test_assign_tx_positions_second_exon():
 
 def test_assign_tx_positions_intron_returns_empty():
     """5'-end in an intron (between exon 1 stop and exon 2 start) → no hit."""
-    from TranslonScorer.matrix_rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -158,7 +158,7 @@ def test_assign_tx_positions_intron_returns_empty():
 
 def test_assign_tx_positions_multiple_reads():
     """Multiple reads in one batch — all correctly assigned."""
-    from TranslonScorer.matrix_rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -176,7 +176,7 @@ def test_assign_tx_positions_multiple_reads():
 
 def test_assign_tx_positions_phase0():
     """phase0 = tx_pos % 3; in-frame positions (tx_pos 0,3,6,…) give phase0=0."""
-    from TranslonScorer.matrix_rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -200,7 +200,7 @@ def test_assign_tx_positions_phase0():
 
 def test_score_frame_rollup_perfect_periodicity():
     """Synthetic rollup with all reads at phase0=0 → elong_in_frame=1.0 when offset=0."""
-    from TranslonScorer.matrix_rollup import score_frame_rollup
+    from TranslonScorer.matrix.rollup import score_frame_rollup
 
     rollup = pl.DataFrame(
         {
@@ -220,7 +220,7 @@ def test_score_frame_rollup_perfect_periodicity():
 
 def test_score_frame_rollup_offset_shifts_frame():
     """Applying offset 1 shifts phase0=2 to frame=0 (2+1=3≡0 mod 3)."""
-    from TranslonScorer.matrix_rollup import score_frame_rollup
+    from TranslonScorer.matrix.rollup import score_frame_rollup
 
     rollup = pl.DataFrame(
         {
@@ -240,7 +240,7 @@ def test_score_frame_rollup_offset_shifts_frame():
 
 def test_score_frame_rollup_empty():
     """Empty rollup returns empty DataFrame without error."""
-    from TranslonScorer.matrix_rollup import score_frame_rollup
+    from TranslonScorer.matrix.rollup import score_frame_rollup
 
     empty = pl.DataFrame(
         schema={
@@ -315,7 +315,7 @@ def test_score_elongation_from_rollup_unit():
 
 def test_profile_from_index_aggregates():
     """profile_from_index sums across samples and lengths to give tx_pos profile."""
-    from TranslonScorer.matrix_rollup import profile_from_index
+    from TranslonScorer.matrix.rollup import profile_from_index
 
     cov = pl.DataFrame(
         {
@@ -335,7 +335,7 @@ def test_profile_from_index_aggregates():
 
 def test_profile_from_index_normalise():
     """normalise=True divides each feature's profile by its total count."""
-    from TranslonScorer.matrix_rollup import profile_from_index
+    from TranslonScorer.matrix.rollup import profile_from_index
 
     cov = pl.DataFrame(
         {
@@ -355,7 +355,7 @@ def test_profile_from_index_normalise():
 
 def test_profile_from_index_sample_filter():
     """sample_name kwarg restricts to one sample."""
-    from TranslonScorer.matrix_rollup import profile_from_index
+    from TranslonScorer.matrix.rollup import profile_from_index
 
     cov = pl.DataFrame(
         {
@@ -375,7 +375,7 @@ def test_profile_from_index_sample_filter():
 def test_build_coverage_index_gapdh():
     """build_coverage_index returns per-tx_pos counts for GAPDH; periodic triplet spacing."""
     from TranslonScorer.io.annotation import build_cds_blocks
-    from TranslonScorer.matrix_rollup import build_coverage_index, profile_from_index
+    from TranslonScorer.matrix.rollup import build_coverage_index, profile_from_index
 
     cds = build_cds_blocks(str(REPO_ROOT / "data" / "genes.gtf"))
     gapdh = cds.filter(pl.col("tran_id") == "ENST00000229239")
@@ -410,7 +410,7 @@ def test_build_coverage_index_gapdh():
 
 def test_prevalence_from_rollup_basic():
     """FR5: prevalence counts eligible samples with elong_in_frame ≥ threshold."""
-    from TranslonScorer.matrix_rollup import prevalence_from_rollup
+    from TranslonScorer.matrix.rollup import prevalence_from_rollup
 
     # 3 samples: 2 supported, 1 not
     scored = pl.DataFrame(
@@ -437,7 +437,7 @@ def test_prevalence_from_rollup_basic():
 
 def test_prevalence_from_rollup_min_reads_gate():
     """Samples below min_reads_per_sample are excluded from eligibility."""
-    from TranslonScorer.matrix_rollup import prevalence_from_rollup
+    from TranslonScorer.matrix.rollup import prevalence_from_rollup
 
     scored = pl.DataFrame(
         {
@@ -461,7 +461,7 @@ def test_prevalence_from_rollup_min_reads_gate():
 
 def test_prevalence_from_rollup_empty():
     """Empty scored rollup returns empty DataFrame without error."""
-    from TranslonScorer.matrix_rollup import prevalence_from_rollup
+    from TranslonScorer.matrix.rollup import prevalence_from_rollup
 
     empty = pl.DataFrame(
         schema={
@@ -484,7 +484,7 @@ def test_prevalence_from_rollup_empty():
 def test_prevalence_from_rollup_gapdh():
     """FR5: GAPDH should show high prevalence (most samples show periodic frame signal)."""
     from TranslonScorer.io.annotation import build_cds_blocks
-    from TranslonScorer.matrix_rollup import (
+    from TranslonScorer.matrix.rollup import (
         build_frame_rollup,
         calibrate_offsets,
         prevalence_from_rollup,
@@ -521,7 +521,7 @@ def test_prevalence_from_rollup_gapdh():
 def test_score_elongation_from_rollup_canonical_cds_supported():
     """FR3 positive-control gate: canonical GAPDH CDS must score SUPPORTED via FrameRollup."""
     from TranslonScorer.io.annotation import build_cds_blocks
-    from TranslonScorer.matrix_rollup import (
+    from TranslonScorer.matrix.rollup import (
         build_frame_rollup,
         calibrate_offsets,
         score_frame_rollup,
@@ -581,7 +581,7 @@ def test_build_frame_rollup_gapdh_produces_rollup():
     """build_frame_rollup on the local 30-sample matrix returns non-empty rollup
     for GAPDH with correct schema."""
     from TranslonScorer.io.annotation import build_cds_blocks
-    from TranslonScorer.matrix_rollup import build_frame_rollup
+    from TranslonScorer.matrix.rollup import build_frame_rollup
 
     cds = build_cds_blocks(str(REPO_ROOT / "data" / "genes.gtf"))
     gapdh = cds.filter(pl.col("tran_id") == "ENST00000229239")
@@ -602,7 +602,7 @@ def test_build_frame_rollup_gapdh_produces_rollup():
 def test_build_frame_rollup_gapdh_calibrated_periodicity():
     """Calibrated offsets recover frame-0 > 60% for dominant 29nt reads on GAPDH."""
     from TranslonScorer.io.annotation import build_cds_blocks
-    from TranslonScorer.matrix_rollup import (
+    from TranslonScorer.matrix.rollup import (
         build_frame_rollup,
         calibrate_offsets,
         score_frame_rollup,

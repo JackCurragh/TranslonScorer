@@ -376,7 +376,7 @@ def score_matrix_workflow(
     Returns the written store path(s) (semicolon-joined), as ``persist_scores``.
     """
     from TranslonScorer.coverage.bigwig import BigwigSetProvider
-    from TranslonScorer.coverage.matrix import MatrixProvider
+    from TranslonScorer.matrix.provider import MatrixProvider
 
     events = read_events(events_dir)
     provider = MatrixProvider(
@@ -434,7 +434,7 @@ def score_matrix_rollup_workflow(
     ----------
     cds_df : output of build_cds_blocks(), used to build the FrameRollup.
     """
-    from TranslonScorer.matrix_rollup import (
+    from TranslonScorer.matrix.rollup import (
         build_frame_rollup,
         calibrate_offsets,
         score_frame_rollup,

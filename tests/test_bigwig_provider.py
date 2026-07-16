@@ -30,6 +30,33 @@ def _write_bw(path: Path, chrom: str, chrom_len: int, intervals: list) -> None:
     bw.close()
 
 
+def test_region_end_past_chrom_length_is_clamped(tmp_path: Path):
+    """A padded event window near a contig end runs past the chromosome length.
+
+    pyBigWig raises on out-of-bounds intervals; the provider must clamp to the
+    chrom bounds instead of dropping all coverage for the whole region. Regression
+    for the transcriptome-FASTA case where every event near a short-contig end
+    (within _EVENT_FLANK_PAD) silently scored zero.
+    """
+    bw = tmp_path / "short.bw"
+    _write_bw(bw, "tran1", 540, [(500, 540, 7.0)])
+    provider = BigwigSetProvider([str(bw)])
+    # end=668 is past the 540bp contig — must not error or return empty.
+    cov = provider.coverage([Region("tran1", 400, 668)])
+    assert cov.height == 40
+    assert set(cov["count"].to_list()) == {7.0}
+    assert cov["pos"].max() == 539
+
+
+def test_region_chrom_absent_from_bigwig_is_skipped(tmp_path: Path):
+    """A region on a chrom the bigwig doesn't carry yields no rows, not an error."""
+    bw = tmp_path / "one.bw"
+    _write_bw(bw, "tran1", 540, [(100, 110, 3.0)])
+    provider = BigwigSetProvider([str(bw)])
+    cov = provider.coverage([Region("tranX", 0, 100)])
+    assert cov.is_empty()
+
+
 @pytest.fixture
 def stranded_bigwigs(tmp_path: Path):
     fwd = tmp_path / "fwd.bw"

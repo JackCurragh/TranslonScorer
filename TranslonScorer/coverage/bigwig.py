@@ -132,16 +132,30 @@ class BigwigSetProvider:
                     continue
                 try:
                     bw = pyBigWig.open(str(path))
+                    chrom_lens = bw.chroms()
                     for region in regions:
+                        # Clamp the (padded) window to the chromosome bounds: an
+                        # event within _EVENT_FLANK_PAD of a contig end pushes
+                        # region.end past the chrom length, and pyBigWig raises on
+                        # out-of-bounds intervals — which would otherwise drop all
+                        # coverage for the whole (merged) region. Skip chroms the
+                        # bigwig doesn't carry.
+                        clen = chrom_lens.get(region.chrom)
+                        if clen is None:
+                            continue
+                        rstart = max(0, region.start)
+                        rend = min(region.end, int(clen))
+                        if rstart >= rend:
+                            continue
                         try:
-                            vals = bw.values(region.chrom, region.start, region.end, numpy=False)
+                            vals = bw.values(region.chrom, rstart, rend, numpy=False)
                         except RuntimeError:
                             vals = None
                         if vals is None:
                             continue
                         for i, v in enumerate(vals):
                             if v and v > 0:
-                                row: dict = {"pos": region.start + i, "count": float(v)}
+                                row: dict = {"pos": rstart + i, "count": float(v)}
                                 if self._stranded:
                                     row["strand"] = strand_val
                                 if by_sample:

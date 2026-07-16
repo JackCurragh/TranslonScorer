@@ -9,16 +9,20 @@ context-aware*, NOT a hard length/biotype gate.  A start-stop ORF or a
 translated small RNA stays in; spike-concentrated pileups are down-ranked.  The
 score blends:
 
-  tier_confidence       fraction of the translation chain (init, elongation,
-                        term) that is SUPPORTED — the per-aspect confidence.
+  tier_confidence       fraction of the confidence aspects (``policy.chain_aspects``,
+                        default init/elongation/term) that is SUPPORTED.
   expression_percentile rank of total translon reads across the report —
                         size-factor-normalised expression stands in here when
                         reads are already normalised upstream.
 
-  consequentiality = tier_confidence * (0.5 + 0.5 * expression_percentile)
+  consequentiality = tier_confidence
+                     * (expression_floor + expression_weight * expression_percentile)
+                     * context_weight
 
-so a clean, well-supported chain ranks high regardless of depth, but among
-equally-supported translons the more highly translated ones rank higher.
+with the floor/weight/aspect set all carried on the policy, so a clean,
+well-supported chain ranks high regardless of depth, but among equally-supported
+translons the more highly translated ones rank higher.  Nothing above is fixed
+in code — retune it by passing a different policy.
 
 Public API
 ----------
@@ -31,9 +35,20 @@ import polars as pl
 
 from TranslonScorer.model import ConsequentialityPolicy
 
-# Chain-aspect call columns produced by report.compose_report.
-_CHAIN_CALL_COLS = ("init_call", "elongation_call", "term_call")
 _SUPPORTED = "SUPPORTED"
+
+
+def _confidence_call_cols(report: pl.DataFrame, policy: ConsequentialityPolicy) -> list[str]:
+    """Report columns that count towards tier_confidence.
+
+    ``policy.chain_aspects`` names the aspects; None means every aspect the
+    report carries (any ``{aspect}_call`` column).  Either way, membership comes
+    from the data / policy, never a list fixed in this module — a new scorer's
+    aspect participates as soon as it is asked for.
+    """
+    if policy.chain_aspects is None:
+        return [c for c in report.columns if c.endswith("_call")]
+    return [f"{a}_call" for a in policy.chain_aspects if f"{a}_call" in report.columns]
 
 
 def apply_policy(
@@ -58,7 +73,7 @@ def apply_policy(
         )
 
     # --- tier confidence: mean SUPPORTED across the chain aspects present ---
-    present_calls = [c for c in _CHAIN_CALL_COLS if c in report.columns]
+    present_calls = _confidence_call_cols(report, policy)
     if present_calls:
         supported_flags = [(pl.col(c) == _SUPPORTED).cast(pl.Float64) for c in present_calls]
         present_counts = [pl.col(c).is_not_null().cast(pl.Float64) for c in present_calls]
@@ -84,7 +99,10 @@ def apply_policy(
     df = df.with_columns(
         (
             pl.col("tier_confidence")
-            * (0.5 + 0.5 * pl.col("expression_percentile"))
+            * (
+                float(policy.expression_floor)
+                + float(policy.expression_weight) * pl.col("expression_percentile")
+            )
             * float(policy.context_weight)
         ).alias("consequentiality_score")
     )

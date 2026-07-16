@@ -7,7 +7,7 @@ single, dep-free place to import shared types.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Coverage / offset config
@@ -96,3 +96,14 @@ class ConsequentialityPolicy:
     min_tier_confidence: float = 0.0
     min_expression_percentile: float = 0.0
     context_weight: float = 1.0
+    # consequentiality = tier_confidence
+    #                    * (expression_floor + expression_weight * expression_pct)
+    #                    * context_weight
+    # floor=0.5/weight=0.5 means expression can at most double a translon's rank
+    # and never drives it to zero on its own.
+    expression_floor: float = 0.5
+    expression_weight: float = 0.5
+    # Which aspects count towards tier_confidence.  None = every aspect present
+    # in the report.  Defaults to the linear translation chain, so a translon is
+    # not penalised in confidence for an unsupported junction unless asked.
+    chain_aspects: Optional[Tuple[str, ...]] = ("init", "elongation", "term")

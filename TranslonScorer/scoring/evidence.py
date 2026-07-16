@@ -26,7 +26,7 @@ import polars as pl
 from TranslonScorer.model import ScoreThresholds
 
 # ---------------------------------------------------------------------------
-# Long-form record schema (mirrors ScoreRecord dataclass in model.py)
+# Long-form record schema (the single source of truth for a score row)
 # ---------------------------------------------------------------------------
 
 _RECORD_SCHEMA = {

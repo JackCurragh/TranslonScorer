@@ -55,28 +55,6 @@ class ScoreThresholds:
 
 
 # ---------------------------------------------------------------------------
-# Score record (typed mirror of _RECORD_SCHEMA in scoring/run.py)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ScoreRecord:
-    event_id: int
-    aspect: str
-    group: str
-    tier: str
-    n_reads: float
-    metric: Optional[float]
-    metric_name: Optional[str]
-    eligibility: str
-    call: Optional[str]
-    evidence: str
-    thresholds_version: str
-    map_track_mean: Optional[float] = None  # mean mappability-track value over the event's window
-    map_track_low: Optional[bool] = None  # map_track_mean < thr.mappability_low; None if no track
-
-
-# ---------------------------------------------------------------------------
 # Frame support config
 # ---------------------------------------------------------------------------
 

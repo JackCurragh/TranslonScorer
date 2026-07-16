@@ -32,35 +32,23 @@ HAS_BAM = GENOME_BAM.exists()
 # ---------------------------------------------------------------------------
 
 
-def test_bam_set_provider_protocols():
-    """BamSetProvider satisfies all four capability protocols."""
+def test_bam_set_provider_capabilities():
+    """BamSetProvider exposes every capability method."""
     from TranslonScorer.coverage.bam import BamSetProvider
-    from TranslonScorer.coverage.base import (
-        CoverageProvider,
-        SupportsJunctions,
-        SupportsMappability,
-        SupportsSites,
-    )
 
     provider = BamSetProvider([])
-    assert isinstance(provider, CoverageProvider)
-    assert isinstance(provider, SupportsSites)
-    assert isinstance(provider, SupportsJunctions)
-    assert isinstance(provider, SupportsMappability)
+    for method in ("coverage", "size_factors", "junction_support", "mappability_ledger"):
+        assert callable(getattr(provider, method, None)), method
 
 
-def test_bigwig_set_provider_protocols():
-    """BigwigSetProvider satisfies only CoverageProvider (no junctions/sites)."""
-    from TranslonScorer.coverage.base import (
-        CoverageProvider,
-    )
+def test_bigwig_set_provider_capabilities():
+    """BigwigSetProvider exposes coverage; junction/mappability raise (no CIGAR)."""
     from TranslonScorer.coverage.bigwig import BigwigSetProvider
 
     provider = BigwigSetProvider([])
-    assert isinstance(provider, CoverageProvider)
-    # Bigwig does NOT satisfy SupportsJunctions or SupportsMappability
-    # (it has those methods but they raise NotImplementedError — the Protocol
-    # check passes structurally; we verify the runtime error instead)
+    assert callable(getattr(provider, "coverage", None))
+    # Bigwig has junction_support/mappability_ledger methods but they raise
+    # NotImplementedError (no CIGAR) — verify the runtime boundary.
     with pytest.raises(NotImplementedError):
         provider.junction_support([])
     with pytest.raises(NotImplementedError):

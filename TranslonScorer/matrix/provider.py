@@ -8,12 +8,12 @@ The matrix stores pre-computed A-site positions at a configurable offset;
 P-site coverage (P = A − 3, so the query is shifted by +3 to align the
 stored A-site positions).
 
-Implements
-----------
-CoverageProvider    — coverage(), size_factors()
-SupportsSites       — coverage(…, site="P"|"A", …)
-SupportsJunctions   — junction_support()
-SupportsMappability — mappability_ledger() (stub; returns empty ledger)
+Capabilities (duck-typed; see coverage/base.py)
+-----------------------------------------------
+coverage(…, site="P"|"A", …)  — per-position P/A-site coverage
+size_factors()                — per-sample depth factors
+junction_support()            — spanning-read counts per junction
+mappability_ledger()          — per-event unique/multimapper accounting (stub)
 """
 
 from __future__ import annotations

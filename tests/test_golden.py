@@ -550,18 +550,15 @@ def test_pipeline_shim_clustering_importable():
 # ---------------------------------------------------------------------------
 
 
-def test_coverage_base_protocols_importable():
-    """coverage/base.py: all four protocols importable and runtime-checkable."""
+def test_coverage_base_schema_and_duck_typing():
+    """coverage/base.py exports the ledger schema; providers are duck-typed."""
     import polars as pl
 
-    from TranslonScorer.coverage.base import (
-        MAPPABILITY_LEDGER_SCHEMA,
-        CoverageProvider,
-    )
+    from TranslonScorer.coverage.base import MAPPABILITY_LEDGER_SCHEMA
 
     assert "event_id" in MAPPABILITY_LEDGER_SCHEMA
 
-    # runtime_checkable: isinstance() works
+    # A coverage source is anything exposing coverage()/size_factors().
     class FakeProvider:
         def coverage(self, regions, *, by_sample=False):
             return pl.DataFrame()
@@ -570,7 +567,8 @@ def test_coverage_base_protocols_importable():
             return {}
 
     fp = FakeProvider()
-    assert isinstance(fp, CoverageProvider)
+    assert callable(getattr(fp, "coverage", None))
+    assert callable(getattr(fp, "size_factors", None))
 
 
 def test_coverage_profile_apply_offsets_psite():
@@ -665,15 +663,13 @@ import pytest  # noqa: E402 — needed for approx above
 def test_gapdh_golden_via_provider():
     """GAPDH golden reproduced through MatrixProvider.coverage() interface.
 
-    Uses DictCoverageProvider (in-memory, no real matrix files) to verify
+    Uses the in-memory _DictCoverageProvider (no real matrix files) to verify
     that the provider path produces bit-identical results to the direct
     dict-based scoring path.  This proves the provider interface does not
     alter the scoring arithmetic.
     """
-    from TranslonScorer.coverage.base import CoverageProvider
-
     provider = _DictCoverageProvider(_gapdh_coverage())
-    assert isinstance(provider, CoverageProvider)
+    assert callable(getattr(provider, "coverage", None))
 
     # Pull coverage over the GAPDH locus via the provider interface
     from TranslonScorer.model import Region
@@ -701,24 +697,18 @@ def test_gapdh_golden_via_provider():
     _assert_identical(direct, via_provider, "gapdh_via_provider")
 
 
-def test_provider_protocol_compliance():
-    """DictCoverageProvider and MatrixProvider satisfy the expected protocols."""
-    from TranslonScorer.coverage.base import (
-        CoverageProvider,
-        SupportsJunctions,
-        SupportsMappability,
-        SupportsSites,
-    )
+def test_provider_capabilities():
+    """MatrixProvider exposes every capability method; the dict double only coverage."""
     from TranslonScorer.matrix.provider import MatrixProvider
 
     provider = _DictCoverageProvider({})
-    assert isinstance(provider, CoverageProvider)
-    # MatrixProvider should satisfy all four protocols
+    assert callable(getattr(provider, "coverage", None))
+    assert callable(getattr(provider, "size_factors", None))
+    assert not hasattr(provider, "junction_support")
+
     mp = MatrixProvider([])
-    assert isinstance(mp, CoverageProvider)
-    assert isinstance(mp, SupportsSites)
-    assert isinstance(mp, SupportsJunctions)
-    assert isinstance(mp, SupportsMappability)
+    for method in ("coverage", "size_factors", "junction_support", "mappability_ledger"):
+        assert callable(getattr(mp, method, None)), method
 
 
 # ---------------------------------------------------------------------------
@@ -726,30 +716,21 @@ def test_provider_protocol_compliance():
 # ---------------------------------------------------------------------------
 
 
-def test_bam_provider_importable_and_protocols():
-    """BamSetProvider satisfies all four capability protocols."""
+def test_bam_provider_importable_and_capabilities():
+    """BamSetProvider exposes every capability method."""
     from TranslonScorer.coverage.bam import BamSetProvider
-    from TranslonScorer.coverage.base import (
-        CoverageProvider,
-        SupportsJunctions,
-        SupportsMappability,
-        SupportsSites,
-    )
 
     provider = BamSetProvider([])
-    assert isinstance(provider, CoverageProvider)
-    assert isinstance(provider, SupportsSites)
-    assert isinstance(provider, SupportsJunctions)
-    assert isinstance(provider, SupportsMappability)
+    for method in ("coverage", "size_factors", "junction_support", "mappability_ledger"):
+        assert callable(getattr(provider, method, None)), method
 
 
-def test_bigwig_provider_importable_and_protocol():
-    """BigwigSetProvider satisfies CoverageProvider; junction/mappability raise."""
-    from TranslonScorer.coverage.base import CoverageProvider
+def test_bigwig_provider_importable_and_capability():
+    """BigwigSetProvider exposes coverage; junction/mappability raise (no CIGAR)."""
     from TranslonScorer.coverage.bigwig import BigwigSetProvider
 
     provider = BigwigSetProvider([])
-    assert isinstance(provider, CoverageProvider)
+    assert callable(getattr(provider, "coverage", None))
     with pytest.raises(NotImplementedError):
         provider.junction_support([])
     with pytest.raises(NotImplementedError):

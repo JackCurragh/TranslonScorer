@@ -156,18 +156,15 @@ def _junction_support_for_chrom(provider, ev_chrom: pl.DataFrame) -> Dict[int, d
     are fully implemented — this was a pure wiring gap, not a missing
     capability.
 
-    A runtime-checkable Protocol only checks that a `junction_support` METHOD
-    exists, not that it works — BigwigSetProvider defines one that always
-    raises NotImplementedError (bigwigs have no CIGAR), so `isinstance(...,
-    SupportsJunctions)` is True for it too. NotImplementedError is therefore
-    caught explicitly below rather than relied on the isinstance check alone.
+    Capability is duck-typed: a provider is asked for junction support only if
+    it exposes a `junction_support` method. That alone isn't sufficient —
+    BigwigSetProvider defines one that always raises NotImplementedError (bigwigs
+    have no CIGAR) — so NotImplementedError is also caught explicitly below.
 
     Returns {junction_event_id: {"span_conf": n, "span_short": n, "unspliced": n}}.
     """
-    from TranslonScorer.coverage.base import SupportsJunctions
-
     junc_ev = ev_chrom.filter(pl.col("type") == "junction")
-    if junc_ev.is_empty() or not isinstance(provider, SupportsJunctions):
+    if junc_ev.is_empty() or not hasattr(provider, "junction_support"):
         return {}
 
     junctions = list(

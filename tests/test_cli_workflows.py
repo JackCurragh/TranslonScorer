@@ -319,8 +319,9 @@ def test_junction_events_scored_via_provider_junction_support():
 
 
 def test_junction_events_degrade_gracefully_without_junction_support():
-    """A provider that doesn't implement SupportsJunctions (e.g. bigwig) must
-    not crash — junction events just fall out INSUFFICIENT, as before."""
+    """A provider that doesn't expose junction_support() (a coverage-only
+    source) must not crash — the hasattr gate skips it and junction events
+    just fall out INSUFFICIENT, as before."""
     from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
     from TranslonScorer.workflows import _score_events_over_provider
 
@@ -358,9 +359,9 @@ def test_junction_events_degrade_gracefully_without_junction_support():
 
 def test_junction_events_dont_crash_provider_that_raises_not_implemented():
     """A provider (e.g. BigwigSetProvider) that DEFINES junction_support() but
-    always raises NotImplementedError must not crash scoring — a
-    runtime_checkable Protocol only checks the method exists, not that it
-    works, so isinstance(provider, SupportsJunctions) alone isn't enough."""
+    always raises NotImplementedError must not crash scoring — the hasattr
+    gate only checks the method exists, not that it works, so
+    NotImplementedError is caught explicitly too."""
     from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
     from TranslonScorer.workflows import _score_events_over_provider
 

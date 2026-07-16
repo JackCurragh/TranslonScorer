@@ -22,6 +22,7 @@ from typing import Dict, List, Optional
 import numpy as _np
 import polars as pl
 
+from TranslonScorer.events import SpliceContext
 from TranslonScorer.model import ScoreThresholds
 from TranslonScorer.scoring.aspects import (
     score_elongation_event,
@@ -225,24 +226,41 @@ def score_events(
     group: str = "aggregate",
     tier: str = "aggregate",
     thr: ScoreThresholds = DEFAULT_THRESHOLDS,
+    splice_context: Optional[SpliceContext] = None,
+    map_track: Optional[Dict[int, dict]] = None,
 ) -> pl.DataFrame:
     """Reference scorer: score every event in `events` → granular long-form table.
 
-    events columns: event_id, type, start, end, strand, phase.
+    events columns: event_id, type, start, end, strand, phase[, chrom].
     overlaps: {elongation event_id → [(o_start, o_end, competitor_phase, competitor_id)]}.
     junction_support: {junction event_id → spanning count}.
+    splice_context: optional {(chrom, strand) → [(donor, acceptor), ...]} (see
+        events.build_splice_context). When given (and events carries a
+        `chrom` column), init/term leader/UTR flanks are projected across
+        nearby introns instead of read as raw flanking genomic bases.
+    map_track: optional {event_id → {"map_track_mean": float, "map_track_low":
+        bool}} (see workflows._map_track_for_chrom) — a region-context
+        mappability annotation, merged into every event type uniformly. Never
+        affects eligibility/call.
 
     Scalar reference implementation; score_events_vectorised must reproduce this.
     """
     overlaps = overlaps or {}
     junction_support = junction_support or {}
+    map_track = map_track or {}
     rows: List[dict] = []
     for r in events.iter_rows(named=True):
         t, eid = r["type"], r["event_id"]
         if t == "init":
-            raw = score_initiation_event(r["start"], r["strand"], coverage, thr=thr)
+            raw = score_initiation_event(
+                r["start"], r["strand"], coverage, thr=thr,
+                chrom=r.get("chrom"), splice_context=splice_context,
+            )
         elif t == "term":
-            raw = score_termination_event(r["start"], r["strand"], coverage, thr=thr)
+            raw = score_termination_event(
+                r["start"], r["strand"], coverage, thr=thr,
+                chrom=r.get("chrom"), splice_context=splice_context,
+            )
         elif t == "elongation":
             raw = score_elongation_event(
                 r["start"],
@@ -257,6 +275,8 @@ def score_events(
             raw = score_junction_event(junction_support.get(eid, {}), thr=thr)
         else:
             continue
+        if eid in map_track:
+            raw = {**raw, **map_track[eid]}
         rows.append(event_record(eid, t, group, tier, raw, thr.version))
     return (
         pl.from_dicts(rows, schema=_RECORD_SCHEMA) if rows else pl.DataFrame(schema=_RECORD_SCHEMA)
@@ -272,15 +292,21 @@ def score_events_vectorised(
     group: str = "aggregate",
     tier: str = "aggregate",
     thr: ScoreThresholds = DEFAULT_THRESHOLDS,
+    splice_context: Optional[SpliceContext] = None,
+    map_track: Optional[Dict[int, dict]] = None,
 ) -> pl.DataFrame:
     """Vectorised scorer: elongation via prefix sums, init/term scalar.
 
     cov_df columns: pos (Int64), count (Float64).
     overlaps_df columns: event_id, other_event_id, overlap_start, overlap_end, comp_phase.
+    splice_context: see score_events — projects init/term leader/UTR flanks
+        across nearby introns when given (and events carries `chrom`).
+    map_track: see score_events — region-context mappability annotation.
 
     Reproduces score_events exactly; only elongation summation is vectorised.
     """
     junction_support = junction_support or {}
+    map_track = map_track or {}
     coverage = dict(zip(cov_df["pos"].to_list(), cov_df["count"].to_list()))
     cov_pos = cov_df["pos"].to_numpy()
     cov_cnt = cov_df["count"].to_numpy()
@@ -296,13 +322,21 @@ def score_events_vectorised(
             if raw is None:
                 continue
         elif t == "init":
-            raw = score_initiation_event(r["start"], r["strand"], coverage, thr=thr)
+            raw = score_initiation_event(
+                r["start"], r["strand"], coverage, thr=thr,
+                chrom=r.get("chrom"), splice_context=splice_context,
+            )
         elif t == "term":
-            raw = score_termination_event(r["start"], r["strand"], coverage, thr=thr)
+            raw = score_termination_event(
+                r["start"], r["strand"], coverage, thr=thr,
+                chrom=r.get("chrom"), splice_context=splice_context,
+            )
         elif t == "junction":
             raw = score_junction_event(junction_support.get(eid, {}), thr=thr)
         else:
             continue
+        if eid in map_track:
+            raw = {**raw, **map_track[eid]}
         rows.append(event_record(eid, t, group, tier, raw, thr.version))
     return (
         pl.from_dicts(rows, schema=_RECORD_SCHEMA) if rows else pl.DataFrame(schema=_RECORD_SCHEMA)

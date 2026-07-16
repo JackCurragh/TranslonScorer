@@ -28,7 +28,7 @@ from typing import Dict, List, Optional, Sequence, Union
 import polars as pl
 
 from TranslonScorer.consequential import apply_policy
-from TranslonScorer.events import run_extract
+from TranslonScorer.events import SpliceContext, build_splice_context, run_extract
 from TranslonScorer.io.store import (
     persist_scores,
     read_events,
@@ -146,6 +146,109 @@ def _merge_event_regions(
     return merged
 
 
+def _junction_support_for_chrom(provider, ev_chrom: pl.DataFrame) -> Dict[int, dict]:
+    """Spanning-read support for every junction event on one chromosome.
+
+    Was previously never called: score_matrix_workflow/score_bams_workflow
+    always scored junction events against an empty support dict (every
+    junction event fell out as INSUFFICIENT/n_reads=0), even though both
+    MatrixProvider.junction_support() and BamSetProvider.junction_support()
+    are fully implemented — this was a pure wiring gap, not a missing
+    capability.
+
+    A runtime-checkable Protocol only checks that a `junction_support` METHOD
+    exists, not that it works — BigwigSetProvider defines one that always
+    raises NotImplementedError (bigwigs have no CIGAR), so `isinstance(...,
+    SupportsJunctions)` is True for it too. NotImplementedError is therefore
+    caught explicitly below rather than relied on the isinstance check alone.
+
+    Returns {junction_event_id: {"span_conf": n, "span_short": n, "unspliced": n}}.
+    """
+    from TranslonScorer.coverage.base import SupportsJunctions
+
+    junc_ev = ev_chrom.filter(pl.col("type") == "junction")
+    if junc_ev.is_empty() or not isinstance(provider, SupportsJunctions):
+        return {}
+
+    junctions = list(
+        zip(
+            junc_ev["chrom"].to_list(),
+            junc_ev["start"].to_list(),
+            junc_ev["end"].to_list(),
+            junc_ev["strand"].to_list(),
+            junc_ev["event_id"].to_list(),
+        )
+    )
+    try:
+        supp_df = provider.junction_support(junctions)
+    except NotImplementedError:
+        return {}
+    out: Dict[int, dict] = {}
+    if supp_df is None or supp_df.is_empty():
+        return out
+    for row in supp_df.iter_rows(named=True):
+        d = out.setdefault(int(row["junction_id"]), {})
+        d[row["kind"]] = d.get(row["kind"], 0.0) + float(row["count"])
+    return out
+
+
+def _map_track_for_chrom(
+    map_provider, ev_chrom: pl.DataFrame, thr: ScoreThresholds
+) -> Dict[int, dict]:
+    """Region-context mappability annotation for every event on one chromosome.
+
+    Not the BAM-NH-tag SupportsMappability/mappability_ledger concept
+    (coverage/base.py) — that's per-read unique-vs-multimapper accounting.
+    This is a precomputed mappability TRACK (e.g. Umap/GEM-mappability
+    bigwig, values ~0..1) read via the same padded per-event windows as
+    coverage, purely diagnostic: never affects eligibility/call (same
+    "review flag, not a gate" precedent as flank_peakiness/stability).
+
+    map_provider is a BigwigSetProvider (or anything with a matching
+    .coverage() method) reading the mappability bigwig; None disables this
+    entirely (the common case).
+
+    NB: positions absent from the mappability bigwig collapse to the same
+    "0 count" as a genuine low-mappability position in BigwigSetProvider's
+    output (see coverage/bigwig.py) — a data gap (wrong chrom name,
+    off-contig) reads identically to "confirmed unmappable". Acceptable for
+    a diagnostic-only annotation; not resolved here.
+
+    Returns {event_id: {"map_track_mean": float, "map_track_low": bool}}.
+    """
+    if map_provider is None or ev_chrom.is_empty():
+        return {}
+
+    regions = _merge_event_regions(
+        str(ev_chrom["chrom"][0]),
+        ev_chrom["start"].to_list(),
+        ev_chrom["end"].to_list(),
+    )
+    map_cov = map_provider.coverage(regions)
+    if map_cov.is_empty():
+        vals: Dict[int, float] = {}
+    else:
+        pos_val = dict(zip(map_cov["pos"].to_list(), map_cov["count"].to_list()))
+        vals = pos_val
+
+    out: Dict[int, dict] = {}
+    for eid, start, end in zip(
+        ev_chrom["event_id"].to_list(), ev_chrom["start"].to_list(), ev_chrom["end"].to_list()
+    ):
+        # Each event's OWN padded window (not the merged query regions, which
+        # can span several nearby events) — same pad as the coverage fetch,
+        # so init/term (single-nt events) get the flank actually read by the
+        # step scorers, not just the start/stop codon's own position.
+        span = range(max(0, start - _EVENT_FLANK_PAD), end + _EVENT_FLANK_PAD)
+        levels = [vals.get(p, 0.0) for p in span]
+        mean_val = sum(levels) / len(levels) if levels else 0.0
+        out[int(eid)] = {
+            "map_track_mean": mean_val,
+            "map_track_low": mean_val < thr.mappability_low,
+        }
+    return out
+
+
 def _score_events_over_provider(
     events: pl.DataFrame,
     provider,
@@ -154,12 +257,24 @@ def _score_events_over_provider(
     group: str,
     tier: str,
     thr: ScoreThresholds,
+    splice_context: Optional[SpliceContext] = None,
+    map_provider=None,
 ) -> pl.DataFrame:
     """Score every event by querying ``provider`` per chromosome.
 
     Coverage is fetched as padded per-event windows (merged), not one
     chromosome-spanning region: identical scores, but only reads near events are
     pulled — critical on a deep matrix where a whole-chromosome span is enormous.
+
+    ``splice_context``, if given, is forwarded to score_events_vectorised so
+    init/term leader/UTR flanks near a splice site are projected across the
+    intron instead of read as raw flanking genomic bases.
+
+    ``map_provider``, if given, is a coverage-shaped provider (typically
+    BigwigSetProvider reading a mappability track) queried once per
+    chromosome via _map_track_for_chrom for a diagnostic map_track_mean/
+    map_track_low annotation — see that function's docstring. Never affects
+    eligibility/call.
     """
     if events.is_empty():
         from TranslonScorer.scoring.evidence import _RECORD_SCHEMA
@@ -177,6 +292,8 @@ def _score_events_over_provider(
         cov_df = provider.coverage(regions, site=site)
         if cov_df.is_empty():
             continue
+        junction_support = _junction_support_for_chrom(provider, ev_chrom)
+        map_track = _map_track_for_chrom(map_provider, ev_chrom, thr)
         # Score each strand against its OWN coverage. Ribo-seq is stranded: a
         # + event must see only + reads. Collapsing strands (and building a
         # pos->count dict) would let +/- coverage at the same genomic position
@@ -191,7 +308,16 @@ def _score_events_over_provider(
             ).select(["pos", "count"])
             # collapse any duplicate positions deterministically
             cov_s = cov_s.group_by("pos").agg(pl.col("count").sum()).sort("pos")
-            scored = score_events_vectorised(ev_s, cov_s, group=group, tier=tier, thr=thr)
+            scored = score_events_vectorised(
+                ev_s,
+                cov_s,
+                group=group,
+                tier=tier,
+                thr=thr,
+                splice_context=splice_context,
+                junction_support=junction_support,
+                map_track=map_track,
+            )
             if not scored.is_empty():
                 parts.append(scored)
 
@@ -214,6 +340,7 @@ def score_matrix_workflow(
     *,
     data_version: str,
     ref_offset: int = 15,
+    psite_index_dir: Optional[str] = None,
     sample_names: Optional[List[str]] = None,
     n_workers: Optional[int] = None,
     site: str = "A",
@@ -221,22 +348,55 @@ def score_matrix_workflow(
     tier: str = "aggregate",
     annotation_version: str = "",
     thr: ScoreThresholds = DEFAULT_THRESHOLDS,
+    context_gtf: Optional[str] = None,
+    mappability_bigwig: Optional[str] = None,
 ) -> str:
     """Score events against the sparse annotation-scale matrix; persist results.
 
+    ``psite_index_dir``, if given (a directory produced by ``build-psite-index``),
+    routes coverage through per-(sample, length) offset-corrected genomic
+    positions instead of the flat ``ref_offset`` — fixes the elong_in_frame
+    ~0.33 accuracy floor without leaving this pipeline, unlike the separate
+    FrameRollup/``score_matrix_rollup_workflow`` path (elongation-only). This
+    is now the recommended way to get accurate matrix scoring: it also gets
+    init/term/junction/mappability, which FrameRollup never will. See
+    MatrixProvider and psite_index.query_genomic_coverage. ``ref_offset`` is
+    ignored when this is set.
+
+    ``context_gtf``, if given, provides the host-transcript exon models used to
+    project init/term leader/UTR flanks across nearby introns (see
+    _score_events_over_provider). Same GTF you'd pass to extract-events'
+    ``context_gtf`` for context junction events.
+
+    ``mappability_bigwig``, if given, is a precomputed mappability track
+    (Umap/GEM-mappability style) used to annotate every scored event with a
+    diagnostic map_track_mean/map_track_low — see _map_track_for_chrom. Never
+    affects eligibility/call.
+
     Returns the written store path(s) (semicolon-joined), as ``persist_scores``.
     """
+    from TranslonScorer.coverage.bigwig import BigwigSetProvider
     from TranslonScorer.coverage.matrix import MatrixProvider
 
     events = read_events(events_dir)
     provider = MatrixProvider(
         partition_dirs,
         ref_offset=ref_offset,
+        psite_index_dir=psite_index_dir,
         sample_names=sample_names,
         n_workers=n_workers,
     )
+    splice_context = build_splice_context(context_gtf) if context_gtf else None
+    map_provider = BigwigSetProvider([mappability_bigwig]) if mappability_bigwig else None
     scored = _score_events_over_provider(
-        events, provider, site=site, group=group, tier=tier, thr=thr
+        events,
+        provider,
+        site=site,
+        group=group,
+        tier=tier,
+        thr=thr,
+        splice_context=splice_context,
+        map_provider=map_provider,
     )
     return persist_scores(
         scored,
@@ -372,17 +532,45 @@ def score_bams_workflow(
     transcriptome: bool = False,
     exon_df: Optional[pl.DataFrame] = None,
     thr: ScoreThresholds = DEFAULT_THRESHOLDS,
+    context_gtf: Optional[str] = None,
+    mappability_bigwig: Optional[str] = None,
 ) -> str:
     """Score events against a set of genome- (or transcriptome-) aligned BAMs.
 
     Offsets are calibrated once per BAM/read-length before any locus query
     (handled inside BamSetProvider). When ``transcriptome=True`` reads are
-    projected to genome coordinates via ``exon_df`` (required). Returns the
-    written store path(s).
+    projected to genome coordinates via ``exon_df`` (required). ``context_gtf``
+    projects init/term leader/UTR flanks across nearby introns — see
+    score_matrix_workflow. Returns the written store path(s).
+
+    ``offsets.method == "metagene"`` needs genomic start-codon coordinates to
+    calibrate against; these are derived here from the extracted ``init``
+    events (free — events_dir is already read for scoring) and passed to
+    BamSetProvider. Previously score_bams_workflow never supplied them, so
+    metagene calibration silently fell back to the fixed global offset every
+    time. NB: the metagene histogram is built by fetching directly from the
+    BAM by genomic coordinate — it does not go through the transcriptome→
+    genome projection, so metagene calibration is only correct for
+    ``transcriptome=False`` (genome-aligned) BAMs; with ``transcriptome=True``
+    it will still find no reads and fall back to global, same as before.
+
+    ``mappability_bigwig`` — see score_matrix_workflow.
     """
     from TranslonScorer.coverage.bam import BamSetProvider
+    from TranslonScorer.coverage.bigwig import BigwigSetProvider
 
     events = read_events(events_dir)
+    start_codons = None
+    if offsets.method == "metagene" and not transcriptome:
+        init_ev = events.filter(pl.col("type") == "init")
+        if not init_ev.is_empty():
+            start_codons = list(
+                zip(
+                    init_ev["chrom"].to_list(),
+                    init_ev["start"].to_list(),
+                    init_ev["strand"].to_list(),
+                )
+            )
     provider = BamSetProvider(
         list(bams),
         offsets=offsets,
@@ -390,9 +578,84 @@ def score_bams_workflow(
         sample_names=sample_names,
         transcriptome=transcriptome,
         exon_df=exon_df,
+        start_codons=start_codons,
     )
+    splice_context = build_splice_context(context_gtf) if context_gtf else None
+    map_provider = BigwigSetProvider([mappability_bigwig]) if mappability_bigwig else None
     scored = _score_events_over_provider(
-        events, provider, site=site, group=group, tier=tier, thr=thr
+        events,
+        provider,
+        site=site,
+        group=group,
+        tier=tier,
+        thr=thr,
+        splice_context=splice_context,
+        map_provider=map_provider,
+    )
+    return persist_scores(
+        scored,
+        store_dir,
+        data_version=data_version,
+        annotation_version=annotation_version,
+    )
+
+
+# ---------------------------------------------------------------------------
+# score-bigwig
+# ---------------------------------------------------------------------------
+
+
+def score_bigwigs_workflow(
+    events_dir: str,
+    bigwigs: Sequence[Union[str, Path, dict]],
+    store_dir: str,
+    *,
+    data_version: str,
+    sample_names: Optional[List[str]] = None,
+    stranded: bool = False,
+    site: str = "A",
+    group: str = "aggregate",
+    tier: str = "aggregate",
+    annotation_version: str = "",
+    thr: ScoreThresholds = DEFAULT_THRESHOLDS,
+    context_gtf: Optional[str] = None,
+    mappability_bigwig: Optional[str] = None,
+) -> str:
+    """Score events against 1-N genomic bigwig coverage tracks.
+
+    Bigwig is a LOSSY coverage source (see coverage/bigwig.py): no P/A-site
+    distinction (``site`` is accepted but ignored), no junction spanning, no
+    multimapper resolution — init/term/elongation only, junction events fall
+    out INSUFFICIENT (BigwigSetProvider has no CIGAR to count spanning reads).
+
+    ``bigwigs``: each entry is a path (unstranded) or, when ``stranded=True``,
+    a ``{'forward': path, 'reverse': path}`` dict — REQUIRED for correct
+    scoring, since Ribo-seq is stranded and an unstranded bigwig silently
+    mixes +/- signal at every position. ``context_gtf`` projects init/term
+    leader/UTR flanks across nearby introns — see score_matrix_workflow.
+    ``mappability_bigwig`` — see score_matrix_workflow; independent of
+    ``bigwigs`` (a separate, always-unstranded track). Returns the written
+    store path(s).
+    """
+    from TranslonScorer.coverage.bigwig import BigwigSetProvider
+
+    events = read_events(events_dir)
+    provider = BigwigSetProvider(
+        list(bigwigs),
+        sample_names=sample_names,
+        stranded=stranded,
+    )
+    splice_context = build_splice_context(context_gtf) if context_gtf else None
+    map_provider = BigwigSetProvider([mappability_bigwig]) if mappability_bigwig else None
+    scored = _score_events_over_provider(
+        events,
+        provider,
+        site=site,
+        group=group,
+        tier=tier,
+        thr=thr,
+        splice_context=splice_context,
+        map_provider=map_provider,
     )
     return persist_scores(
         scored,
@@ -467,6 +730,10 @@ def pipeline_workflow(
     policy: Optional[ConsequentialityPolicy] = None,
     cds_df: Optional[pl.DataFrame] = None,
     n_workers: Optional[int] = None,
+    context_gtf: Optional[str] = None,
+    context_flank: int = 200,
+    mappability_bigwig: Optional[str] = None,
+    psite_index_dir: Optional[str] = None,
     # feature source for extract-events (exactly one; forwarded verbatim)
     **source_kwargs,
 ) -> Dict[str, str]:
@@ -480,7 +747,20 @@ def pipeline_workflow(
 
     cds_df: if provided (from build_cds_blocks or build_cds_blocks_from_bigbed),
     matrix mode uses the FrameRollup path with per-(sample,length) calibrated
-    P-site offsets.  Without it the legacy flat-offset path is used.
+    P-site offsets — but elongation only (no init/term/junction/mappability).
+    Prefer ``psite_index_dir`` instead: same offset accuracy, full event-type
+    coverage, one pipeline. Without either, the legacy flat-offset path is used.
+
+    psite_index_dir: directory from ``build-psite-index``; routes matrix
+    scoring through per-(sample, length) offset-corrected genomic coverage
+    (see score_matrix_workflow, MatrixProvider). Ignored when ``cds_df`` is
+    also given (FrameRollup takes precedence, unchanged behaviour).
+
+    context_gtf: host-transcript exon models, forwarded to BOTH extract-events
+    (adds context junction events near ORF boundaries) and scoring (projects
+    init/term leader/UTR flanks across nearby introns). Previously this was
+    only reachable via the standalone extract-events command — pipeline had
+    no way to supply it at all.
     """
     if bool(partition_dirs) == bool(bams):
         raise ValueError("provide exactly one of partition_dirs (matrix) or bams")
@@ -494,6 +774,8 @@ def pipeline_workflow(
         events_dir,
         annotation_version=annotation_version,
         chroms=chroms,
+        context_gtf=context_gtf,
+        context_flank=context_flank,
         **source_kwargs,
     )
     if partition_dirs:
@@ -517,6 +799,9 @@ def pipeline_workflow(
                 sample_names=sample_names,
                 site=site,
                 annotation_version=annotation_version,
+                context_gtf=context_gtf,
+                mappability_bigwig=mappability_bigwig,
+                psite_index_dir=psite_index_dir,
             )
     else:
         score_bams_workflow(
@@ -530,6 +815,8 @@ def pipeline_workflow(
             site=site,
             annotation_version=annotation_version,
             transcriptome=transcriptome,
+            mappability_bigwig=mappability_bigwig,
+            context_gtf=context_gtf,
             exon_df=exon_df,
         )
     report_workflow(

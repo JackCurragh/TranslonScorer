@@ -20,6 +20,7 @@ import math
 import statistics
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from TranslonScorer.events import SpliceContext
 from TranslonScorer.model import ScoreThresholds
 from TranslonScorer.scoring.evidence import _decide_step, _elong_evidence
 
@@ -43,10 +44,94 @@ def abs_frame(phase: int, strand: int) -> int:
 
 def _flank_positions(pos: int, strand: int, length: int, *, body_side: bool) -> range:
     """Genomic positions for a flank of `length` nt on the body or outer side of
-    `pos`, in transcript orientation. body_side=True → into the ORF."""
+    `pos`, in transcript orientation. body_side=True → into the ORF.
+
+    Flat genomic window — wrong whenever an intron falls inside the flank
+    (the leader/UTR side is spliced). Used directly only when no splice
+    context is available; see _project_flank for the splice-aware version.
+    """
     if strand > 0:
         return range(pos, pos + length) if body_side else range(pos - length, pos)
     return range(pos - length + 1, pos + 1) if body_side else range(pos + 1, pos + length + 1)
+
+
+def _project_flank(
+    pos: int,
+    strand: int,
+    length: int,
+    *,
+    body_side: bool,
+    chrom: Optional[str] = None,
+    splice_context: Optional[SpliceContext] = None,
+) -> Tuple[List[int], bool]:
+    """`length` positions spanning a transcript-distance flank on the body or
+    outer side of `pos`, jumping across any intron the flank would otherwise
+    read straight through.
+
+    Without this, a leader/UTR flank near a splice site reads raw genomic
+    bases across the intron — mostly zero-coverage sequence a spliced read
+    never touches — which spuriously inflates init_rise/term_drop (the
+    leader/UTR looks emptier than it is). This walks in transcript order
+    instead, using `splice_context[(chrom, strand)]` (the same genome-wide,
+    strand-scoped intron list — sorted (donor, acceptor) genomic intervals —
+    that `events._context_junction_events` already uses; it is not scoped to
+    a single gene, so a nearby unrelated intron on the same strand can in
+    principle be picked up, and where isoforms disagree on the immediate
+    upstream/downstream exon this follows exactly one path — the design
+    already defers isoform-of-origin attribution, see
+    docs/reannotation_engine_design.md §6.3).
+
+    Falls back to the flat genomic window (identical positions, in the same
+    order) when no splice_context/chrom is given or no intron is nearby, so
+    behaviour is unchanged unless a caller opts in.
+
+    Returns (positions, spliced) — spliced=True iff at least one intron was
+    crossed while building this flank.
+    """
+    if not splice_context or chrom is None:
+        return list(_flank_positions(pos, strand, length, body_side=body_side)), False
+
+    introns = splice_context.get((chrom, "+" if strand > 0 else "-"))
+    if not introns:
+        return list(_flank_positions(pos, strand, length, body_side=body_side)), False
+
+    # donor = first intronic base, acceptor = first exonic base after the
+    # intron (both ascending-genomic, per events.build_splice_context). Where
+    # two introns share a donor (alternative acceptor usage) the later one
+    # (by sorted order) wins — deterministic, not a resolved ambiguity.
+    donor_to_acceptor = dict(introns)
+    acceptor_to_donor = {a: d for d, a in introns}
+
+    def step_up(p: int) -> int:
+        a = donor_to_acceptor.get(p + 1)
+        return a if a is not None else p + 1
+
+    def step_down(p: int) -> int:
+        d = acceptor_to_donor.get(p)
+        return (d - 1) if d is not None else p - 1
+
+    forward = step_up if strand > 0 else step_down  # transcript 5'->3'
+    backward = step_down if strand > 0 else step_up
+
+    spliced = False
+    if body_side:
+        out = [pos]
+        p = pos
+        for _ in range(length - 1):
+            nxt = forward(p)
+            spliced = spliced or abs(nxt - p) != 1
+            p = nxt
+            out.append(p)
+        return out, spliced
+
+    rev: List[int] = []
+    p = pos
+    for _ in range(length):
+        nxt = backward(p)
+        spliced = spliced or abs(nxt - p) != 1
+        p = nxt
+        rev.append(p)
+    return list(reversed(rev)), spliced
 
 
 def _codon_levels(
@@ -74,29 +159,56 @@ def _step_score(
     flanks: Sequence[int],
     min_reads: float,
     alpha: float,
+    *,
+    forward_is_body: bool = True,
+    chrom: Optional[str] = None,
+    splice_context: Optional[SpliceContext] = None,
 ) -> dict:
     """Robust step (body_level - outer_level) across `pos`, over several flank
-    lengths. Metric = log2 fold-change (body vs outer) with pseudocount α."""
+    lengths. Metric = log2 fold-change (body vs outer) with pseudocount α.
+
+    `forward_is_body` picks which side of `pos` plays the "body" role:
+    True (initiation) — downstream/into-ORF is body, upstream/leader is outer.
+    False (termination) — upstream/into-ORF is body, downstream/UTR is outer.
+
+    When `splice_context`/`chrom` are given, both flanks are built via
+    _project_flank so a nearby intron is jumped rather than read straight
+    through (see _project_flank docstring); otherwise this is unchanged flat
+    genomic windowing.
+    """
     rises: Dict[int, float] = {}
+    flank_spliced = False
     for L in flanks:
-        body_med, _, _ = _codon_levels(coverage, _flank_positions(pos, strand, L, body_side=True))
-        out_med, _, _ = _codon_levels(coverage, _flank_positions(pos, strand, L, body_side=False))
+        body_pos, sp1 = _project_flank(
+            pos, strand, L, body_side=forward_is_body, chrom=chrom, splice_context=splice_context
+        )
+        out_pos, sp2 = _project_flank(
+            pos, strand, L, body_side=not forward_is_body, chrom=chrom, splice_context=splice_context
+        )
+        flank_spliced = flank_spliced or sp1 or sp2
+        body_med, _, _ = _codon_levels(coverage, body_pos)
+        out_med, _, _ = _codon_levels(coverage, out_pos)
         rises[L] = math.log2((body_med + alpha) / (out_med + alpha))
     vals = list(rises.values())
     consensus = statistics.median(vals)
     stability = (max(vals) - min(vals)) if len(vals) > 1 else 0.0
     refL = sorted(flanks)[len(flanks) // 2]
-    out_med, out_max, _ = _codon_levels(
-        coverage, _flank_positions(pos, strand, refL, body_side=False)
+    out_pos_ref, _ = _project_flank(
+        pos, strand, refL, body_side=not forward_is_body, chrom=chrom, splice_context=splice_context
     )
+    out_med, out_max, _ = _codon_levels(coverage, out_pos_ref)
     flank_peakiness = (out_max / out_med) if out_med > 0 else (float("inf") if out_max > 0 else 0.0)
-    n_reads = _codon_levels(coverage, _flank_positions(pos, strand, min(flanks), body_side=True))[2]
+    body_pos_min, _ = _project_flank(
+        pos, strand, min(flanks), body_side=forward_is_body, chrom=chrom, splice_context=splice_context
+    )
+    n_reads = _codon_levels(coverage, body_pos_min)[2]
     return {
         "rise_by_flank": rises,
         "consensus_rise": consensus,
         "stability": stability,
         "flank_peakiness": flank_peakiness,
         "n_reads": n_reads,
+        "flank_spliced": flank_spliced,
     }
 
 
@@ -110,12 +222,28 @@ def score_initiation_event(
     *,
     flanks: Sequence[int] = (9, 18, 30, 60),
     thr: ScoreThresholds = _DEFAULT_THR,
+    chrom: Optional[str] = None,
+    splice_context: Optional[SpliceContext] = None,
 ) -> dict:
     """Initiation = smoothed, flank-robust step UP at the start codon.
 
     Headline metric: consensus log2 fold-change (body / outer flank).
+
+    `chrom`/`splice_context`: when given, the leader flank is projected
+    across a nearby intron instead of read as raw flanking genomic bases —
+    see _project_flank. Omit for the legacy flat-genomic behaviour.
     """
-    s = _step_score(start_pos, strand, coverage, flanks, thr.min_reads, thr.step_pseudocount)
+    s = _step_score(
+        start_pos,
+        strand,
+        coverage,
+        flanks,
+        thr.min_reads,
+        thr.step_pseudocount,
+        forward_is_body=True,
+        chrom=chrom,
+        splice_context=splice_context,
+    )
     s["metric"] = s["consensus_rise"]
     s["metric_name"] = "init_rise"
     s["eligibility"], s["call"] = _decide_step(s, rise_thr=thr.init_rise, thr=thr)
@@ -129,37 +257,28 @@ def score_termination_event(
     *,
     flanks: Sequence[int] = (9, 18, 30, 60),
     thr: ScoreThresholds = _DEFAULT_THR,
+    chrom: Optional[str] = None,
+    splice_context: Optional[SpliceContext] = None,
 ) -> dict:
     """Termination = step DOWN after the stop codon (body before > UTR after).
 
     Headline metric: consensus log2 fold-change (body / UTR) — positive = drop.
+
+    `chrom`/`splice_context`: when given, the UTR flank is projected across a
+    nearby intron instead of read as raw flanking genomic bases — see
+    _project_flank. Omit for the legacy flat-genomic behaviour.
     """
-    alpha = thr.step_pseudocount
-    rises: Dict[int, float] = {}
-    for L in flanks:
-        body_med, _, _ = _codon_levels(
-            coverage, _flank_positions(term_pos, strand, L, body_side=False)
-        )
-        utr_med, _, _ = _codon_levels(
-            coverage, _flank_positions(term_pos, strand, L, body_side=True)
-        )
-        rises[L] = math.log2((body_med + alpha) / (utr_med + alpha))
-    vals = list(rises.values())
-    refL = sorted(flanks)[len(flanks) // 2]
-    utr_med, utr_max, _ = _codon_levels(
-        coverage, _flank_positions(term_pos, strand, refL, body_side=True)
+    s = _step_score(
+        term_pos,
+        strand,
+        coverage,
+        flanks,
+        thr.min_reads,
+        thr.step_pseudocount,
+        forward_is_body=False,
+        chrom=chrom,
+        splice_context=splice_context,
     )
-    s = {
-        "rise_by_flank": rises,
-        "consensus_rise": statistics.median(vals),
-        "stability": (max(vals) - min(vals)) if len(vals) > 1 else 0.0,
-        "flank_peakiness": (
-            (utr_max / utr_med) if utr_med > 0 else (float("inf") if utr_max > 0 else 0.0)
-        ),
-        "n_reads": _codon_levels(
-            coverage, _flank_positions(term_pos, strand, min(flanks), body_side=False)
-        )[2],
-    }
     s["metric"] = s["consensus_rise"]
     s["metric_name"] = "term_drop"
     s["eligibility"], s["call"] = _decide_step(s, rise_thr=thr.term_drop, thr=thr)

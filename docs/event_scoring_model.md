@@ -235,6 +235,138 @@ demoted to evidence. Still to iterate: junction normalisation (spanning/crossing
 + overhang-weight) & frame continuity; null-model anchoring; term stop-peak +
 readthrough; per-sample tier escalation.
 
+**v1.1 (2026-07-14) — splice-aware init/term flanks, junction wiring fixed:**
+`init_rise`/`term_drop` previously read the leader/UTR flank as raw flanking
+*genomic* bases (`aspects._flank_positions`), which is wrong whenever a splice
+site falls inside the flank window — the true leader/UTR sits on the far side
+of the intron, and the flat window instead reads mostly zero-coverage
+intronic sequence, spuriously inflating the step metric toward a false
+SUPPORTED. `aspects._project_flank` now walks in transcript order, jumping
+across a nearby intron from an optional `splice_context` (built by
+`events.build_splice_context(context_gtf)`, threaded through
+`score_events(_vectorised)` → `_score_events_over_provider` →
+`score_matrix_workflow`/`score_bams_workflow`/`pipeline_workflow` →
+`--context-gtf` on the corresponding CLI commands). Evidence gained a
+`flank_spliced` bool marking whether a jump was applied. This follows the
+same genome-wide, strand-scoped, not-gene-scoped intron lookup already used
+by `events._context_junction_events`; where isoforms disagree on the
+immediate upstream/downstream exon it follows exactly one path — isoform-of-
+origin remains deferred (§6.3 of reannotation_engine_design.md), this only
+fixes the single-path case, which is the common one.
+
+Separately: `_score_events_over_provider` was never calling
+`provider.junction_support()` — every junction event scored against an empty
+support dict regardless of provider capability, so junction events always
+came out INSUFFICIENT/n_reads=0 even though both `MatrixProvider` and
+`BamSetProvider` fully implement `junction_support()`. This was a pure
+wiring gap (already flagged as "Junction scoring dead… Undiagnosed" in
+project_overview.md §10) — now fixed via `_junction_support_for_chrom`. That
+fix also exposed a second footgun in the same area: a `runtime_checkable`
+Protocol (`SupportsJunctions`) only checks that a method exists, not that it
+works — `BigwigSetProvider.junction_support()` exists and always raises
+`NotImplementedError`, so `isinstance(provider, SupportsJunctions)` was
+`True` for it too. `_junction_support_for_chrom` now also catches
+`NotImplementedError` explicitly rather than relying on `isinstance` alone.
+
+**v1.2 (2026-07-14) — bigwig coverage restored, `--offset-method metagene`
+fixed on score-bams:** the bigwig path described in the "LOCKED" spec above
+was previously scaffolded but never reachable: `BigwigSetProvider` existed
+but `workflows.py` never imported it, and its `stranded` flag was a stub
+that always sum-merged forward+reverse into one `count` regardless. Both are
+now fixed — `BigwigSetProvider.coverage()` emits a real `strand` column when
+`stranded=True` (forward/reverse dict entries required in that mode), and
+`score_bigwigs_workflow` (mirroring `score_bams_workflow`, same
+`_score_events_over_provider` core, same `--context-gtf` support) is wired
+to a new `score-bigwig` CLI command (`--bigwig` for unstranded, or
+`--forward-bigwig`/`--reverse-bigwig` pairs for stranded — strongly
+preferred, since Ribo-seq is stranded). Still lossy as documented: no P/A
+site, no junction spanning, no mappability.
+
+Separately, `--offset-method metagene` on `score-bams`/`pipeline` was dead in
+practice — `BamSetProvider`'s metagene branch needs genomic start-codon
+coordinates it was never given, so it silently fell back to the fixed
+global offset every time (only a log warning, despite the CLI presenting
+`metagene` as a normal working choice and this doc calling it "canonical").
+`score_bams_workflow` now derives start-codon coordinates from the
+extracted `init` events (free — already read for scoring) and passes them
+through. Caveat: the metagene histogram fetches directly from the BAM by
+genomic coordinate, so this only works for genome-aligned BAMs
+(`transcriptome=False`) — transcriptome-aligned BAMs still fall back to
+global, unchanged from before.
+
+Mappability-based eligibility is still unimplemented (see
+project_translonscorer_bigwig_mappability_gap memory / audit notes) — next
+candidate if bigwig/BAM scoring correctness needs a repetitive-region caveat.
+
+**v1.3 (2026-07-14) — mappability-track diagnostic annotation
+(`map_track_mean`/`map_track_low`):** a user-supplied precomputed mappability
+track (Umap/GEM-mappability style bigwig, values ~0..1) can now be attached
+via `--mappability-bigwig` on `score-matrix`/`score-bams`/`score-bigwig`/
+`pipeline`. Deliberately named `map_track_*`, not `mappability_*`, to avoid
+conflating it with the pre-existing (and still unimplemented) BAM-NH-tag
+`SupportsMappability`/`mappability_ledger()` concept in `coverage/base.py` —
+those are different ideas that happened to share a name.
+
+`workflows._map_track_for_chrom` reads the track over each event's padded
+window (reusing `_merge_event_regions`, same pad as coverage) via a second,
+independent `BigwigSetProvider` instance and computes a mean; `map_track_low`
+is `mean < thr.mappability_low` (new `ScoreThresholds` field, default 0.5).
+Threaded through `score_events(_vectorised)` exactly like `junction_support` —
+merged into the raw evidence dict right before `event_record(...)`, uniformly
+across all event types. **Never affects eligibility/call** — same "review
+flag, not a gate" precedent as `flank_peakiness`/`stability`.
+
+Promoted to first-class `_RECORD_SCHEMA` columns (not left in the `evidence`
+JSON blob) specifically because `report.py`'s `_compose_per_translon` only
+ever selects a fixed column subset from the score store — anything left in
+`evidence` never reaches the report a user actually reads. `report.py`
+aggregates per aspect using an **unweighted** mean (not the read-weighted
+mean used for `metric`) — read-weighting would wash out the signal for
+exactly the zero/low-read events this annotation exists to explain — and
+`map_track_low` as `.any()` across the aspect's events (a single flagged
+event is worth surfacing). Fully backward compatible: `mappability_bigwig=
+None` everywhere by default, new columns stay null, golden gate unaffected.
+
+**v1.4 (2026-07-14) — one coherent matrix-scoring path: `MatrixProvider`
+reads the P-site index directly.** Closes the "two matrix pipelines" gap
+named earlier this session: `score_matrix_workflow` (`MatrixProvider`, flat
+`ref_offset`) already shared `_score_events_over_provider`/
+`score_events_vectorised`/`scoring/aspects.py` with score-bams/score-bigwig,
+but had a known accuracy bug (one flat P-site offset regardless of read
+length → `elong_in_frame` ~0.33 floor). `score_matrix_rollup_workflow`
+(the `--gtf`/FrameRollup path) fixed the offset accuracy but did it by
+hand-rolling a second, transcript-coordinate scoring pipeline that bypasses
+`_score_events_over_provider` entirely and only ever scores elongation —
+duplicated orchestration, permanently forfeiting init/term/junction/
+mappability on the "accurate" path.
+
+Investigation found `build-psite-index`'s Phase 2 already writes exactly the
+missing substrate: a genomic, per-(sample, length)-offset-corrected,
+chrom-sharded P-site index (`_SHARD_SCHEMA`: `p_site, strand, length,
+sample_id, count`) — it was just never read as ordinary genomic coverage,
+only re-projected into transcript space to feed FrameRollup. New
+`psite_index.query_genomic_coverage` reads it directly (`pos, count[,
+strand][, sample_name]` — the `CoverageProvider` contract); `MatrixProvider`
+gained a second coverage strategy (`psite_index_dir` constructor param) that
+uses it instead of the flat `ref_offset` path when set —
+`.junction_support()`/`.mappability_ledger()` are untouched (already
+offset-independent, read raw partition BAMs directly). No new provider
+class, no new scorer.
+
+CLI: `score-matrix --psite-index` no longer requires `--gtf` — without it,
+this new mode activates (recommended); with it, unchanged FrameRollup
+behaviour (backwards compatible, not removed). Also added to `pipeline`
+(previously absent entirely). `--gtf`/FrameRollup is now documented as
+elongation-only and legacy — a candidate for deletion
+(`score_matrix_rollup_workflow`/`score_frame_rollup`/
+`score_elongation_from_rollup`) once the new path is validated on real
+cohort-scale data (a manual/HPC step, not done as part of this pass).
+`build_frame_rollup`/`calibrate_offsets` stay regardless (Phase 1 of
+`build-psite-index` calls them directly); `build_coverage_index`/
+`profile_from_index` (CoverageIndex, "FR6") stay too — a separate
+downstream clustering/differential-translation feature, not part of event
+scoring, not redundant with this.
+
 ## Open choices
 
 - Junction event extraction (same dedup pattern; not yet measured).

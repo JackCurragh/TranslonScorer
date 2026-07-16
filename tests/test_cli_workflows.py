@@ -32,7 +32,8 @@ def test_pipeline_workflow_requires_exactly_one_mode(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    "name", ["extract-events", "score-matrix", "score-bams", "report", "consequential", "pipeline"]
+    "name",
+    ["extract-events", "score-matrix", "score-bams", "score-bigwig", "report", "consequential", "pipeline"],
 )
 def test_new_subcommands_registered(name):
     runner = CliRunner()
@@ -261,3 +262,355 @@ def test_consequential_cmd_roundtrip(tmp_path: Path):
     out = pl.read_parquet(out_path)
     assert "consequential" in out.columns
     assert out.height == 2
+
+
+# ---------------------------------------------------------------------------
+# Junction support wiring (previously never called — every junction event
+# scored against an empty support dict regardless of provider capability)
+# ---------------------------------------------------------------------------
+
+
+def test_junction_events_scored_via_provider_junction_support():
+    """_score_events_over_provider must call provider.junction_support() and
+    feed it into scoring — junction events should not be silently INSUFFICIENT
+    just because the provider is capable of answering."""
+    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
+    from TranslonScorer.workflows import _score_events_over_provider
+
+    events = pl.DataFrame(
+        {
+            "event_id": pl.Series([42], dtype=pl.UInt64),
+            "type": ["junction"],
+            "chrom": ["chr1"],
+            "strand": [1],
+            "start": [1000],  # donor
+            "end": [1200],  # acceptor
+            "phase": [None],
+        }
+    )
+
+    class _JunctionCapableProvider:
+        def coverage(self, regions, *, site="A"):
+            # non-empty (but irrelevant to this junction event) so the chrom
+            # isn't short-circuited by the empty-coverage skip.
+            return pl.DataFrame({"pos": [1], "count": [1.0]})
+
+        def junction_support(self, junctions, *, by_sample=False):
+            assert junctions == [("chr1", 1000, 1200, 1, 42)]
+            return pl.DataFrame(
+                {
+                    "junction_id": pl.Series([42], dtype=pl.UInt64),
+                    "kind": ["span_conf"],
+                    "count": [25.0],
+                }
+            )
+
+    scored = _score_events_over_provider(
+        events,
+        _JunctionCapableProvider(),
+        site="A",
+        group="g",
+        tier="t",
+        thr=DEFAULT_THRESHOLDS,
+    )
+    row = scored.filter(pl.col("event_id") == 42).row(0, named=True)
+    assert row["call"] == "SUPPORTED"
+    assert row["n_reads"] == 25.0
+
+
+def test_junction_events_degrade_gracefully_without_junction_support():
+    """A provider that doesn't implement SupportsJunctions (e.g. bigwig) must
+    not crash — junction events just fall out INSUFFICIENT, as before."""
+    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
+    from TranslonScorer.workflows import _score_events_over_provider
+
+    events = pl.DataFrame(
+        {
+            "event_id": pl.Series([42], dtype=pl.UInt64),
+            "type": ["junction"],
+            "chrom": ["chr1"],
+            "strand": [1],
+            "start": [1000],
+            "end": [1200],
+            "phase": [None],
+        }
+    )
+
+    class _CoverageOnlyProvider:
+        # non-empty (but irrelevant to this junction event) so the chrom
+        # isn't short-circuited by the empty-coverage skip, and the
+        # junction_support code path is actually exercised.
+        def coverage(self, regions, *, site="A"):
+            return pl.DataFrame({"pos": [1], "count": [1.0]})
+
+    scored = _score_events_over_provider(
+        events,
+        _CoverageOnlyProvider(),
+        site="A",
+        group="g",
+        tier="t",
+        thr=DEFAULT_THRESHOLDS,
+    )
+    row = scored.filter(pl.col("event_id") == 42).row(0, named=True)
+    assert row["eligibility"] == "INSUFFICIENT"
+    assert row["n_reads"] == 0.0
+
+
+def test_junction_events_dont_crash_provider_that_raises_not_implemented():
+    """A provider (e.g. BigwigSetProvider) that DEFINES junction_support() but
+    always raises NotImplementedError must not crash scoring — a
+    runtime_checkable Protocol only checks the method exists, not that it
+    works, so isinstance(provider, SupportsJunctions) alone isn't enough."""
+    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS
+    from TranslonScorer.workflows import _score_events_over_provider
+
+    events = pl.DataFrame(
+        {
+            "event_id": pl.Series([42], dtype=pl.UInt64),
+            "type": ["junction"],
+            "chrom": ["chr1"],
+            "strand": [1],
+            "start": [1000],
+            "end": [1200],
+            "phase": [None],
+        }
+    )
+
+    class _RaisingJunctionProvider:
+        def coverage(self, regions, *, site="A"):
+            return pl.DataFrame({"pos": [1], "count": [1.0]})
+
+        def junction_support(self, junctions, *, by_sample=False):
+            raise NotImplementedError("bigwigs have no CIGAR")
+
+    scored = _score_events_over_provider(
+        events,
+        _RaisingJunctionProvider(),
+        site="A",
+        group="g",
+        tier="t",
+        thr=DEFAULT_THRESHOLDS,
+    )
+    row = scored.filter(pl.col("event_id") == 42).row(0, named=True)
+    assert row["eligibility"] == "INSUFFICIENT"
+
+
+# ---------------------------------------------------------------------------
+# Metagene offset calibration wiring (previously score_bams_workflow never
+# supplied genomic start-codon coordinates, so --offset-method metagene
+# silently fell back to the fixed global offset every time)
+# ---------------------------------------------------------------------------
+
+
+def test_score_bams_workflow_supplies_start_codons_for_metagene(tmp_path: Path, monkeypatch):
+    import TranslonScorer.coverage.bam as bam_mod
+    import TranslonScorer.workflows as workflows_mod
+    from TranslonScorer.model import OffsetParams
+
+    events = pl.DataFrame(
+        {
+            "event_id": pl.Series([1, 2], dtype=pl.UInt64),
+            "type": ["init", "elongation"],
+            "chrom": ["chr1", "chr1"],
+            "strand": [1, 1],
+            "start": [500, 600],
+            "end": [501, 700],
+            "phase": [None, 0],
+        }
+    )
+    monkeypatch.setattr(workflows_mod, "read_events", lambda events_dir: events)
+
+    captured: dict = {}
+
+    class _FakeProvider:
+        def __init__(self, bams, **kwargs):
+            captured.update(kwargs)
+
+        def coverage(self, regions, *, site="A"):
+            return pl.DataFrame(schema={"pos": pl.Int64, "count": pl.Float64})
+
+    monkeypatch.setattr(bam_mod, "BamSetProvider", _FakeProvider)
+
+    workflows_mod.score_bams_workflow(
+        "unused_events_dir",
+        ["fake.bam"],
+        str(tmp_path / "scores"),
+        data_version="d1",
+        offsets=OffsetParams(method="metagene"),
+    )
+    assert captured["start_codons"] == [("chr1", 500, 1)]
+
+
+def test_score_bams_workflow_omits_start_codons_for_global_method(tmp_path: Path, monkeypatch):
+    """No behaviour change for the (default) global/file methods."""
+    import TranslonScorer.coverage.bam as bam_mod
+    import TranslonScorer.workflows as workflows_mod
+    from TranslonScorer.model import OffsetParams
+
+    events = pl.DataFrame(
+        {
+            "event_id": pl.Series([1], dtype=pl.UInt64),
+            "type": ["init"],
+            "chrom": ["chr1"],
+            "strand": [1],
+            "start": [500],
+            "end": [501],
+            "phase": [None],
+        }
+    )
+    monkeypatch.setattr(workflows_mod, "read_events", lambda events_dir: events)
+
+    captured: dict = {}
+
+    class _FakeProvider:
+        def __init__(self, bams, **kwargs):
+            captured.update(kwargs)
+
+        def coverage(self, regions, *, site="A"):
+            return pl.DataFrame(schema={"pos": pl.Int64, "count": pl.Float64})
+
+    monkeypatch.setattr(bam_mod, "BamSetProvider", _FakeProvider)
+
+    workflows_mod.score_bams_workflow(
+        "unused_events_dir",
+        ["fake.bam"],
+        str(tmp_path / "scores"),
+        data_version="d1",
+        offsets=OffsetParams(method="global"),
+    )
+    assert captured["start_codons"] is None
+
+
+# ---------------------------------------------------------------------------
+# score-bigwig CLI validation
+# ---------------------------------------------------------------------------
+
+
+def test_score_bigwig_cmd_rejects_both_plain_and_stranded(tmp_path: Path):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "score-bigwig",
+            "--events-dir",
+            str(tmp_path / "events"),
+            "--store-dir",
+            str(tmp_path / "scores"),
+            "--data-version",
+            "d1",
+            "--bigwig",
+            "a.bw",
+            "--forward-bigwig",
+            "f.bw",
+            "--reverse-bigwig",
+            "r.bw",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "not both, not neither" in result.output
+
+
+def test_score_bigwig_cmd_rejects_neither_mode(tmp_path: Path):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "score-bigwig",
+            "--events-dir",
+            str(tmp_path / "events"),
+            "--store-dir",
+            str(tmp_path / "scores"),
+            "--data-version",
+            "d1",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "not both, not neither" in result.output
+
+
+def test_score_bigwig_cmd_rejects_mismatched_strand_pair_counts(tmp_path: Path):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "score-bigwig",
+            "--events-dir",
+            str(tmp_path / "events"),
+            "--store-dir",
+            str(tmp_path / "scores"),
+            "--data-version",
+            "d1",
+            "--forward-bigwig",
+            "f1.bw",
+            "--forward-bigwig",
+            "f2.bw",
+            "--reverse-bigwig",
+            "r1.bw",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "counts must match" in result.output
+
+
+# ---------------------------------------------------------------------------
+# --psite-index without --gtf (previously raised UsageError; now the
+# recommended matrix-scoring mode — MatrixProvider reads offset-corrected
+# genomic coverage directly, no FrameRollup needed)
+# ---------------------------------------------------------------------------
+
+
+def test_score_matrix_cmd_psite_index_without_gtf_no_longer_errors(monkeypatch, tmp_path: Path):
+    import TranslonScorer.io.matrix as io_matrix
+    import TranslonScorer.workflows as workflows_mod
+
+    monkeypatch.setattr(io_matrix, "discover_partitions", lambda matrix_dir: ["p1"])
+    captured = {}
+
+    def _fake_score_matrix_workflow(*args, **kwargs):
+        captured.update(kwargs)
+        return "fake_store"
+
+    monkeypatch.setattr(workflows_mod, "score_matrix_workflow", _fake_score_matrix_workflow)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "score-matrix",
+            "--events-dir", str(tmp_path / "events"),
+            "--matrix-dir", str(tmp_path / "matrix"),
+            "--store-dir", str(tmp_path / "scores"),
+            "--data-version", "d1",
+            "--psite-index", str(tmp_path / "psite"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["psite_index_dir"] == str(tmp_path / "psite")
+
+
+def test_pipeline_cmd_forwards_psite_index_dir(monkeypatch, tmp_path: Path):
+    import TranslonScorer.io.matrix as io_matrix
+    import TranslonScorer.workflows as workflows_mod
+
+    monkeypatch.setattr(io_matrix, "discover_partitions", lambda matrix_dir: ["p1"])
+    captured = {}
+
+    def _fake_pipeline_workflow(*args, **kwargs):
+        captured.update(kwargs)
+        return {"events": "e", "scores": "s", "report": "r"}
+
+    monkeypatch.setattr(workflows_mod, "pipeline_workflow", _fake_pipeline_workflow)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "pipeline",
+            "--out-dir", str(tmp_path / "out"),
+            "--sqlite", str(tmp_path / "annot.sqlite"),
+            "--matrix-dir", str(tmp_path / "matrix"),
+            "--psite-index", str(tmp_path / "psite"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["psite_index_dir"] == str(tmp_path / "psite")

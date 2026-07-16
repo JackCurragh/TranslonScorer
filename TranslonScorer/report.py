@@ -18,11 +18,17 @@ from __future__ import annotations
 
 import polars as pl
 
-# Core translation-chain aspects, in biological order.  Junction is handled
-# separately (a translon may have 0..n junctions).
-_CHAIN_ASPECTS = ("init", "elongation", "term")
-
 _SUPPORTED = "SUPPORTED"
+
+# Display order only — aspects not listed here still appear, sorted after these.
+# Membership is discovered from the data, never fixed here, so a new scorer's
+# aspect flows into the report with no change to this file.
+_ASPECT_ORDER = ("init", "elongation", "term", "junction")
+
+
+def _ordered_aspects(aspects: list[str]) -> list[str]:
+    rank = {a: i for i, a in enumerate(_ASPECT_ORDER)}
+    return sorted(aspects, key=lambda a: (rank.get(a, len(_ASPECT_ORDER)), a))
 
 
 def compose_report(
@@ -31,6 +37,7 @@ def compose_report(
     *,
     group: str = "",
     tier: str = "",
+    supported_frac_min: float = 0.5,
 ) -> pl.DataFrame:
     """Compose a per-translon summary from a scored-events DataFrame.
 
@@ -45,14 +52,17 @@ def compose_report(
              (optionally group/tier-filtered) scores unchanged.
     group  : filter to this group label (empty string = all groups).
     tier   : filter to this tier label (empty string = all tiers).
+    supported_frac_min : a feature's ``{aspect}_call`` is SUPPORTED when at least
+             this fraction of the aspect's events are individually SUPPORTED.
 
     Returns
     -------
     When ``feature_event`` is None: the filtered long-form scores.
-    Otherwise: one row per ``feature_id`` with, per chain aspect, the columns
-    ``{aspect}_call``, ``{aspect}_metric``, ``{aspect}_n_reads`` and
-    ``{aspect}_supported_frac``; plus ``junction_n``, ``junction_supported_frac``;
-    plus ``total_reads`` (sum across the translon's events) and ``n_events``.
+    Otherwise: one row per ``feature_id`` with, for **every** aspect present in
+    ``scores``, the columns ``{aspect}_call``, ``{aspect}_metric``,
+    ``{aspect}_n_reads`` and ``{aspect}_supported_frac`` (plus
+    ``{aspect}_map_track_*`` when a mappability track was used); plus
+    ``total_reads`` (sum across the translon's events) and ``n_events``.
     """
     df = scores
     if group:
@@ -63,12 +73,25 @@ def compose_report(
     if feature_event is None:
         return df
 
-    return _compose_per_translon(df, feature_event)
+    return _compose_per_translon(df, feature_event, supported_frac_min)
 
 
-def _compose_per_translon(scores: pl.DataFrame, feature_event: pl.DataFrame) -> pl.DataFrame:
+def _compose_per_translon(
+    scores: pl.DataFrame,
+    feature_event: pl.DataFrame,
+    supported_frac_min: float = 0.5,
+) -> pl.DataFrame:
     """Join scores onto translon membership and aggregate to one row/translon."""
-    score_cols = ["event_id", "aspect", "call", "eligibility", "n_reads", "metric"]
+    score_cols = [
+        "event_id",
+        "aspect",
+        "call",
+        "eligibility",
+        "n_reads",
+        "metric",
+        "map_track_mean",
+        "map_track_low",
+    ]
     have = [c for c in score_cols if c in scores.columns]
     joined = feature_event.select(["feature_id", "event_id"]).join(
         scores.select(have), on="event_id", how="left"
@@ -76,8 +99,23 @@ def _compose_per_translon(scores: pl.DataFrame, feature_event: pl.DataFrame) -> 
     if joined.is_empty():
         return pl.DataFrame(schema={"feature_id": pl.Utf8})
 
+    has_map_track = "map_track_mean" in joined.columns
+    map_track_aggs = (
+        [
+            # Unweighted mean (NOT read-weighted like `metric`): read-weighting
+            # would wash out the signal for exactly the zero/low-read events
+            # this annotation exists to explain.
+            pl.col("map_track_mean").mean().alias("map_track_mean"),
+            # True if ANY contributing event was individually flagged low —
+            # a single spurious/genuine repeat-masked event is worth surfacing.
+            pl.col("map_track_low").any().alias("map_track_low"),
+        ]
+        if has_map_track
+        else []
+    )
+
     # Per (feature, aspect) aggregates: read-weighted metric, summed reads,
-    # supported fraction, event count.
+    # supported fraction, event count, unweighted mappability-track mean.
     per_aspect = joined.group_by(["feature_id", "aspect"]).agg(
         pl.col("n_reads").sum().alias("n_reads"),
         (
@@ -86,6 +124,7 @@ def _compose_per_translon(scores: pl.DataFrame, feature_event: pl.DataFrame) -> 
         ).alias("metric"),
         (pl.col("call") == _SUPPORTED).mean().alias("supported_frac"),
         pl.len().alias("n_events"),
+        *map_track_aggs,
     )
 
     # Totals across the whole translon (every event, any aspect).
@@ -95,24 +134,23 @@ def _compose_per_translon(scores: pl.DataFrame, feature_event: pl.DataFrame) -> 
     )
 
     out = totals
-    for aspect in _CHAIN_ASPECTS:
-        a = per_aspect.filter(pl.col("aspect") == aspect).select(
+    for aspect in _ordered_aspects(per_aspect["aspect"].unique().to_list()):
+        select_cols = [
             "feature_id",
-            pl.when(pl.col("supported_frac") >= 0.5)
+            pl.when(pl.col("supported_frac") >= supported_frac_min)
             .then(pl.lit(_SUPPORTED))
             .otherwise(pl.lit("UNSUPPORTED"))
             .alias(f"{aspect}_call"),
             pl.col("metric").alias(f"{aspect}_metric"),
             pl.col("n_reads").alias(f"{aspect}_n_reads"),
             pl.col("supported_frac").alias(f"{aspect}_supported_frac"),
-        )
+        ]
+        if has_map_track:
+            select_cols += [
+                pl.col("map_track_mean").alias(f"{aspect}_map_track_mean"),
+                pl.col("map_track_low").alias(f"{aspect}_map_track_low"),
+            ]
+        a = per_aspect.filter(pl.col("aspect") == aspect).select(*select_cols)
         out = out.join(a, on="feature_id", how="left")
-
-    junc = per_aspect.filter(pl.col("aspect") == "junction").select(
-        "feature_id",
-        pl.col("n_events").alias("junction_n"),
-        pl.col("supported_frac").alias("junction_supported_frac"),
-    )
-    out = out.join(junc, on="feature_id", how="left")
 
     return out.sort("feature_id")

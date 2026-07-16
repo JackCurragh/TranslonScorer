@@ -2,10 +2,18 @@
 
 Bigwigs carry pre-computed coverage with no read-length information, so:
 - Only `CoverageProvider` is satisfied (no P/A distinction, no junctions).
-- `coverage(…, site=…)` accepts the parameter but IGNORES it with a warning,
-  since the site-shift cannot be meaningfully applied without read offsets.
+- `coverage(…, site=…)` accepts the parameter but IGNORES it, since the
+  site-shift cannot be meaningfully applied without read offsets.
 - `junction_support()` raises NotImplementedError — bigwigs have no CIGAR.
 - `size_factors()` returns 1.0 per bigwig (caller normalises externally).
+
+Strand convention: a stranded entry is a dict with 'forward'/'reverse' keys
+pointing at two separate bigwig files, both holding POSITIVE values (the
+convention used elsewhere in this codebase, e.g. STAR's
+Signal.Unique.str1/str2.out.bw) — strand is inferred from which file a value
+came from, not from its sign. If your bigwigs instead encode strand via
+negative values in a single file, negate the reverse-strand file before
+passing it in (or pre-split it) — this provider does not sign-flip.
 
 Requires pyBigWig (pip install pyBigWig).
 """
@@ -33,8 +41,16 @@ class BigwigSetProvider:
     bigwigs     : paths to bigwig files (forward/plus strand), or a list of
                   dicts with keys 'forward'/'reverse' for strand-specific inputs.
     sample_names: optional sample labels (one per bigwig path/dict).
-    stranded    : if True and bigwigs are strand-specific dicts, keep strand
-                  information in the output (currently merged; stub).
+    stranded    : if True, every entry in `bigwigs` MUST be a
+                  {'forward','reverse'} dict, and coverage() emits a `strand`
+                  column (1 for forward, -1 for reverse) so
+                  workflows._score_events_over_provider scores each strand
+                  against its own coverage — required for correct Ribo-seq
+                  scoring (see module docstring for the sign convention). If
+                  False, entries are sum-merged regardless of shape (a
+                  stranded dict's forward+reverse values are combined into
+                  one unstranded pileup — only useful for coverage QC, not
+                  strand-sensitive event scoring).
     """
 
     def __init__(
@@ -75,7 +91,8 @@ class BigwigSetProvider:
 
         Returns
         -------
-        DataFrame with columns pos, count[, sample_id].
+        DataFrame with columns pos, count[, strand (if stranded), sample_id
+        (if by_sample)].
         """
         try:
             import pyBigWig
@@ -89,19 +106,32 @@ class BigwigSetProvider:
             raise ValueError(f"site must be 'P' or 'A', got {site!r}")
 
         schema: Dict[str, type] = {"pos": pl.Int64, "count": pl.Float64}
+        if self._stranded:
+            schema["strand"] = pl.Int64
         if by_sample:
             schema["sample_id"] = pl.Utf8
 
         all_rows: List[dict] = []
-        for bw_path, sample_id in zip(self._bigwigs, self._sample_names):
-            paths = (
-                [str(bw_path)]
-                if isinstance(bw_path, (str, Path))
-                else [str(v) for v in bw_path.values() if v is not None]
-            )
-            for path in paths:
+        for bw_entry, sample_id in zip(self._bigwigs, self._sample_names):
+            # (path, strand_value) pairs to read for this entry. strand_value
+            # is None when unstranded (no strand column emitted).
+            if self._stranded:
+                if not isinstance(bw_entry, dict) or not {"forward", "reverse"} <= bw_entry.keys():
+                    raise ValueError(
+                        "stranded=True requires every bigwig entry to be a dict with "
+                        f"'forward'/'reverse' keys; got {bw_entry!r} for sample {sample_id!r}"
+                    )
+                sources = [(bw_entry["forward"], 1), (bw_entry["reverse"], -1)]
+            elif isinstance(bw_entry, (str, Path)):
+                sources = [(bw_entry, None)]
+            else:
+                sources = [(v, None) for v in bw_entry.values() if v is not None]
+
+            for path, strand_val in sources:
+                if path is None:
+                    continue
                 try:
-                    bw = pyBigWig.open(path)
+                    bw = pyBigWig.open(str(path))
                     for region in regions:
                         try:
                             vals = bw.values(region.chrom, region.start, region.end, numpy=False)
@@ -112,6 +142,8 @@ class BigwigSetProvider:
                         for i, v in enumerate(vals):
                             if v and v > 0:
                                 row: dict = {"pos": region.start + i, "count": float(v)}
+                                if self._stranded:
+                                    row["strand"] = strand_val
                                 if by_sample:
                                     row["sample_id"] = sample_id
                                 all_rows.append(row)
@@ -123,8 +155,10 @@ class BigwigSetProvider:
             return pl.DataFrame(schema=schema)
 
         df = pl.DataFrame(all_rows)
-        group_cols = ["pos"] + (["sample_id"] if by_sample else [])
-        return df.group_by(group_cols).agg(pl.col("count").sum()).sort("pos")
+        group_cols = (
+            ["pos"] + (["strand"] if self._stranded else []) + (["sample_id"] if by_sample else [])
+        )
+        return df.group_by(group_cols).agg(pl.col("count").sum()).sort(group_cols)
 
     def size_factors(self) -> Dict[str, float]:
         """Return 1.0 per bigwig (external normalisation assumed)."""

@@ -115,16 +115,16 @@ The PIF filter recovered 883 samples missed by the old periodicity ≥ 0.5 thres
 
 ## 5. Scoring: `score-matrix` Command
 
-### The FrameRollup path (the right one, requires `--gtf`)
+### `--psite-index` alone, no `--gtf` (RECOMMENDED, added 2026-07-14)
 
-- Projects reads to transcriptome coordinates
-- Uses per-(sample, length) calibrated P-site offsets
-- Computes `phase0 = (cds_phase + 5'pos) % 3` — offset-independent, calibrated analytically
-- Aggregates across samples into per-(feature_id, length) `elong_in_frame`
-
-### `--psite-index` flag (added 2026-06-27)
-
-Pass the psite_index directory to skip recalibration and restrict scoring to usable (sample, length) pairs:
+`MatrixProvider` now reads coverage directly from the P-site index
+(`psite_index.query_genomic_coverage`) instead of applying a flat offset —
+same per-(sample, length) offset accuracy as FrameRollup below, but through
+the ordinary `_score_events_over_provider` pipeline, so init/term/junction/
+mappability are all scored too, not just elongation. `(sample, length)` pairs
+in `usable_sample_lengths.parquet` are honoured automatically if that file is
+present in the index dir. This supersedes the FrameRollup path for scoring;
+prefer it going forward.
 
 ```bash
 translonscorer score-matrix \
@@ -132,18 +132,31 @@ translonscorer score-matrix \
   --matrix-dir /hps/.../global_partitioned \
   --store-dir /path/to/scores \
   --data-version v1 \
-  --gtf /path/to/annotation.gtf \
   --psite-index /hps/.../translonscorer_6k/psite_index_filtered
 ```
 
-Behaviour:
-1. Loads `offsets.parquet` → pre-computed `Dict[(sample_name, length), offset]`
-2. Filters the FrameRollup to only rows in `usable_sample_lengths.parquet` (left-join + `_keep` flag)
-3. Falls back to `calibrate_offsets()` if `--psite-index` not given
+### The FrameRollup path (`--gtf`) — elongation-only, kept for backwards compatibility
+
+- Projects reads to transcriptome coordinates
+- Uses per-(sample, length) calibrated P-site offsets
+- Computes `phase0 = (cds_phase + 5'pos) % 3` — offset-independent, calibrated analytically
+- Aggregates across samples into per-(feature_id, length) `elong_in_frame`
+- **Does not score init/term/junction, and ignores `--context-gtf`/`--mappability-bigwig`** —
+  a structurally separate pipeline (`score_matrix_rollup_workflow`) that never
+  goes through `_score_events_over_provider`. Not being extended further;
+  `score_matrix_rollup_workflow`/`score_frame_rollup`/`score_elongation_from_rollup`
+  are candidates for deletion once `--psite-index` (no `--gtf`) is validated
+  on real cohort-scale data — that validation is a manual/HPC step, not done
+  as part of adding it.
+
+`--psite-index` combined *with* `--gtf` still works exactly as before (added
+2026-06-27): loads `offsets.parquet`, filters to `usable_sample_lengths.parquet`,
+feeds the FrameRollup rollup. Falls back to `calibrate_offsets()` if
+`--psite-index` isn't given.
 
 ### Why flat-offset scoring is broken
 
-The legacy path uses `ref_offset=15` for all read lengths. True P-site offsets are per read length (28 nt → 12, 29 nt → 12, etc.). A single flat offset smears the P-site across frames, collapsing `elong_in_frame` to ~0.33 (random). Canonical protein-coding CDS (PT) scored at ~0.342 in-frame — indistinguishable from noise — because of this bug. `init_rise` and `term_drop` are unaffected (coverage-shape metrics, not frame-dependent).
+The legacy path (neither `--gtf` nor `--psite-index`) uses `ref_offset=15` for all read lengths. True P-site offsets are per read length (28 nt → 12, 29 nt → 12, etc.). A single flat offset smears the P-site across frames, collapsing `elong_in_frame` to ~0.33 (random). Canonical protein-coding CDS (PT) scored at ~0.342 in-frame — indistinguishable from noise — because of this bug. `init_rise` and `term_drop` are unaffected (coverage-shape metrics, not frame-dependent). `--psite-index` alone (see above) is the fix.
 
 ---
 
@@ -271,12 +284,16 @@ Active work in `RiboMetric/` (two checkouts: `RiboMetric/` and `RiboMetric-v120/
 
 | Bug | Location | Status |
 |-----|----------|--------|
-| `elong_in_frame` at ~0.33 random floor | matrix scoring flat offset | Partially fixed: `--psite-index` routes through calibrated offsets + usable-length filter |
-| Junction scoring dead (all n_reads=0) | `score-matrix` → junction worker | Undiagnosed |
-| `hrf` metric computes raw max count, not frame periodicity | `core/scoring.py:115` | Unfixed |
-| Composite score = raw unbounded sum, depth-dominated | `score_orfs_workflow` | Unfixed |
+| `elong_in_frame` at ~0.33 random floor | matrix scoring flat offset | **Fixed 2026-07-14** (pending real-data validation): `--psite-index` **without** `--gtf` now routes `MatrixProvider.coverage()` through the P-site index directly (`psite_index.query_genomic_coverage`) — same calibrated-offset accuracy as the `--gtf`/FrameRollup path, but through `_score_events_over_provider` so init/term/junction/mappability score too, not just elongation. See §5. |
+| Junction scoring dead (all n_reads=0) | `workflows._score_events_over_provider` | **Fixed 2026-07-14**: root cause was `_score_events_over_provider` never calling `provider.junction_support()` — both `MatrixProvider`/`BamSetProvider` implement it, it was just never invoked. See `_junction_support_for_chrom`. |
+| init_rise/term_drop spuriously inflated near a splice site | `scoring/aspects.py` leader/UTR flank | **Fixed 2026-07-14**: flank was flat genomic, reading intronic sequence when the true leader/UTR was spliced. Now splice-aware via `--context-gtf` on score-matrix/score-bams/pipeline. See `_project_flank`. |
+| Bigwig scoring unreachable from the event pipeline | `coverage/bigwig.py`, `workflows.py` | **Fixed 2026-07-14**: `BigwigSetProvider` existed but was never imported by `workflows.py`, and its `stranded` flag was a stub (always sum-merged fwd+rev). New `score_bigwigs_workflow` + `score-bigwig` CLI command; `coverage()` now emits a real `strand` column. Still lossy by design: no P/A site, no junction spanning, no mappability. |
+| `--offset-method metagene` silently dead on score-bams/pipeline | `workflows.score_bams_workflow` | **Fixed 2026-07-14**: `BamSetProvider` needs genomic start-codon coords to calibrate; `score_bams_workflow` never passed them, so it always fell back to `global_offset`. Now derives them from extracted `init` events. Only works for genome-aligned BAMs (`transcriptome=False`) — transcriptome-aligned still falls back to global. |
+| `hrf` metric computes raw max count, not frame periodicity | `core/scoring.py:115` | **Legacy-only** (2026-07-14 audit): only reachable via the deprecated `profiles`/`profiles_from_bigwig` command, not the current event-scoring pipeline (`score-matrix`/`score-bams`/`score-bigwig`) — lower priority than it reads. Unfixed. |
+| Composite score = raw unbounded sum, depth-dominated | `score_orfs_workflow` | **Legacy-only**: `score-orfs` command no longer exists (removed; see `test_deprecated_commands_removed`). Only relevant if this legacy path is ever revived. Unfixed. |
 | 582/582 consequential (100% pass rate) | `consequential.py` policy | Policy was a stub; `apply_policy` is now real but may need threshold tuning |
 | Per-sample reproducibility not in policy | `consequential.py` | `ConsequentialityPolicy` has no reproducibility knobs yet |
+| Mappability-based eligibility does not exist | `coverage/base.py` `SupportsMappability`, `scoring/evidence.py` | **Diagnostic annotation added 2026-07-14** (not the same thing as the `SupportsMappability`/`mappability_ledger()` BAM-NH-tag stub, which is still unimplemented and untouched): `--mappability-bigwig` on score-matrix/score-bams/score-bigwig/pipeline attaches a precomputed mappability track; every scored event gets `map_track_mean`/`map_track_low` (never affects eligibility/call — annotation only), surfaced in the composed report as `{aspect}_map_track_mean`/`{aspect}_map_track_low`. See `workflows._map_track_for_chrom`. |
 
 ### Infrastructure / pipeline
 

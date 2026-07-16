@@ -51,6 +51,7 @@ class ScoreThresholds:
     elong_breadth: float = 0.20  # fraction of in-frame codons covered
     elong_identifiability: float = 0.50  # contended attribution below this → AMBIGUOUS
     junc_min_spanning: float = 20.0  # spanning reads for SUPPORTED junction
+    mappability_low: float = 0.50  # map_track_mean below this -> map_track_low=True (evidence-only)
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +72,8 @@ class ScoreRecord:
     call: Optional[str]
     evidence: str
     thresholds_version: str
+    map_track_mean: Optional[float] = None  # mean mappability-track value over the event's window
+    map_track_low: Optional[bool] = None  # map_track_mean < thr.mappability_low; None if no track
 
 
 # ---------------------------------------------------------------------------

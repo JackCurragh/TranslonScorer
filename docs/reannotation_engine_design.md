@@ -343,6 +343,15 @@ diverges from transcript distance, and frame must be carried across the junction
 using the splice path in the event key. This is the scoring-time role of
 junctions, and it is why "nearby splicing affects scores" is in scope.
 
+The same divergence applies to the init/term leader/UTR flanks, not just
+elongation frame continuity: a start or stop codon near a splice site has its
+leader/UTR flank on the far side of an intron. This is implemented (as of
+2026-07-14, see event_scoring_model.md v1.1) as a single-path flank
+projection (`scoring.aspects._project_flank`) — genuinely fixes the common
+case, but does not resolve the isoform-of-origin ambiguity when candidate
+transcripts disagree on the immediate flanking exon (§6.3 below still
+applies: exactly one path is followed, not enumerated).
+
 ### 6.3 Isoform-of-origin is deferred
 
 Determining *which* isoform produced an observed signal is hard — especially

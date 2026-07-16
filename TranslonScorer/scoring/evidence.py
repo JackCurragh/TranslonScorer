@@ -41,6 +41,12 @@ _RECORD_SCHEMA = {
     "call": pl.Utf8,
     "evidence": pl.Utf8,
     "thresholds_version": pl.Utf8,
+    # Region-context annotation, NOT the BAM-NH-tag SupportsMappability/
+    # mappability_ledger concept (coverage/base.py) — distinct prefix
+    # deliberately avoids conflating the two. Never affects eligibility/call
+    # (same "review flag, not a gate" precedent as flank_peakiness/stability).
+    "map_track_mean": pl.Float64,
+    "map_track_low": pl.Boolean,
 }
 
 
@@ -156,9 +162,18 @@ def event_record(
     thr_version: str = "v0",
 ) -> dict:
     """Serialise a raw evidence dict into one long-form record dict."""
-    drop = {"eligibility", "call", "metric", "metric_name", "n_reads"}
+    drop = {
+        "eligibility",
+        "call",
+        "metric",
+        "metric_name",
+        "n_reads",
+        "map_track_mean",
+        "map_track_low",
+    }
     evidence = {k: _jsonable(v) for k, v in raw.items() if k not in drop}
     m = raw.get("metric")
+    mtm = raw.get("map_track_mean")
     return {
         "event_id": int(event_id),
         "aspect": aspect,
@@ -171,4 +186,6 @@ def event_record(
         "call": raw.get("call"),
         "evidence": _json.dumps(evidence),
         "thresholds_version": thr_version,
+        "map_track_mean": (None if mtm is None else float(mtm)),
+        "map_track_low": raw.get("map_track_low"),
     }

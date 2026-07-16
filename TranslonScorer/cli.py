@@ -1872,7 +1872,8 @@ def build_matrix_cache_cmd(matrix_dir, n_workers):
         "GTF annotation file.  When provided the FrameRollup scoring path is used: "
         "reads are projected to transcriptome coordinates, P-site offsets are "
         "calibrated per (sample, length), and frame scoring is offset-correct. "
-        "Strongly recommended for matrix scoring (fixes the flat-offset frame bug)."
+        "ELONGATION ONLY (no init/term/junction/mappability). Prefer --psite-index "
+        "WITHOUT --gtf instead: same offset accuracy, every event type, one pipeline."
     ),
 )
 @click.option(
@@ -1880,10 +1881,35 @@ def build_matrix_cache_cmd(matrix_dir, n_workers):
     "psite_index_dir",
     default=None,
     help=(
-        "Directory produced by build-psite-index.  When provided, P-site offsets are "
-        "loaded from offsets.parquet and (if present) only (sample, length) pairs "
-        "listed in usable_sample_lengths.parquet are used for frame scoring.  "
-        "Requires --gtf."
+        "Directory produced by build-psite-index. Meaning depends on --gtf: "
+        "WITH --gtf (legacy) — offsets feed the FrameRollup path (elongation only). "
+        "WITHOUT --gtf (recommended) — coverage is read directly from the P-site "
+        "index (per-(sample, length) offset-corrected genomic positions), scoring "
+        "every event type (init/term/elongation/junction) with the same accuracy "
+        "fix, through the normal pipeline (splice-aware flanks, mappability, etc. "
+        "all apply). Either way, (sample, length) pairs listed in "
+        "usable_sample_lengths.parquet (if present in the index dir) are honoured."
+    ),
+)
+@click.option(
+    "--context-gtf",
+    "context_gtf",
+    default=None,
+    help=(
+        "GTF annotation providing full transcript exon models.  When given, init/term "
+        "leader/UTR flanks near a splice site are projected across the intron instead "
+        "of read as raw flanking genomic bases (which otherwise spuriously biases "
+        "init_rise/term_drop). Same GTF as extract-events' --context-gtf."
+    ),
+)
+@click.option(
+    "--mappability-bigwig",
+    "mappability_bigwig",
+    default=None,
+    help=(
+        "Precomputed mappability track (Umap/GEM-mappability style bigwig, values "
+        "~0..1). Annotates every scored event with a diagnostic map_track_mean/"
+        "map_track_low, surfaced in the report — never affects eligibility/call."
     ),
 )
 def score_matrix_cmd(
@@ -1899,15 +1925,19 @@ def score_matrix_cmd(
     n_workers,
     gtf,
     psite_index_dir,
+    context_gtf,
+    mappability_bigwig,
 ):
     """Score extracted events against the sparse annotation-scale matrix.
 
     The matrix is sharded by read sequence; point --matrix-dir at the root and
     all partitions are scanned together (there is no valid single-partition use).
 
-    Pass --gtf to use the FrameRollup path (calibrated per-sample P-site offsets,
-    transcriptome-coordinate frame scoring).  Without --gtf the legacy flat-offset
-    path is used (retained for backwards compatibility only).
+    Three modes: --psite-index alone (RECOMMENDED — accurate per-(sample,length)
+    offsets, every event type); --gtf (+ optional --psite-index for offsets) —
+    the older FrameRollup path, elongation only, kept for backwards
+    compatibility; neither — legacy flat-offset path (frame scoring may be
+    inaccurate; --ref-offset applies).
     """
     setup_logging()
     from .io.matrix import discover_partitions
@@ -1925,6 +1955,21 @@ def score_matrix_cmd(
     if gtf:
         from .io.annotation import build_cds_blocks
 
+        if context_gtf:
+            log_info(
+                "--context-gtf is ignored on the FrameRollup path (--gtf): "
+                "init/term are not scored there yet, only elongation."
+            )
+        if mappability_bigwig:
+            log_info(
+                "--mappability-bigwig is ignored on the FrameRollup path (--gtf): "
+                "not wired into score_matrix_rollup_workflow."
+            )
+        log_info(
+            "Tip: --psite-index without --gtf now gives the same offset accuracy "
+            "plus init/term/junction/mappability in one pass; --gtf/FrameRollup is "
+            "elongation-only and kept for backwards compatibility."
+        )
         log_info(f"FrameRollup path: loading CDS from {gtf}")
         cds_df = build_cds_blocks(gtf)
         written = score_matrix_rollup_workflow(
@@ -1940,8 +1985,9 @@ def score_matrix_cmd(
         )
     else:
         if psite_index_dir:
-            raise click.UsageError("--psite-index requires --gtf")
-        log_info("Legacy flat-offset path (no --gtf); frame scoring may be inaccurate")
+            log_info(f"P-site index path: reading offset-corrected coverage from {psite_index_dir}")
+        else:
+            log_info("Legacy flat-offset path (no --gtf/--psite-index); frame scoring may be inaccurate")
         written = score_matrix_workflow(
             events_dir,
             part_dirs,
@@ -1949,8 +1995,11 @@ def score_matrix_cmd(
             data_version=data_version,
             annotation_version=annotation_version,
             ref_offset=ref_offset,
+            psite_index_dir=psite_index_dir,
             sample_names=list(sample_names) or None,
             n_workers=n_workers,
+            context_gtf=context_gtf,
+            mappability_bigwig=mappability_bigwig,
         )
     log_info(f"Scores written: {written or '(no events scored)'}")
 
@@ -2015,6 +2064,27 @@ def score_matrix_cmd(
     "-a",
     help="GTF annotation for transcriptome→genome projection (required with --transcriptome).",
 )
+@click.option(
+    "--context-gtf",
+    "context_gtf",
+    default=None,
+    help=(
+        "GTF annotation providing full transcript exon models.  When given, init/term "
+        "leader/UTR flanks near a splice site are projected across the intron instead "
+        "of read as raw flanking genomic bases (which otherwise spuriously biases "
+        "init_rise/term_drop). Same GTF as extract-events' --context-gtf."
+    ),
+)
+@click.option(
+    "--mappability-bigwig",
+    "mappability_bigwig",
+    default=None,
+    help=(
+        "Precomputed mappability track (Umap/GEM-mappability style bigwig, values "
+        "~0..1). Annotates every scored event with a diagnostic map_track_mean/"
+        "map_track_low, surfaced in the report — never affects eligibility/call."
+    ),
+)
 def score_bams_cmd(
     events_dir,
     bams,
@@ -2029,6 +2099,8 @@ def score_bams_cmd(
     site,
     transcriptome,
     annotation,
+    context_gtf,
+    mappability_bigwig,
 ):
     """Score extracted events against 1-20 genome- or transcriptome-aligned BAMs."""
     setup_logging()
@@ -2059,6 +2131,121 @@ def score_bams_cmd(
         site=site,
         transcriptome=transcriptome,
         exon_df=exon_df,
+        context_gtf=context_gtf,
+        mappability_bigwig=mappability_bigwig,
+    )
+    log_info(f"Scores written: {written or '(no events scored)'}")
+
+
+@cli.command("score-bigwig")
+@click.option("--events-dir", required=True, help="Events directory produced by extract-events.")
+@click.option(
+    "--bigwig",
+    "bigwigs",
+    multiple=True,
+    help="Unstranded bigwig (repeatable, 1-N samples). Mutually exclusive with "
+    "--forward-bigwig/--reverse-bigwig — Ribo-seq is stranded, so prefer those.",
+)
+@click.option(
+    "--forward-bigwig",
+    "forward_bigwigs",
+    multiple=True,
+    help="Forward/plus-strand bigwig (repeatable; paired positionally with --reverse-bigwig, "
+    "i.e. the Nth --forward-bigwig is the same sample as the Nth --reverse-bigwig).",
+)
+@click.option(
+    "--reverse-bigwig",
+    "reverse_bigwigs",
+    multiple=True,
+    help="Reverse/minus-strand bigwig (repeatable; paired positionally with --forward-bigwig).",
+)
+@click.option("--store-dir", required=True, help="Output fact_event_score store directory.")
+@click.option(
+    "--data-version", required=True, help="Data version label for the append-only score partition."
+)
+@click.option("--annotation-version", default="", help="Annotation version stamped into the store.")
+@click.option(
+    "--sample",
+    "sample_names",
+    multiple=True,
+    help="Sample name(s) aligned with bigwig order (default: file stems).",
+)
+@click.option(
+    "--context-gtf",
+    "context_gtf",
+    default=None,
+    help=(
+        "GTF annotation providing full transcript exon models.  When given, init/term "
+        "leader/UTR flanks near a splice site are projected across the intron instead "
+        "of read as raw flanking genomic bases. Same GTF as extract-events' --context-gtf."
+    ),
+)
+@click.option(
+    "--mappability-bigwig",
+    "mappability_bigwig",
+    default=None,
+    help=(
+        "Precomputed mappability track (Umap/GEM-mappability style bigwig, values "
+        "~0..1). Annotates every scored event with a diagnostic map_track_mean/"
+        "map_track_low, surfaced in the report — never affects eligibility/call. "
+        "Independent of --bigwig/--forward-bigwig/--reverse-bigwig (a separate, "
+        "always-unstranded track)."
+    ),
+)
+def score_bigwig_cmd(
+    events_dir,
+    bigwigs,
+    forward_bigwigs,
+    reverse_bigwigs,
+    store_dir,
+    data_version,
+    annotation_version,
+    sample_names,
+    context_gtf,
+    mappability_bigwig,
+):
+    """Score extracted events against 1-N genomic bigwig coverage tracks.
+
+    Bigwig is a LOSSY coverage source: no P/A-site distinction (there is no
+    read-length information to offset), no junction spanning (no CIGAR), no
+    multimapper resolution — init/term/elongation only.
+
+    Pass --forward-bigwig/--reverse-bigwig pairs (strongly recommended —
+    Ribo-seq is stranded, and unstranded coverage silently mixes +/- signal
+    at every position) or plain --bigwig for unstranded coverage only.
+    """
+    setup_logging()
+    from .workflows import score_bigwigs_workflow
+
+    has_plain = bool(bigwigs)
+    has_stranded = bool(forward_bigwigs) or bool(reverse_bigwigs)
+    if has_plain == has_stranded:
+        raise click.BadParameter(
+            "provide either --bigwig (repeatable, unstranded) or "
+            "--forward-bigwig/--reverse-bigwig pairs (repeatable, stranded) — not both, not neither"
+        )
+    if has_stranded and len(forward_bigwigs) != len(reverse_bigwigs):
+        raise click.BadParameter(
+            f"--forward-bigwig ({len(forward_bigwigs)}) and --reverse-bigwig "
+            f"({len(reverse_bigwigs)}) counts must match — one pair per sample"
+        )
+
+    stranded = has_stranded
+    entries = (
+        [{"forward": f, "reverse": r} for f, r in zip(forward_bigwigs, reverse_bigwigs)]
+        if stranded
+        else list(bigwigs)
+    )
+    written = score_bigwigs_workflow(
+        events_dir,
+        entries,
+        store_dir,
+        data_version=data_version,
+        annotation_version=annotation_version,
+        sample_names=list(sample_names) or None,
+        stranded=stranded,
+        context_gtf=context_gtf,
+        mappability_bigwig=mappability_bigwig,
     )
     log_info(f"Scores written: {written or '(no events scored)'}")
 
@@ -2296,6 +2483,49 @@ def consequential_cmd(
 @click.option(
     "--n-workers", type=int, default=None, help="Worker processes for matrix partition scanning."
 )
+@click.option(
+    "--context-gtf",
+    "context_gtf",
+    default=None,
+    help=(
+        "GTF annotation providing full transcript exon models.  Forwarded to both "
+        "extract-events (adds context junction events near ORF boundaries; needed "
+        "e.g. for uORFs a few nt downstream of a splice site) and scoring (projects "
+        "init/term leader/UTR flanks across nearby introns)."
+    ),
+)
+@click.option(
+    "--context-flank",
+    "context_flank",
+    type=int,
+    default=200,
+    show_default=True,
+    help="Window (nt) around each ORF to search for host-transcript context junctions.",
+)
+@click.option(
+    "--mappability-bigwig",
+    "mappability_bigwig",
+    default=None,
+    help=(
+        "Precomputed mappability track (Umap/GEM-mappability style bigwig, values "
+        "~0..1). Annotates every scored event with a diagnostic map_track_mean/"
+        "map_track_low, surfaced in the report — never affects eligibility/call. "
+        "Ignored on the FrameRollup path (--cds-bigbed/--cds-gtf)."
+    ),
+)
+@click.option(
+    "--psite-index",
+    "psite_index_dir",
+    default=None,
+    help=(
+        "Directory produced by build-psite-index (matrix mode). Routes coverage "
+        "through per-(sample, length) offset-corrected genomic positions instead "
+        "of a flat offset — fixes the elong_in_frame accuracy floor while still "
+        "scoring init/term/junction/mappability. RECOMMENDED over --cds-bigbed/"
+        "--cds-gtf (FrameRollup), which is elongation-only; ignored when either "
+        "of those is also given (FrameRollup takes precedence, unchanged)."
+    ),
+)
 def pipeline_cmd(
     out_dir,
     gtf_path,
@@ -2323,6 +2553,10 @@ def pipeline_cmd(
     cds_bigbed_path,
     cds_gtf_path,
     n_workers,
+    context_gtf,
+    context_flank,
+    mappability_bigwig,
+    psite_index_dir,
 ):
     """One-shot event-scoring run: extract-events → score (matrix or BAMs) → report.
 
@@ -2388,6 +2622,10 @@ def pipeline_cmd(
         n_workers=n_workers,
         exon_df=exon_df,
         policy=policy,
+        context_gtf=context_gtf,
+        context_flank=context_flank,
+        mappability_bigwig=mappability_bigwig,
+        psite_index_dir=psite_index_dir,
         # feature source forwarded to extract-events
         sqlite_path=sqlite_path or None,
         gtf_path=gtf_path or None,

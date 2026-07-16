@@ -872,3 +872,127 @@ def query_coverage_index(
         .group_by(["feature_id", "sample_id", "length", "tx_pos"])
         .agg(pl.col("count").sum())
     )
+
+
+# ---------------------------------------------------------------------------
+# Query: ordinary GENOMIC coverage (for MatrixProvider / CoverageProvider)
+# ---------------------------------------------------------------------------
+
+
+def query_genomic_coverage(
+    index_dir: str | Path,
+    regions: List[Tuple[str, int, int]],
+    *,
+    site: str = "P",
+    sample_names: Optional[List[str]] = None,
+    group_level: str = "aggregate",
+) -> pl.DataFrame:
+    """Query the P-site index as ordinary genomic coverage (pos, count[, strand]).
+
+    Unlike query_frame_rollup/query_coverage_index above (which re-project
+    into transcript/feature space), this returns coverage keyed by GENOMIC
+    position — the CoverageProvider.coverage() contract (coverage/base.py) —
+    so the index can be read like any other coverage source and scored
+    through workflows._score_events_over_provider (the same pipeline used
+    for BAM/bigwig sources: splice-aware flanks, junction wiring, mappability
+    annotation, all unmodified).
+
+    Offsets are already baked into `p_site` at index-build time (see module
+    docstring); site="A" applies the same +3 nt shift MatrixProvider already
+    applies for its flat-ref_offset mode. site="P" needs no shift (the index
+    IS P-site).
+
+    If `index_dir/usable_sample_lengths.parquet` exists, (sample, length)
+    pairs not listed there are excluded — the same QC-gate semantics
+    workflows.score_matrix_rollup_workflow already applies for the
+    FrameRollup path (its `psite_index_dir` branch), kept here for parity so
+    switching a caller from FrameRollup to this path doesn't silently
+    reintroduce known-bad (sample, length) combinations.
+
+    Parameters
+    ----------
+    regions      : (chrom, start, end) tuples — same shape as
+                   matrix_rollup.region_coverage takes.
+    site         : "P" (initiation, default) or "A" (elongation/termination).
+    sample_names : restrict to these sample(s) (None = all).
+    group_level  : "aggregate" (sum across samples) or "sample" (per-sample rows).
+
+    Returns
+    -------
+    DataFrame: pos (Int64), count (Float64), strand (Int64, ±1)
+    [, sample_name (Utf8) if group_level="sample"].
+    """
+    if site not in {"P", "A"}:
+        raise ValueError(f"site must be 'P' or 'A', got {site!r}")
+    if group_level not in {"aggregate", "sample"}:
+        raise ValueError(f"group_level must be 'aggregate' or 'sample', got {group_level!r}")
+
+    index_dir = Path(index_dir)
+    a_shift = 3 if site == "A" else 0
+
+    sample_map = load_samples(index_dir)
+    allowed_ids: Optional[set] = None
+    if sample_names:
+        allowed_ids = set(
+            sample_map.filter(pl.col("sample_name").is_in(sample_names))["sample_id"].to_list()
+        )
+
+    usable_df: Optional[pl.DataFrame] = None
+    usable_path = index_dir / "usable_sample_lengths.parquet"
+    if usable_path.exists():
+        usable_df = (
+            pl.read_parquet(usable_path)
+            .rename({"sample_id": "sample_name"})
+            .select(["sample_name", pl.col("length").cast(pl.Int64)])
+            .join(sample_map, on="sample_name", how="inner")
+            .select(["sample_id", "length"])
+            .with_columns(pl.lit(True).alias("_usable"))
+        )
+
+    by_chrom: Dict[str, List[Tuple[int, int]]] = {}
+    for chrom, start, end in regions:
+        by_chrom.setdefault(chrom, []).append((start - a_shift, end - a_shift))
+
+    schema: Dict[str, type] = {"pos": pl.Int64, "count": pl.Float64, "strand": pl.Int64}
+    if group_level == "sample":
+        schema["sample_name"] = pl.Utf8
+
+    parts: List[pl.DataFrame] = []
+    for chrom, wins in by_chrom.items():
+        shard = _load_shard(index_dir, chrom)
+        if shard is None:
+            continue
+        if allowed_ids is not None:
+            shard = shard.filter(pl.col("sample_id").is_in(list(allowed_ids)))
+        if usable_df is not None:
+            shard = (
+                shard.join(usable_df, on=["sample_id", "length"], how="left")
+                .filter(pl.col("_usable").fill_null(False))
+                .drop("_usable")
+            )
+        if shard.is_empty():
+            continue
+
+        mask = pl.lit(False)
+        for s, e in wins:
+            mask = mask | ((pl.col("p_site") >= s) & (pl.col("p_site") < e))
+        window = shard.filter(mask)
+        if window.is_empty():
+            continue
+
+        window = window.with_columns(
+            (pl.col("p_site") + a_shift).cast(pl.Int64).alias("pos"),
+            pl.when(pl.col("strand")).then(1).otherwise(-1).cast(pl.Int64).alias("strand"),
+        )
+        group_cols = ["pos", "strand"]
+        if group_level == "sample":
+            window = window.join(sample_map, on="sample_id", how="left")
+            group_cols.append("sample_name")
+        agg = window.group_by(group_cols).agg(
+            pl.col("count").sum().cast(pl.Float64).alias("count")
+        )
+        parts.append(agg.select(list(schema.keys())))
+
+    if not parts:
+        return pl.DataFrame(schema=schema)
+    return pl.concat(parts).sort("pos")

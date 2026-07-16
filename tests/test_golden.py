@@ -28,6 +28,34 @@ from TranslonScorer.scoring.run import (
 )
 
 REPO_ROOT = Path(__file__).parent.parent
+
+
+class _DictCoverageProvider:
+    """In-memory CoverageProvider test double wrapping a {pos: count} dict.
+
+    Relocated from product code: only tests need an offline provider that
+    requires no matrix files. Duck-typed — exposes coverage()/size_factors(),
+    which is all the scoring pipeline asks of a coverage source.
+    """
+
+    def __init__(self, cov_dict) -> None:
+        self._dict = cov_dict
+
+    def coverage(self, regions, *, site: str = "A", by_sample: bool = False):
+        positions, counts = [], []
+        for r in regions:
+            for pos in range(r.start, r.end):
+                c = self._dict.get(pos)
+                if c is not None:
+                    positions.append(pos)
+                    counts.append(float(c))
+        return pl.DataFrame(
+            {"pos": positions, "count": counts},
+            schema={"pos": pl.Int64, "count": pl.Float64},
+        )
+
+    def size_factors(self):
+        return {"": 1.0}
 GOLDEN_PATH = REPO_ROOT / "outputs" / "reference_scores_gapdh.parquet"
 
 _THR = ScoreThresholds()
@@ -643,9 +671,8 @@ def test_gapdh_golden_via_provider():
     alter the scoring arithmetic.
     """
     from TranslonScorer.coverage.base import CoverageProvider
-    from TranslonScorer.matrix.provider import DictCoverageProvider
 
-    provider = DictCoverageProvider(_gapdh_coverage())
+    provider = _DictCoverageProvider(_gapdh_coverage())
     assert isinstance(provider, CoverageProvider)
 
     # Pull coverage over the GAPDH locus via the provider interface
@@ -682,9 +709,9 @@ def test_provider_protocol_compliance():
         SupportsMappability,
         SupportsSites,
     )
-    from TranslonScorer.matrix.provider import DictCoverageProvider, MatrixProvider
+    from TranslonScorer.matrix.provider import MatrixProvider
 
-    provider = DictCoverageProvider({})
+    provider = _DictCoverageProvider({})
     assert isinstance(provider, CoverageProvider)
     # MatrixProvider should satisfy all four protocols
     mp = MatrixProvider([])

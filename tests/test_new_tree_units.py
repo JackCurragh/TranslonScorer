@@ -499,6 +499,27 @@ def test_build_cds_blocks(tmp_path):
     assert tx1["tran_start"] == [0, 30]
 
 
+def test_build_cds_blocks_rejects_unparseable_attributes(tmp_path):
+    """A GTF whose column-9 attributes carry no `transcript_id "..."` must raise,
+    not collapse every CDS into one null-tran_id degenerate block. Regression for
+    a mangled GTF (e.g. awk with whitespace FS splitting column 9) that silently
+    dropped whole genes from build-psite-index."""
+    import pytest
+
+    from TranslonScorer.io.annotation import build_cds_blocks
+
+    # column 9 present but with the attribute string mangled into tab-split tokens,
+    # so the transcript_id regex matches nothing.
+    lines = [
+        'chr1\tsrc\tCDS\t101\t130\t.\t+\t0\tgene_id\t"G1";\ttranscript_id\t"TX1";',
+        'chr1\tsrc\tCDS\t201\t230\t.\t+\t0\tgene_id\t"G1";\ttranscript_id\t"TX1";',
+    ]
+    p = tmp_path / "mangled.gtf"
+    p.write_text("\n".join(lines) + "\n")
+    with pytest.raises(ValueError, match="transcript_id"):
+        build_cds_blocks(str(p))
+
+
 def test_build_exon_blocks_includes_utrs_mrna_origin(tmp_path):
     """build_exon_blocks spans full exons (UTR included) with mRNA-5' origin,
     unlike build_cds_blocks which starts at the first CDS base."""

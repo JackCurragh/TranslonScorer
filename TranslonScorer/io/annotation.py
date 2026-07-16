@@ -46,6 +46,21 @@ def _blocks_from_gtf(gtf_path: str, feature_type: str) -> pl.DataFrame:
         )
         .collect()
     )
+    # Guard against a malformed GTF attribute column. If not a single feature row
+    # carries a parseable transcript_id, the group_by below collapses EVERY block
+    # into one null-keyed transcript with a single (arbitrary) strand — a
+    # degenerate annotation that silently drops most genes from any downstream
+    # index (e.g. build-psite-index would omit whole loci with no error). The
+    # usual cause is a tab/space-mangled column 9 (e.g. `awk` with the default
+    # whitespace field separator rewriting the attributes). Fail loudly instead.
+    if feats.height and feats.get_column("tran_id").null_count() == feats.height:
+        raise ValueError(
+            f"build blocks: parsed {feats.height} {feature_type} row(s) from "
+            f"{gtf_path}, but none had a parseable transcript_id "
+            f'(no `transcript_id "..."` in column 9). The GTF attribute column '
+            f"is likely malformed — refusing to build a degenerate single-block "
+            f"annotation that would silently drop genes downstream."
+        )
     grouped = (
         feats.group_by("tran_id")
         .agg(

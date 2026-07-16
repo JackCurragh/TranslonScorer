@@ -30,7 +30,6 @@ class Config:
     zarr_root: Optional[str] = None
     sparse_matrix_manifest: Optional[str] = None
     # Sparse Parquet matrix scoring options
-    matrix_scoring_mode: str = "aggregate"  # "aggregate" | "per_sample"
     sample_offsets_path: Optional[str] = None  # CSV/Parquet: sample_id, length, offset
     read_index_parquet: Optional[str] = None
     splits_index_parquet: Optional[str] = None

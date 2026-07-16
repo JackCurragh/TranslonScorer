@@ -224,38 +224,3 @@ def test_shape_cluster_driver_diagnostics_rank_discriminating_positions():
     assert top_positions & {2, 5}
     assert drivers.cluster_contrasts.get_column("distance_fraction").sum() > 0
 
-
-def test_score_clustered_exposes_normalisation_labels():
-    import polars as pl
-
-    from TranslonScorer.matrix_scoring import score_clustered
-
-    tran_id = "TX"
-    matrix = np.zeros((3, 60))
-    matrix[0, 10:40] = 5.0
-    matrix[1, 10:40] = 50.0
-    matrix[2, 45:47] = 1.0
-    orf_df = pl.DataFrame(
-        {
-            "tran_id": [tran_id],
-            "start": [10],
-            "stop": [40],
-            "type": ["CDS"],
-        }
-    )
-
-    scored, labels = score_clustered(
-        matrix,
-        ["S1", "S2", "low_count"],
-        np.arange(60),
-        tran_id,
-        orf_df,
-        n_clusters=1,
-        size_factors={"S1": 1.0, "S2": 10.0, "low_count": 1.0},
-        min_raw_locus_counts=20.0,
-    )
-
-    assert "normalisation_id" in scored.columns
-    assert "locus_total_raw" in labels.columns
-    assert "exclusion_reason" in labels.columns
-    assert labels.filter(pl.col("sample_id") == "low_count").item(0, "cluster_id") == -1

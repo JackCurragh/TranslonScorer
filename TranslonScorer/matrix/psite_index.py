@@ -53,7 +53,7 @@ from ..io.annotation import build_gene_spans
 from ..io.bam import normalise_chrom as _normalise_chrom
 from ..io.matrix import _count_parquets, _discover_bam, _manifest, _parse_read_id, _samples_df
 from .qc import _bam_chroms, _build_frame_intervals, fast_reads_qc
-from ..utils.logging import log_info
+from ..utils.logging import log_info, log_warning
 
 # ---------------------------------------------------------------------------
 # Shard schema
@@ -502,6 +502,19 @@ def build_psite_index(
         merged = offsets_df.join(sample_map, on="sample_name", how="inner")
         for row in merged.iter_rows(named=True):
             offset_lookup[(int(row["sample_id"]), int(row["length"]))] = int(row["offset"])
+
+    if not offset_lookup:
+        # Calibration produced no usable per-(sample, length) offsets, so every
+        # read will be indexed with default_offset only — the P-site positions
+        # are NOT frame-corrected and elongation frame scoring will be
+        # unreliable. Usually means a too-thin / low-quality calibration set.
+        log_warning(
+            f"build-psite-index: 0 calibrated (sample, length) offsets — every read "
+            f"will use the flat default_offset={default_offset}, so p_site positions "
+            f"are NOT offset-corrected and frame scoring will be unreliable. Check "
+            f"{out_dir / 'qc_per_sample.parquet'} (likely low_quality library) and "
+            f"calibrate against a canonical CDS annotation (--calibration-gtf)."
+        )
 
     # write numeric offsets table for reference / querying
     if offset_lookup:

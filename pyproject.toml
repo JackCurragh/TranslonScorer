@@ -7,7 +7,9 @@ name = "TranslonScorer"
 version = "0.2.0"
 description = "A CLI for scoring translational events from Ribo-seq data"
 readme = "README.md"
-requires-python = ">=3.10"
+# zarr>=3.1 (a core dep, for the zarr v3 matrix store) requires Python >=3.11,
+# so the package requires 3.11+ despite being alpha.
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [ { name = "Jack Tierney", email = "jackcurragh@gmail.com" } ]
 keywords = ["Ribo-seq", "translation", "ORF", "bioinformatics"]
@@ -16,8 +18,8 @@ classifiers = [
   "Intended Audience :: Science/Research",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
 ]
 
 # Core runtime deps; heavy/optional ones are in extras below
@@ -61,6 +63,10 @@ perf = [
   "psutil>=5.9",
   "memory-profiler==0.61.0",
 ]
+cluster = [
+  # matrix/clustering.py: homogeneous shape clustering (scipy linkage)
+  "scipy>=1.11",
+]
 dev = [
   "pytest==8.2.0",
   "pytest-xdist>=3.5",
@@ -73,7 +79,7 @@ dev = [
   "bump2version>=1.0",
 ]
 full = [
-  "TranslonScorer[bigwig, zarr, viz, fastbam, perf, dev]",
+  "TranslonScorer[bigwig, zarr, viz, fastbam, perf, cluster, dev]",
 ]
 
 [project.urls]

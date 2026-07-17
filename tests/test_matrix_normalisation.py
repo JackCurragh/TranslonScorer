@@ -112,6 +112,7 @@ def test_cluster_aggregate_uses_score_matrix_not_cluster_matrix():
 
 
 def test_homogeneous_shape_clustering_ignores_depth_and_prunes_outliers():
+    pytest.importorskip("scipy")
     from TranslonScorer.matrix.clustering import cluster_locus_shape_homogeneous
 
     raw = np.array(
@@ -158,6 +159,7 @@ def test_homogeneous_shape_clustering_ignores_depth_and_prunes_outliers():
 
 
 def test_homogeneous_shape_clustering_rejects_forced_heterogeneous_cluster():
+    pytest.importorskip("scipy")
     from TranslonScorer.matrix.clustering import cluster_locus_shape_homogeneous
 
     raw = np.array(
@@ -184,6 +186,7 @@ def test_homogeneous_shape_clustering_rejects_forced_heterogeneous_cluster():
 
 
 def test_shape_cluster_driver_diagnostics_rank_discriminating_positions():
+    pytest.importorskip("scipy")
     from TranslonScorer.matrix.clustering import (
         cluster_locus_shape_homogeneous,
         explain_shape_cluster_drivers,

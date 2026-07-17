@@ -32,8 +32,8 @@ from pathlib import Path
 
 import polars as pl
 
-from ..l0b.contracts import VersionKey, write_meta, read_meta
-from .schema import L1_JUNC_SCHEMA, L1_POS_SCHEMA
+from ..l0b.contracts import VersionKey, read_meta, write_meta
+from .schema import L1_JUNC_SCHEMA
 
 log = logging.getLogger(__name__)
 

@@ -44,6 +44,7 @@ import numpy as np
 import polars as pl
 import pysam
 
+from ..utils.logging import log_info
 from .qc import (
     _assign_frames_sweep,
     _bam_chroms,
@@ -56,7 +57,6 @@ from .qc import (
     _ribometric_frame_scores,
     _samples_df,
 )
-from ..utils.logging import log_info
 
 _INDEX_SCHEMA = {
     "read_id": pl.UInt64,
@@ -1433,7 +1433,6 @@ def calibrate_offsets(
 
     # Evaluate three representative offsets (one per mod-3 class)
     # and pick the winning class, then map back to the lowest actual offset.
-    import numpy as _np
 
     # For each (sample, length): build c[0..2] count vector, score each mod class
     # frame_for_p0_at_o = (p0 + o) % 3.  For mod class r = o%3:

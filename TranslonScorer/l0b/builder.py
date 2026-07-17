@@ -20,12 +20,10 @@ import subprocess
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Generator, Sequence
 
-import polars as pl
-import pysam
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pysam
 
 from .contracts import L0B_SCHEMA, VersionKey, write_meta
 
@@ -216,9 +214,6 @@ def _rows_to_batch(rows: list[dict]) -> pa.RecordBatch:
 
 def _build_junction_array(col: list) -> pa.Array:
     """Build a list<struct<donor,acceptor>> array from a list of lists-of-dicts."""
-    struct_type = pa.struct([("donor", pa.int64()), ("acceptor", pa.int64())])
-    list_type = pa.list_(struct_type)
-
     offsets = [0]
     donors: list[int] = []
     acceptors: list[int] = []

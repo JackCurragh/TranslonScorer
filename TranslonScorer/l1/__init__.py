@@ -5,7 +5,7 @@ Two streams per chromosome:
   {chrom}_junc.parquet  — (donor, acceptor, strand, length, sample_id) → count
 """
 
-from .schema import L1_POS_SCHEMA, L1_JUNC_SCHEMA
 from .builder import build_l1
+from .schema import L1_JUNC_SCHEMA, L1_POS_SCHEMA
 
 __all__ = ["L1_POS_SCHEMA", "L1_JUNC_SCHEMA", "build_l1"]

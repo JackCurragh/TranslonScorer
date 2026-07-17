@@ -107,7 +107,7 @@ def test_build_feature_exon_index_gapdh():
 
 def test_assign_tx_positions_cds_start():
     """5'-end at CDS start position → tx_pos=0."""
-    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import _assign_tx_positions, build_feature_exon_index
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -122,7 +122,7 @@ def test_assign_tx_positions_cds_start():
 
 def test_assign_tx_positions_within_exon():
     """5'-end 10 nt into first exon → tx_pos=10."""
-    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import _assign_tx_positions, build_feature_exon_index
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -134,7 +134,7 @@ def test_assign_tx_positions_within_exon():
 
 def test_assign_tx_positions_second_exon():
     """5'-end at start of second exon → tx_pos=30 (first exon length)."""
-    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import _assign_tx_positions, build_feature_exon_index
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -146,7 +146,7 @@ def test_assign_tx_positions_second_exon():
 
 def test_assign_tx_positions_intron_returns_empty():
     """5'-end in an intron (between exon 1 stop and exon 2 start) → no hit."""
-    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import _assign_tx_positions, build_feature_exon_index
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -158,7 +158,7 @@ def test_assign_tx_positions_intron_returns_empty():
 
 def test_assign_tx_positions_multiple_reads():
     """Multiple reads in one batch — all correctly assigned."""
-    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import _assign_tx_positions, build_feature_exon_index
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})
@@ -176,7 +176,7 @@ def test_assign_tx_positions_multiple_reads():
 
 def test_assign_tx_positions_phase0():
     """phase0 = tx_pos % 3; in-frame positions (tx_pos 0,3,6,…) give phase0=0."""
-    from TranslonScorer.matrix.rollup import build_feature_exon_index, _assign_tx_positions
+    from TranslonScorer.matrix.rollup import _assign_tx_positions, build_feature_exon_index
 
     cds = _simple_cds()
     fivs, _ = build_feature_exon_index(cds, {"chr1"})

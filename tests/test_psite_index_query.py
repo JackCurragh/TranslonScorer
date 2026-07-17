@@ -18,11 +18,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import polars as pl
-import pytest
 
 from TranslonScorer.matrix.provider import MatrixProvider
-from TranslonScorer.model import Region, ScoreThresholds
 from TranslonScorer.matrix.psite_index import query_genomic_coverage
+from TranslonScorer.model import Region, ScoreThresholds
 from TranslonScorer.workflows import _score_events_over_provider
 
 _THR = ScoreThresholds()

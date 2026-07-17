@@ -49,11 +49,10 @@ import numpy as np
 import polars as pl
 import pysam
 
-from ..io.annotation import build_gene_spans
 from ..io.bam import normalise_chrom as _normalise_chrom
 from ..io.matrix import _count_parquets, _discover_bam, _manifest, _parse_read_id, _samples_df
-from .qc import _bam_chroms, _build_frame_intervals, fast_reads_qc
 from ..utils.logging import log_info, log_warning
+from .qc import _bam_chroms, _build_frame_intervals, fast_reads_qc
 
 # ---------------------------------------------------------------------------
 # Shard schema
@@ -112,16 +111,16 @@ def calibrate_cohort(
     """
     import json as _json
 
-    from .rollup import (
-        build_matrix_rollup,
-        calibrate_offsets,
-        rollup_to_periodicity,
-    )
     from ..qc import (
         _classify_library,
         _length_distribution_metrics,
         _ligation_bias_metrics,
         _recommend_read_lengths,
+    )
+    from .rollup import (
+        build_matrix_rollup,
+        calibrate_offsets,
+        rollup_to_periodicity,
     )
 
     # Resolve partition_dirs to a list of Path objects

@@ -6,10 +6,9 @@ import time
 from pathlib import Path
 
 import polars as pl
-import pyarrow as pa
 import pytest
 
-from TranslonScorer.l0b.contracts import VersionKey, write_meta
+from TranslonScorer.l0b.contracts import VersionKey
 from TranslonScorer.l1 import build_l1
 from TranslonScorer.l1.schema import L1_JUNC_SCHEMA, L1_POS_SCHEMA
 

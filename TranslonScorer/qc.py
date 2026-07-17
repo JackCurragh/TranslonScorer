@@ -288,7 +288,9 @@ def _length_distribution_metrics(length_counts: Dict[int, float]) -> Dict[str, f
 
     # Bimodality coefficient (Sarle's B)
     try:
-        from scipy.stats import skew as _skew, kurtosis as _kurt, normaltest as _ntest
+        from scipy.stats import kurtosis as _kurt
+        from scipy.stats import normaltest as _ntest
+        from scipy.stats import skew as _skew
 
         expanded = np.repeat(lengths.astype(int), counts.astype(int).clip(0))
         if len(expanded) >= 20:

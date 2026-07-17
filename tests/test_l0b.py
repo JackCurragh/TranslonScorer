@@ -5,14 +5,13 @@ Correctness checks against the local global_partitioned cohort.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
 
-from TranslonScorer.l0b.contracts import L0B_SCHEMA, VersionKey, write_meta, read_meta
 from TranslonScorer.l0b.builder import build_l0b
+from TranslonScorer.l0b.contracts import L0B_SCHEMA, VersionKey, read_meta, write_meta
 
 DATA_DIR = Path(__file__).parent.parent / "data" / "global_partitioned"
 pytestmark = pytest.mark.skipif(not DATA_DIR.exists(), reason="local cohort data not present")
@@ -144,6 +143,7 @@ def test_shard_pos5_rowgroup_statistics(l0b_dir):
 def test_shard_row_count_vs_samtools(l0b_dir):
     """Row count in Parquet should equal number of chr1 alignments across all BAMs."""
     import subprocess
+
     import polars as pl
 
     bam_paths = sorted(

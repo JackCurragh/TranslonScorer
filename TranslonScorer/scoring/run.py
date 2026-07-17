@@ -123,6 +123,82 @@ from TranslonScorer.coverage.profile import (  # noqa: E402, F401
 # ---------------------------------------------------------------------------
 
 
+def _accumulate_contended_coverage(
+    overlaps_df: pl.DataFrame,
+    elong: pl.DataFrame,
+    row_of_event: Dict[int, int],
+    strand: "_np.ndarray",
+    pos_sorted: "_np.ndarray",
+    cum_total: "_np.ndarray",
+    cum_by_frame: "_np.ndarray",
+    n_events: int,
+):
+    """Sum competitor (overlapping-event) coverage per elongation event.
+
+    For each elongation event, the coverage contributed by other events that
+    overlap it (its "competitors") must be subtracted before scoring, so
+    contended reads aren't double-counted. Returns four aligned outputs:
+
+      contended_total[n_events]        competitor read total per event
+      contended_frame[n_events, 3]     competitor reads per frame per event
+      contended_nt[n_events]           competitor-covered nt per event
+      competitor_frames{row: {comp_id: comp_a_site_frame}}
+    """
+    contended_total = _np.zeros(n_events)
+    contended_frame = _np.zeros((n_events, 3))
+    contended_nt = _np.zeros(n_events)
+    competitor_frames: Dict[int, dict] = {}
+    if overlaps_df is None or overlaps_df.is_empty():
+        return contended_total, contended_frame, contended_nt, competitor_frames
+
+    overlaps = (
+        overlaps_df.with_columns(
+            [
+                pl.col("event_id").cast(pl.UInt64),
+                pl.col("other_event_id").cast(pl.UInt64),
+            ]
+        )
+        .filter(pl.col("event_id").is_in(elong["event_id"].cast(pl.UInt64)))
+        .sort(["event_id", "overlap_start"])
+    )
+    if overlaps.is_empty():
+        return contended_total, contended_frame, contended_nt, competitor_frames
+
+    # Merge each event's overlap intervals, collecting flat (start, end, row)
+    # segments to sum in one vectorised _range_sums call.
+    seg_start, seg_end, seg_row = [], [], []
+    for event_id, grp in overlaps.group_by("event_id", maintain_order=True):
+        row = row_of_event[int(event_id[0] if isinstance(event_id, tuple) else event_id)]
+        intervals = sorted(zip(grp["overlap_start"].to_list(), grp["overlap_end"].to_list()))
+        cur_start, cur_end = intervals[0]
+        merged = []
+        for start, end in intervals[1:]:
+            if start <= cur_end:
+                cur_end = max(cur_end, end)
+            else:
+                merged.append((cur_start, cur_end))
+                cur_start, cur_end = start, end
+        merged.append((cur_start, cur_end))
+        for start, end in merged:
+            seg_start.append(start)
+            seg_end.append(end)
+            seg_row.append(row)
+        for comp_id, comp_phase in zip(
+            grp["other_event_id"].to_list(), grp["comp_phase"].to_list()
+        ):
+            comp_frame = (-comp_phase) % 3 if strand[row] > 0 else comp_phase % 3
+            competitor_frames.setdefault(row, {})[int(comp_id)] = int(comp_frame)
+
+    seg_start = _np.array(seg_start, dtype=_np.int64)
+    seg_end = _np.array(seg_end, dtype=_np.int64)
+    seg_row = _np.array(seg_row)
+    seg_total, seg_frame, _ = _range_sums(pos_sorted, cum_total, cum_by_frame, seg_start, seg_end)
+    _np.add.at(contended_total, seg_row, seg_total)
+    _np.add.at(contended_frame, seg_row, seg_frame)
+    _np.add.at(contended_nt, seg_row, (seg_end - seg_start))
+    return contended_total, contended_frame, contended_nt, competitor_frames
+
+
 def score_elongation_batch(
     elong: pl.DataFrame,
     overlaps_df: pl.DataFrame,
@@ -135,76 +211,52 @@ def score_elongation_batch(
     only the summation is vectorised."""
     if elong.is_empty():
         return {}
-    p, cum_all, cum_f = _prefix_sums(cov_pos, cov_cnt)
-    eids = elong["event_id"].to_numpy()
+    pos_sorted, cum_total, cum_by_frame = _prefix_sums(cov_pos, cov_cnt)
+    event_ids = elong["event_id"].to_numpy()
     starts = elong["start"].to_numpy().astype(_np.int64)
     ends = elong["end"].to_numpy().astype(_np.int64)
     phase = elong["phase"].to_numpy().astype(_np.int64)
     strand = elong["strand"].to_numpy().astype(_np.int64)
-    a_e = _np.where(strand > 0, _np.mod(-phase, 3), _np.mod(phase, 3))
+    expected_frame = _np.where(strand > 0, _np.mod(-phase, 3), _np.mod(phase, 3))
 
-    tot_w, fr_w, ncov_w = _range_sums(p, cum_all, cum_f, starts, ends)
-    idx_of = {int(e): i for i, e in enumerate(eids)}
+    total_reads, frame_reads, covered_positions = _range_sums(
+        pos_sorted, cum_total, cum_by_frame, starts, ends
+    )
+    row_of_event = {int(e): i for i, e in enumerate(event_ids)}
 
-    cont_tot = _np.zeros(len(eids))
-    cont_fr = _np.zeros((len(eids), 3))
-    cont_nt = _np.zeros(len(eids))
-    comp_frames: Dict[int, dict] = {}
-    if overlaps_df is not None and not overlaps_df.is_empty():
-        od = (
-            overlaps_df.with_columns(
-                [
-                    pl.col("event_id").cast(pl.UInt64),
-                    pl.col("other_event_id").cast(pl.UInt64),
-                ]
-            )
-            .filter(pl.col("event_id").is_in(elong["event_id"].cast(pl.UInt64)))
-            .sort(["event_id", "overlap_start"])
-        )
-        if not od.is_empty():
-            m_start, m_end, m_idx = [], [], []
-            for eid, grp in od.group_by("event_id", maintain_order=True):
-                i = idx_of[int(eid[0] if isinstance(eid, tuple) else eid)]
-                ivs = sorted(zip(grp["overlap_start"].to_list(), grp["overlap_end"].to_list()))
-                cs, ce = ivs[0]
-                merged = []
-                for s, e in ivs[1:]:
-                    if s <= ce:
-                        ce = max(ce, e)
-                    else:
-                        merged.append((cs, ce))
-                        cs, ce = s, e
-                merged.append((cs, ce))
-                for s, e in merged:
-                    m_start.append(s)
-                    m_end.append(e)
-                    m_idx.append(i)
-                for cid, cph in zip(grp["other_event_id"].to_list(), grp["comp_phase"].to_list()):
-                    af = (-cph) % 3 if strand[i] > 0 else cph % 3
-                    comp_frames.setdefault(i, {})[int(cid)] = int(af)
-            m_start = _np.array(m_start, dtype=_np.int64)
-            m_end = _np.array(m_end, dtype=_np.int64)
-            m_idx = _np.array(m_idx)
-            o_tot, o_fr, _ = _range_sums(p, cum_all, cum_f, m_start, m_end)
-            _np.add.at(cont_tot, m_idx, o_tot)
-            _np.add.at(cont_fr, m_idx, o_fr)
-            _np.add.at(cont_nt, m_idx, (m_end - m_start))
+    (
+        contended_total,
+        contended_frame,
+        contended_nt,
+        competitor_frames,
+    ) = _accumulate_contended_coverage(
+        overlaps_df,
+        elong,
+        row_of_event,
+        strand,
+        pos_sorted,
+        cum_total,
+        cum_by_frame,
+        len(event_ids),
+    )
 
     out: Dict[int, dict] = {}
-    for i, eid in enumerate(eids):
-        clean_tot = float(tot_w[i] - cont_tot[i])
-        clean_inf = float(fr_w[i][a_e[i]] - cont_fr[i][a_e[i]])
-        out[int(eid)] = _elong_evidence(
-            float(tot_w[i]),
-            int(ncov_w[i]),
-            clean_tot,
-            clean_inf,
-            float(cont_tot[i]),
-            list(map(float, cont_fr[i])),
-            int(a_e[i]),
-            comp_frames.get(i, {}),
-            int(cont_nt[i]),
-            int(ends[i] - starts[i]),
+    for row, event_id in enumerate(event_ids):
+        clean_total = float(total_reads[row] - contended_total[row])
+        clean_in_frame = float(
+            frame_reads[row][expected_frame[row]] - contended_frame[row][expected_frame[row]]
+        )
+        out[int(event_id)] = _elong_evidence(
+            float(total_reads[row]),
+            int(covered_positions[row]),
+            clean_total,
+            clean_in_frame,
+            float(contended_total[row]),
+            list(map(float, contended_frame[row])),
+            int(expected_frame[row]),
+            competitor_frames.get(row, {}),
+            int(contended_nt[row]),
+            int(ends[row] - starts[row]),
             thr,
         )
     return out

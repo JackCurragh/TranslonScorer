@@ -96,13 +96,18 @@ def extract_events_workflow(
         blocks, translons = fs.from_bed12(bed12_path)
     elif bigbed_path is not None:
         blocks, translons = fs.from_bigbed(bigbed_path)
-    else:
+    elif fasta_path is not None:
         blocks, translons = fs.from_fasta(
             fasta_path,
             start_codons=start_codons,
             stop_codons=stop_codons,
             min_len=min_len,
             max_len=max_len,
+        )
+    else:
+        raise ValueError(
+            "extract_events_workflow: provide exactly one feature source "
+            "(sqlite/gtf/bed12/bigbed/fasta)"
         )
     return write_events(
         blocks,

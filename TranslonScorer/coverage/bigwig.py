@@ -21,7 +21,7 @@ Requires pyBigWig (pip install pyBigWig).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import polars as pl
 
@@ -121,7 +121,10 @@ class BigwigSetProvider:
                         "stranded=True requires every bigwig entry to be a dict with "
                         f"'forward'/'reverse' keys; got {bw_entry!r} for sample {sample_id!r}"
                     )
-                sources = [(bw_entry["forward"], 1), (bw_entry["reverse"], -1)]
+                sources: List[Tuple[Union[str, Path], Optional[int]]] = [
+                    (bw_entry["forward"], 1),
+                    (bw_entry["reverse"], -1),
+                ]
             elif isinstance(bw_entry, (str, Path)):
                 sources = [(bw_entry, None)]
             else:

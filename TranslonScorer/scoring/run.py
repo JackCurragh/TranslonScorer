@@ -124,13 +124,13 @@ from TranslonScorer.coverage.profile import (  # noqa: E402, F401
 
 
 def _accumulate_contended_coverage(
-    overlaps_df: pl.DataFrame,
+    overlaps_df: Optional[pl.DataFrame],
     elong: pl.DataFrame,
     row_of_event: Dict[int, int],
     strand: "_np.ndarray",
     pos_sorted: "_np.ndarray",
     cum_total: "_np.ndarray",
-    cum_by_frame: "_np.ndarray",
+    cum_by_frame: List,
     n_events: int,
 ):
     """Sum competitor (overlapping-event) coverage per elongation event.
@@ -166,7 +166,9 @@ def _accumulate_contended_coverage(
 
     # Merge each event's overlap intervals, collecting flat (start, end, row)
     # segments to sum in one vectorised _range_sums call.
-    seg_start, seg_end, seg_row = [], [], []
+    seg_starts: List[int] = []
+    seg_ends: List[int] = []
+    seg_rows: List[int] = []
     for event_id, grp in overlaps.group_by("event_id", maintain_order=True):
         row = row_of_event[int(event_id[0] if isinstance(event_id, tuple) else event_id)]
         intervals = sorted(zip(grp["overlap_start"].to_list(), grp["overlap_end"].to_list()))
@@ -180,18 +182,18 @@ def _accumulate_contended_coverage(
                 cur_start, cur_end = start, end
         merged.append((cur_start, cur_end))
         for start, end in merged:
-            seg_start.append(start)
-            seg_end.append(end)
-            seg_row.append(row)
+            seg_starts.append(start)
+            seg_ends.append(end)
+            seg_rows.append(row)
         for comp_id, comp_phase in zip(
             grp["other_event_id"].to_list(), grp["comp_phase"].to_list()
         ):
             comp_frame = (-comp_phase) % 3 if strand[row] > 0 else comp_phase % 3
             competitor_frames.setdefault(row, {})[int(comp_id)] = int(comp_frame)
 
-    seg_start = _np.array(seg_start, dtype=_np.int64)
-    seg_end = _np.array(seg_end, dtype=_np.int64)
-    seg_row = _np.array(seg_row)
+    seg_start = _np.array(seg_starts, dtype=_np.int64)
+    seg_end = _np.array(seg_ends, dtype=_np.int64)
+    seg_row = _np.array(seg_rows)
     seg_total, seg_frame, _ = _range_sums(pos_sorted, cum_total, cum_by_frame, seg_start, seg_end)
     _np.add.at(contended_total, seg_row, seg_total)
     _np.add.at(contended_frame, seg_row, seg_frame)
@@ -201,7 +203,7 @@ def _accumulate_contended_coverage(
 
 def score_elongation_batch(
     elong: pl.DataFrame,
-    overlaps_df: pl.DataFrame,
+    overlaps_df: Optional[pl.DataFrame],
     cov_pos: "_np.ndarray",
     cov_cnt: "_np.ndarray",
     thr: ScoreThresholds = DEFAULT_THRESHOLDS,
@@ -272,7 +274,7 @@ def score_events(
     coverage: Dict[int, float],
     *,
     overlaps: Optional[Dict[int, list]] = None,
-    junction_support: Optional[Dict[int, float]] = None,
+    junction_support: Optional[Dict[int, dict]] = None,
     group: str = "aggregate",
     tier: str = "aggregate",
     thr: ScoreThresholds = DEFAULT_THRESHOLDS,
@@ -346,7 +348,7 @@ def score_events_vectorised(
     cov_df: pl.DataFrame,
     *,
     overlaps_df: Optional[pl.DataFrame] = None,
-    junction_support: Optional[Dict[int, float]] = None,
+    junction_support: Optional[Dict[int, dict]] = None,
     group: str = "aggregate",
     tier: str = "aggregate",
     thr: ScoreThresholds = DEFAULT_THRESHOLDS,

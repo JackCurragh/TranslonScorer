@@ -172,40 +172,69 @@ def cli():
 
 @cli.command("build-cache")
 @click.option(
-    "--partition-dir", "-p", required=True,
+    "--partition-dir",
+    "-p",
+    required=True,
     help="Root of global_partitioned directory (contains per-prefix subdirs with BAMs and counts).",
 )
 @click.option(
-    "--out-dir", "-o", required=True,
+    "--out-dir",
+    "-o",
+    required=True,
     help="Output root; L0b written to <out-dir>/l0b/, L1 to <out-dir>/l1/.",
 )
 @click.option("--genome-id", default="GRCh38.p14", show_default=True, help="Genome assembly ID.")
-@click.option("--junction-set-id", default="GENCODE_v44", show_default=True, help="Junction set label.")
-@click.option("--l0a-version", default="2026-06", show_default=True, help="L0a data-release version.")
-@click.option("--aligner-cfg-hash", default="default", show_default=True, help="Aligner config fingerprint.")
 @click.option(
-    "--chroms", multiple=True,
+    "--junction-set-id", default="GENCODE_v44", show_default=True, help="Junction set label."
+)
+@click.option(
+    "--l0a-version", default="2026-06", show_default=True, help="L0a data-release version."
+)
+@click.option(
+    "--aligner-cfg-hash", default="default", show_default=True, help="Aligner config fingerprint."
+)
+@click.option(
+    "--chroms",
+    multiple=True,
     help="Chromosomes to build (repeat flag; default: all in BAM header).",
 )
 @click.option("--workers", default=4, show_default=True, help="Parallel chromosome workers.")
-@click.option("--samtools-threads", default=2, show_default=True, help="Threads per samtools call (L0b only).")
 @click.option(
-    "--bam-glob", default="unique_reads.*.bam", show_default=True,
-    help="Glob (per partition subdir) for the canonical BAM. Must match exactly "
-         "one file per partition — e.g. 'unique_reads.*.filtered.bam' if both a "
-         "raw and a filtered BAM are present.",
+    "--samtools-threads", default=2, show_default=True, help="Threads per samtools call (L0b only)."
 )
 @click.option(
-    "--skip-l0b", is_flag=True, default=False,
+    "--bam-glob",
+    default="unique_reads.*.bam",
+    show_default=True,
+    help="Glob (per partition subdir) for the canonical BAM. Must match exactly "
+    "one file per partition — e.g. 'unique_reads.*.filtered.bam' if both a "
+    "raw and a filtered BAM are present.",
+)
+@click.option(
+    "--skip-l0b",
+    is_flag=True,
+    default=False,
     help="Skip L0b build (use when L0b already exists in <out-dir>/l0b/).",
 )
 @click.option(
-    "--skip-l1", is_flag=True, default=False,
+    "--skip-l1",
+    is_flag=True,
+    default=False,
     help="Skip L1 build.",
 )
 def build_cache(
-    partition_dir, out_dir, genome_id, junction_set_id, l0a_version,
-    aligner_cfg_hash, chroms, workers, samtools_threads, bam_glob, skip_l0b, skip_l1,
+    partition_dir,
+    out_dir,
+    genome_id,
+    junction_set_id,
+    l0a_version,
+    aligner_cfg_hash,
+    chroms,
+    workers,
+    samtools_threads,
+    bam_glob,
+    skip_l0b,
+    skip_l1,
 ):
     """Build the durable evidence cache: L0b alignment loci + L1 raw 5′ positional index.
 
@@ -230,6 +259,7 @@ def build_cache(
     """
     import logging
     from pathlib import Path
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     from .l0b import build_l0b
@@ -253,7 +283,9 @@ def build_cache(
     if not skip_l0b:
         logging.info("=== Building L0b ===")
         build_l0b(
-            partition_path, l0b_path, key,
+            partition_path,
+            l0b_path,
+            key,
             chroms=chrom_list,
             workers=workers,
             samtools_threads=samtools_threads,
@@ -265,7 +297,10 @@ def build_cache(
     if not skip_l1:
         logging.info("=== Building L1 ===")
         build_l1(
-            l0b_path, partition_path, l1_path, key,
+            l0b_path,
+            partition_path,
+            l1_path,
+            key,
             chroms=chrom_list,
             workers=workers,
         )
@@ -1783,9 +1818,7 @@ def build_psite_index_cmd(
     if not skip_calibration:
         # Phase 1: calibrate using the FULL annotation (not chrom-filtered)
         # so all samples get calibrated offsets even for a chrom-restricted build.
-        offsets_df, qc_df = calibrate_cohort(
-            matrix_dir, cal_cds_df, n_workers=n_workers
-        )
+        offsets_df, qc_df = calibrate_cohort(matrix_dir, cal_cds_df, n_workers=n_workers)
         offsets_df.write_parquet(out_path / "offsets.parquet")
         qc_df.write_parquet(out_path / "qc_per_sample.parquet")
         log_info(
@@ -1987,7 +2020,9 @@ def score_matrix_cmd(
         if psite_index_dir:
             log_info(f"P-site index path: reading offset-corrected coverage from {psite_index_dir}")
         else:
-            log_info("Legacy flat-offset path (no --gtf/--psite-index); frame scoring may be inaccurate")
+            log_info(
+                "Legacy flat-offset path (no --gtf/--psite-index); frame scoring may be inaccurate"
+            )
         written = score_matrix_workflow(
             events_dir,
             part_dirs,
@@ -2599,10 +2634,12 @@ def pipeline_cmd(
             raise click.BadParameter("provide only one of --cds-bigbed or --cds-gtf, not both")
         if cds_bigbed_path:
             from .io.annotation import build_cds_blocks_from_bigbed
+
             log_info(f"FrameRollup path: loading CDS blocks from BigBed {cds_bigbed_path}")
             cds_df = build_cds_blocks_from_bigbed(cds_bigbed_path)
         else:
             from .io.annotation import build_cds_blocks
+
             log_info(f"FrameRollup path: loading CDS blocks from GTF {cds_gtf_path}")
             cds_df = build_cds_blocks(cds_gtf_path)
     paths = pipeline_workflow(

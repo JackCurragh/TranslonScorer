@@ -2,6 +2,7 @@
 
 Correctness checks against the local global_partitioned cohort.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,21 +15,31 @@ from TranslonScorer.l0b.contracts import L0B_SCHEMA, VersionKey, write_meta, rea
 from TranslonScorer.l0b.builder import build_l0b
 
 DATA_DIR = Path(__file__).parent.parent / "data" / "global_partitioned"
-pytestmark = pytest.mark.skipif(
-    not DATA_DIR.exists(), reason="local cohort data not present"
-)
+pytestmark = pytest.mark.skipif(not DATA_DIR.exists(), reason="local cohort data not present")
 
 
 # ---------------------------------------------------------------------------
 # Contract tests (fast, no I/O beyond schema inspection)
 # ---------------------------------------------------------------------------
 
+
 def test_schema_field_names():
     names = [f.name for f in L0B_SCHEMA]
     required = [
-        "read_id", "chrom", "pos5", "end", "strand", "length",
-        "cigar", "mapq", "nh", "is_secondary", "aln_score",
-        "mismatches", "junctions_crossed", "weight",
+        "read_id",
+        "chrom",
+        "pos5",
+        "end",
+        "strand",
+        "length",
+        "cigar",
+        "mapq",
+        "nh",
+        "is_secondary",
+        "aln_score",
+        "mismatches",
+        "junctions_crossed",
+        "weight",
     ]
     assert names == required
 
@@ -64,6 +75,7 @@ def test_read_meta_missing(tmp_path):
 # ---------------------------------------------------------------------------
 # Builder tests (need local cohort data + samtools)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def l0b_dir(tmp_path_factory):
@@ -106,6 +118,7 @@ def test_shard_pos5_sorted_within_row_groups(l0b_dir):
     BAM.  Within each batch the sort is applied before writing.
     """
     import pyarrow.parquet as pq
+
     shard = l0b_dir / "chr1.parquet"
     pf = pq.ParquetFile(str(shard))
     for rg_idx in range(pf.metadata.num_row_groups):
@@ -143,20 +156,23 @@ def test_shard_row_count_vs_samtools(l0b_dir):
     for bam in bam_paths:
         r = subprocess.run(
             ["samtools", "view", "-c", str(bam), "chr1"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         total_from_samtools += int(r.stdout.strip())
 
     shard = l0b_dir / "chr1.parquet"
     n_parquet = len(pl.read_parquet(shard))
-    assert n_parquet == total_from_samtools, (
-        f"row count mismatch: parquet={n_parquet}, samtools={total_from_samtools}"
-    )
+    assert (
+        n_parquet == total_from_samtools
+    ), f"row count mismatch: parquet={n_parquet}, samtools={total_from_samtools}"
 
 
 def test_read_id_uniqueness_not_enforced_at_l0b(l0b_dir):
     """read_id is NOT unique in L0b — multimappers appear once per alignment."""
     import polars as pl
+
     shard = l0b_dir / "chr1.parquet"
     df = pl.read_parquet(shard)
     n_rows = len(df)
@@ -168,6 +184,7 @@ def test_read_id_uniqueness_not_enforced_at_l0b(l0b_dir):
 def test_nh_tag_used_not_count(l0b_dir):
     """NH values > 1 must appear (not just 1s from bad fallback)."""
     import polars as pl
+
     shard = l0b_dir / "chr1.parquet"
     df = pl.read_parquet(shard)
     assert df.filter(pl.col("nh") > 1).height > 0, "expected multimapper rows with NH>1"
@@ -175,6 +192,7 @@ def test_nh_tag_used_not_count(l0b_dir):
 
 def test_chrom_column_correct(l0b_dir):
     import polars as pl
+
     shard = l0b_dir / "chr1.parquet"
     df = pl.read_parquet(shard)
     assert df["chrom"].unique().to_list() == ["chr1"]
@@ -183,6 +201,7 @@ def test_chrom_column_correct(l0b_dir):
 def test_resumable_no_rebuild(l0b_dir):
     """Re-running build_l0b with the same output dir returns immediately (checkpoint)."""
     import time
+
     key = VersionKey("GRCh38.p14", "testcfg", "GENCODE_v44", "2026-06", "unique_only")
     t0 = time.monotonic()
     build_l0b(DATA_DIR, l0b_dir, key, chroms=["chr1"], workers=1, samtools_threads=1)

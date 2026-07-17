@@ -56,6 +56,8 @@ class _DictCoverageProvider:
 
     def size_factors(self):
         return {"": 1.0}
+
+
 GOLDEN_PATH = REPO_ROOT / "outputs" / "reference_scores_gapdh.parquet"
 
 _THR = ScoreThresholds()

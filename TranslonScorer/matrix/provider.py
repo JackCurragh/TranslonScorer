@@ -188,5 +188,3 @@ class MatrixProvider:
     def mappability_ledger(self, events: pl.DataFrame) -> pl.DataFrame:
         """Return empty mappability ledger (full implementation deferred to T12)."""
         return pl.DataFrame(schema=MAPPABILITY_LEDGER_SCHEMA)
-
-

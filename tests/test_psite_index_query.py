@@ -206,13 +206,42 @@ def test_end_to_end_psite_index_scores_gapdh_shape(tmp_path: Path):
 
     events = pl.DataFrame(
         [
-            {"event_id": 1, "type": "init", "chrom": "chr1", "strand": 1, "start": 99, "end": 100, "phase": None},
-            {"event_id": 2, "type": "elongation", "chrom": "chr1", "strand": 1, "start": 100, "end": 190, "phase": 0},
-            {"event_id": 3, "type": "term", "chrom": "chr1", "strand": 1, "start": 190, "end": 191, "phase": None},
+            {
+                "event_id": 1,
+                "type": "init",
+                "chrom": "chr1",
+                "strand": 1,
+                "start": 99,
+                "end": 100,
+                "phase": None,
+            },
+            {
+                "event_id": 2,
+                "type": "elongation",
+                "chrom": "chr1",
+                "strand": 1,
+                "start": 100,
+                "end": 190,
+                "phase": 0,
+            },
+            {
+                "event_id": 3,
+                "type": "term",
+                "chrom": "chr1",
+                "strand": 1,
+                "start": 190,
+                "end": 191,
+                "phase": None,
+            },
         ],
         schema={
-            "event_id": pl.UInt64, "type": pl.Utf8, "chrom": pl.Utf8,
-            "strand": pl.Int64, "start": pl.Int64, "end": pl.Int64, "phase": pl.Int64,
+            "event_id": pl.UInt64,
+            "type": pl.Utf8,
+            "chrom": pl.Utf8,
+            "strand": pl.Int64,
+            "start": pl.Int64,
+            "end": pl.Int64,
+            "phase": pl.Int64,
         },
     )
     # site="P": query positions match the synthetic p_site values directly

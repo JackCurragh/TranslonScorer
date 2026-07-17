@@ -70,9 +70,7 @@ def score_elongation_from_rollup(
             pl.col("n_reads").sum().alias("n_reads"),
             pl.col("frame0_count").sum().alias("frame0_count"),
         )
-        .with_columns(
-            (pl.col("frame0_count") / pl.col("n_reads")).alias("elong_in_frame")
-        )
+        .with_columns((pl.col("frame0_count") / pl.col("n_reads")).alias("elong_in_frame"))
     )
     fid_to_row = {r["feature_id"]: r for r in agg.iter_rows(named=True)}
 
@@ -253,13 +251,21 @@ def score_events(
         t, eid = r["type"], r["event_id"]
         if t == "init":
             raw = score_initiation_event(
-                r["start"], r["strand"], coverage, thr=thr,
-                chrom=r.get("chrom"), splice_context=splice_context,
+                r["start"],
+                r["strand"],
+                coverage,
+                thr=thr,
+                chrom=r.get("chrom"),
+                splice_context=splice_context,
             )
         elif t == "term":
             raw = score_termination_event(
-                r["start"], r["strand"], coverage, thr=thr,
-                chrom=r.get("chrom"), splice_context=splice_context,
+                r["start"],
+                r["strand"],
+                coverage,
+                thr=thr,
+                chrom=r.get("chrom"),
+                splice_context=splice_context,
             )
         elif t == "elongation":
             raw = score_elongation_event(
@@ -323,13 +329,21 @@ def score_events_vectorised(
                 continue
         elif t == "init":
             raw = score_initiation_event(
-                r["start"], r["strand"], coverage, thr=thr,
-                chrom=r.get("chrom"), splice_context=splice_context,
+                r["start"],
+                r["strand"],
+                coverage,
+                thr=thr,
+                chrom=r.get("chrom"),
+                splice_context=splice_context,
             )
         elif t == "term":
             raw = score_termination_event(
-                r["start"], r["strand"], coverage, thr=thr,
-                chrom=r.get("chrom"), splice_context=splice_context,
+                r["start"],
+                r["strand"],
+                coverage,
+                thr=thr,
+                chrom=r.get("chrom"),
+                splice_context=splice_context,
             )
         elif t == "junction":
             raw = score_junction_event(junction_support.get(eid, {}), thr=thr)

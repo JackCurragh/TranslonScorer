@@ -183,7 +183,12 @@ def _step_score(
             pos, strand, L, body_side=forward_is_body, chrom=chrom, splice_context=splice_context
         )
         out_pos, sp2 = _project_flank(
-            pos, strand, L, body_side=not forward_is_body, chrom=chrom, splice_context=splice_context
+            pos,
+            strand,
+            L,
+            body_side=not forward_is_body,
+            chrom=chrom,
+            splice_context=splice_context,
         )
         flank_spliced = flank_spliced or sp1 or sp2
         body_med, _, _ = _codon_levels(coverage, body_pos)
@@ -199,7 +204,12 @@ def _step_score(
     out_med, out_max, _ = _codon_levels(coverage, out_pos_ref)
     flank_peakiness = (out_max / out_med) if out_med > 0 else (float("inf") if out_max > 0 else 0.0)
     body_pos_min, _ = _project_flank(
-        pos, strand, min(flanks), body_side=forward_is_body, chrom=chrom, splice_context=splice_context
+        pos,
+        strand,
+        min(flanks),
+        body_side=forward_is_body,
+        chrom=chrom,
+        splice_context=splice_context,
     )
     n_reads = _codon_levels(coverage, body_pos_min)[2]
     return {

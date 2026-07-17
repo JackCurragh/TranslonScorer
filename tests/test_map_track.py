@@ -52,9 +52,7 @@ def _events() -> pl.DataFrame:
 
 def test_map_track_for_chrom_real_bigwig(tmp_path: Path):
     bw = tmp_path / "map.bw"
-    _write_bw(
-        bw, "chr1", 20000, [(0, 5000, 0.1), (5000, 15000, 0.95), (15000, 20000, 0.1)]
-    )
+    _write_bw(bw, "chr1", 20000, [(0, 5000, 0.1), (5000, 15000, 0.95), (15000, 20000, 0.1)])
     provider = BigwigSetProvider([str(bw)])
 
     out = _map_track_for_chrom(provider, _events(), _THR)
@@ -75,13 +73,42 @@ def test_map_track_never_changes_call_or_eligibility(tmp_path: Path):
 
     events = pl.DataFrame(
         [
-            {"event_id": 1, "type": "init", "chrom": "chr1", "strand": 1, "start": 99, "end": 100, "phase": None},
-            {"event_id": 2, "type": "elongation", "chrom": "chr1", "strand": 1, "start": 100, "end": 190, "phase": 0},
-            {"event_id": 3, "type": "term", "chrom": "chr1", "strand": 1, "start": 190, "end": 191, "phase": None},
+            {
+                "event_id": 1,
+                "type": "init",
+                "chrom": "chr1",
+                "strand": 1,
+                "start": 99,
+                "end": 100,
+                "phase": None,
+            },
+            {
+                "event_id": 2,
+                "type": "elongation",
+                "chrom": "chr1",
+                "strand": 1,
+                "start": 100,
+                "end": 190,
+                "phase": 0,
+            },
+            {
+                "event_id": 3,
+                "type": "term",
+                "chrom": "chr1",
+                "strand": 1,
+                "start": 190,
+                "end": 191,
+                "phase": None,
+            },
         ],
         schema={
-            "event_id": pl.UInt64, "type": pl.Utf8, "chrom": pl.Utf8,
-            "strand": pl.Int64, "start": pl.Int64, "end": pl.Int64, "phase": pl.Int64,
+            "event_id": pl.UInt64,
+            "type": pl.Utf8,
+            "chrom": pl.Utf8,
+            "strand": pl.Int64,
+            "start": pl.Int64,
+            "end": pl.Int64,
+            "phase": pl.Int64,
         },
     )
     cov = {p: 2.0 for p in range(40, 99)}
@@ -123,13 +150,42 @@ def test_map_track_survives_into_composed_report(tmp_path: Path):
 
     events = pl.DataFrame(
         [
-            {"event_id": 1, "type": "init", "chrom": "chr1", "strand": 1, "start": 99, "end": 100, "phase": None},
-            {"event_id": 2, "type": "elongation", "chrom": "chr1", "strand": 1, "start": 100, "end": 190, "phase": 0},
-            {"event_id": 3, "type": "term", "chrom": "chr1", "strand": 1, "start": 190, "end": 191, "phase": None},
+            {
+                "event_id": 1,
+                "type": "init",
+                "chrom": "chr1",
+                "strand": 1,
+                "start": 99,
+                "end": 100,
+                "phase": None,
+            },
+            {
+                "event_id": 2,
+                "type": "elongation",
+                "chrom": "chr1",
+                "strand": 1,
+                "start": 100,
+                "end": 190,
+                "phase": 0,
+            },
+            {
+                "event_id": 3,
+                "type": "term",
+                "chrom": "chr1",
+                "strand": 1,
+                "start": 190,
+                "end": 191,
+                "phase": None,
+            },
         ],
         schema={
-            "event_id": pl.UInt64, "type": pl.Utf8, "chrom": pl.Utf8,
-            "strand": pl.Int64, "start": pl.Int64, "end": pl.Int64, "phase": pl.Int64,
+            "event_id": pl.UInt64,
+            "type": pl.Utf8,
+            "chrom": pl.Utf8,
+            "strand": pl.Int64,
+            "start": pl.Int64,
+            "end": pl.Int64,
+            "phase": pl.Int64,
         },
     )
     cov = {p: 2.0 for p in range(40, 99)}

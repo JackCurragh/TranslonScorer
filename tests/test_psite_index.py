@@ -279,9 +279,7 @@ def test_query_coverage_index_feature_filter(tmp_path):
         {"p_site": 2000, "strand": True, "length": 28, "sample_id": 0, "count": 1.0},
     ]
     _write_shard(tmp_path, "chr1", rows)
-    result = query_coverage_index(
-        tmp_path, cds, feature_ids=["feat1"], chroms=["chr1"]
-    )
+    result = query_coverage_index(tmp_path, cds, feature_ids=["feat1"], chroms=["chr1"])
     assert all(r == "feat1" for r in result["feature_id"].to_list())
 
 

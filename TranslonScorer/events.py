@@ -53,6 +53,7 @@ def build_splice_context(gtf_path: str) -> SpliceContext:
                 raw.setdefault((chrom, strand), set()).add((donor, acceptor))
     return {k: sorted(v) for k, v in raw.items()}
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -317,9 +318,7 @@ def extract_events(
         # Only add events not already in the intra-ORF set (dedup by event_id)
         if ctx_junc_events.height:
             existing = set(junc_events["event_id"].to_list()) if junc_events.height else set()
-            ctx_junc_events = ctx_junc_events.filter(
-                ~pl.col("event_id").is_in(list(existing))
-            )
+            ctx_junc_events = ctx_junc_events.filter(~pl.col("event_id").is_in(list(existing)))
             junc_events = pl.concat([junc_events, ctx_junc_events])
             fe_junc = pl.concat([fe_junc, ctx_fe_junc])
 

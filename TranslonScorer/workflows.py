@@ -493,12 +493,12 @@ def score_matrix_rollup_workflow(
         raw = elong_ev.get(r["event_id"])
         if raw is None:
             continue
-        rows.append(event_record(r["event_id"], "elongation", "aggregate", "aggregate", raw, thr.version))
+        rows.append(
+            event_record(r["event_id"], "elongation", "aggregate", "aggregate", raw, thr.version)
+        )
 
     result = (
-        pl.from_dicts(rows, schema=_RECORD_SCHEMA)
-        if rows
-        else pl.DataFrame(schema=_RECORD_SCHEMA)
+        pl.from_dicts(rows, schema=_RECORD_SCHEMA) if rows else pl.DataFrame(schema=_RECORD_SCHEMA)
     )
     return persist_scores(
         result,

@@ -1478,14 +1478,13 @@ def calibrate_offsets(
     modal_offset: Dict[int, int] = {}
     if offsets:
         from collections import Counter
+
         length_votes: Dict[int, Counter] = {}
         for (_, length), off in offsets.items():
             length_votes.setdefault(length, Counter())[off] += 1
         modal_offset = {length: ctr.most_common(1)[0][0] for length, ctr in length_votes.items()}
 
-    all_lengths = (
-        agg.select(["sample_name", "length"]).unique().iter_rows()
-    )
+    all_lengths = agg.select(["sample_name", "length"]).unique().iter_rows()
     for sample, length in all_lengths:
         key = (str(sample), int(length))
         if key not in offsets and int(length) in modal_offset:
@@ -1881,9 +1880,7 @@ def build_frame_rollup(
     if n_workers is None:
         n_workers = min(len(dirs), os.cpu_count() or 1)
 
-    log_info(
-        f"build_frame_rollup ({multimap_mode}): {len(dirs)} partitions, {n_workers} worker(s)"
-    )
+    log_info(f"build_frame_rollup ({multimap_mode}): {len(dirs)} partitions, {n_workers} worker(s)")
 
     dir_strs = [str(d) for d in dirs]
     if n_workers <= 1:
@@ -1963,9 +1960,8 @@ def _ci_worker(pdir_str: str) -> bytes:
     if _FCTX["multimap_mode"] == "unique":
         base = base.filter(pl.col("n_align") == 1)
 
-    out = (
-        base.group_by(["sample_name", "feature_id", "tx_pos", "length", "strand"])
-        .agg(pl.col("count").sum().alias("count"))
+    out = base.group_by(["sample_name", "feature_id", "tx_pos", "length", "strand"]).agg(
+        pl.col("count").sum().alias("count")
     )
     b = io.BytesIO()
     out.write_ipc(b)
@@ -2075,9 +2071,7 @@ def profile_from_index(
     )
 
     if normalise:
-        totals = profile.group_by("feature_id").agg(
-            pl.col("count").sum().alias("_total")
-        )
+        totals = profile.group_by("feature_id").agg(pl.col("count").sum().alias("_total"))
         profile = (
             profile.join(totals, on="feature_id")
             .with_columns((pl.col("count") / pl.col("_total")).alias("count"))
@@ -2139,24 +2133,20 @@ def score_frame_rollup(
     )
 
     # Pivot: sum counts per frame for each (sample, feature_id, length) key
-    grouped = (
-        df.group_by(["sample_name", "feature_id", "length", "strand", "_frame"])
-        .agg(pl.col("count").sum())
+    grouped = df.group_by(["sample_name", "feature_id", "length", "strand", "_frame"]).agg(
+        pl.col("count").sum()
     )
-    pivoted = (
-        grouped.pivot(
-            on="_frame",
-            index=["sample_name", "feature_id", "length", "strand"],
-            values="count",
-            aggregate_function="sum",
-        )
-        .rename(
-            {
-                str(i): f"frame{i}_count"
-                for i in range(3)
-                if str(i) in grouped["_frame"].cast(pl.Utf8).unique().to_list()
-            }
-        )
+    pivoted = grouped.pivot(
+        on="_frame",
+        index=["sample_name", "feature_id", "length", "strand"],
+        values="count",
+        aggregate_function="sum",
+    ).rename(
+        {
+            str(i): f"frame{i}_count"
+            for i in range(3)
+            if str(i) in grouped["_frame"].cast(pl.Utf8).unique().to_list()
+        }
     )
     # Ensure all three frame columns exist (some may be absent if no reads in that frame)
     for col in ["frame0_count", "frame1_count", "frame2_count"]:
@@ -2167,20 +2157,26 @@ def score_frame_rollup(
     )
 
     # Derived metrics
-    return pivoted.with_columns(
-        (pl.col("frame0_count") + pl.col("frame1_count") + pl.col("frame2_count")).alias("n_reads")
-    ).with_columns(
-        (pl.col("frame0_count") / pl.col("n_reads")).alias("elong_in_frame"),
-        pl.when(
-            (pl.col("frame0_count") >= pl.col("frame1_count"))
-            & (pl.col("frame0_count") >= pl.col("frame2_count"))
+    return (
+        pivoted.with_columns(
+            (pl.col("frame0_count") + pl.col("frame1_count") + pl.col("frame2_count")).alias(
+                "n_reads"
+            )
         )
-        .then(pl.lit(0, dtype=pl.Int32))
-        .when(pl.col("frame1_count") >= pl.col("frame2_count"))
-        .then(pl.lit(1, dtype=pl.Int32))
-        .otherwise(pl.lit(2, dtype=pl.Int32))
-        .alias("dominant_frame"),
-    ).select(list(_SCORE_FR_SCHEMA.keys()))
+        .with_columns(
+            (pl.col("frame0_count") / pl.col("n_reads")).alias("elong_in_frame"),
+            pl.when(
+                (pl.col("frame0_count") >= pl.col("frame1_count"))
+                & (pl.col("frame0_count") >= pl.col("frame2_count"))
+            )
+            .then(pl.lit(0, dtype=pl.Int32))
+            .when(pl.col("frame1_count") >= pl.col("frame2_count"))
+            .then(pl.lit(1, dtype=pl.Int32))
+            .otherwise(pl.lit(2, dtype=pl.Int32))
+            .alias("dominant_frame"),
+        )
+        .select(list(_SCORE_FR_SCHEMA.keys()))
+    )
 
 
 def prevalence_from_rollup(
@@ -2232,9 +2228,7 @@ def prevalence_from_rollup(
             pl.col("n_reads").sum().alias("n_reads"),
             pl.col("frame0_count").sum().alias("frame0_count"),
         )
-        .with_columns(
-            (pl.col("frame0_count") / pl.col("n_reads")).alias("elong_in_frame")
-        )
+        .with_columns((pl.col("frame0_count") / pl.col("n_reads")).alias("elong_in_frame"))
     )
 
     # Mark eligible samples and compute per-feature aggregates — pure Polars

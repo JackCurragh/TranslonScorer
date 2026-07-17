@@ -163,14 +163,22 @@ def fast_reads_qc(
 
     agg = agg_lf.collect(streaming=True)
 
-    empty_len = pl.DataFrame(schema={
-        "sample_name": pl.Utf8, "study_id": pl.Utf8,
-        "length": pl.UInt32, "count": pl.Float64,
-    })
-    empty_dinuc = pl.DataFrame(schema={
-        "sample_name": pl.Utf8, "end": pl.Utf8,
-        "dinuc": pl.Utf8, "count": pl.Float64,
-    })
+    empty_len = pl.DataFrame(
+        schema={
+            "sample_name": pl.Utf8,
+            "study_id": pl.Utf8,
+            "length": pl.UInt32,
+            "count": pl.Float64,
+        }
+    )
+    empty_dinuc = pl.DataFrame(
+        schema={
+            "sample_name": pl.Utf8,
+            "end": pl.Utf8,
+            "dinuc": pl.Utf8,
+            "count": pl.Float64,
+        }
+    )
 
     if agg.is_empty():
         return empty_len, empty_dinuc
@@ -186,10 +194,12 @@ def fast_reads_qc(
         agg.select(["sample_name", "count"])
         .group_by("sample_name")
         .agg(pl.col("count").sum())
-        .with_columns([
-            pl.lit("5p").alias("end"),
-            pl.lit(dinuc_5p).alias("dinuc"),
-        ])
+        .with_columns(
+            [
+                pl.lit("5p").alias("end"),
+                pl.lit(dinuc_5p).alias("dinuc"),
+            ]
+        )
         .select(["sample_name", "end", "dinuc", "count"])
     )
 

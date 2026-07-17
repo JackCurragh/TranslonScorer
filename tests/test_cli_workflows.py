@@ -33,7 +33,15 @@ def test_pipeline_workflow_requires_exactly_one_mode(tmp_path: Path):
 
 @pytest.mark.parametrize(
     "name",
-    ["extract-events", "score-matrix", "score-bams", "score-bigwig", "report", "consequential", "pipeline"],
+    [
+        "extract-events",
+        "score-matrix",
+        "score-bams",
+        "score-bigwig",
+        "report",
+        "consequential",
+        "pipeline",
+    ],
 )
 def test_new_subcommands_registered(name):
     runner = CliRunner()
@@ -578,11 +586,16 @@ def test_score_matrix_cmd_psite_index_without_gtf_no_longer_errors(monkeypatch, 
         cli,
         [
             "score-matrix",
-            "--events-dir", str(tmp_path / "events"),
-            "--matrix-dir", str(tmp_path / "matrix"),
-            "--store-dir", str(tmp_path / "scores"),
-            "--data-version", "d1",
-            "--psite-index", str(tmp_path / "psite"),
+            "--events-dir",
+            str(tmp_path / "events"),
+            "--matrix-dir",
+            str(tmp_path / "matrix"),
+            "--store-dir",
+            str(tmp_path / "scores"),
+            "--data-version",
+            "d1",
+            "--psite-index",
+            str(tmp_path / "psite"),
         ],
     )
     assert result.exit_code == 0, result.output
@@ -607,10 +620,14 @@ def test_pipeline_cmd_forwards_psite_index_dir(monkeypatch, tmp_path: Path):
         cli,
         [
             "pipeline",
-            "--out-dir", str(tmp_path / "out"),
-            "--sqlite", str(tmp_path / "annot.sqlite"),
-            "--matrix-dir", str(tmp_path / "matrix"),
-            "--psite-index", str(tmp_path / "psite"),
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--sqlite",
+            str(tmp_path / "annot.sqlite"),
+            "--matrix-dir",
+            str(tmp_path / "matrix"),
+            "--psite-index",
+            str(tmp_path / "psite"),
         ],
     )
     assert result.exit_code == 0, result.output

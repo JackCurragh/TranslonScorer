@@ -223,4 +223,3 @@ def test_shape_cluster_driver_diagnostics_rank_discriminating_positions():
     top_positions = set(drivers.cluster_contrasts.head(4).get_column("position").to_list())
     assert top_positions & {2, 5}
     assert drivers.cluster_contrasts.get_column("distance_fraction").sum() > 0
-

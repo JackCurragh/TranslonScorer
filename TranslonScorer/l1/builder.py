@@ -23,6 +23,7 @@ Peak memory per worker ≈ (L0b_chrom_unique_pos_rows × 4 int cols)
                          + output aggregates.
 At full cohort scale the counts glob grows; switch to partition-chunked joins then.
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,6 +44,7 @@ _L0B_UNIQUE_FILTER = (pl.col("nh") == 1) & (~pl.col("is_secondary"))
 # ---------------------------------------------------------------------------
 # Per-chrom build helpers
 # ---------------------------------------------------------------------------
+
 
 def _counts_glob(partition_dir: Path, counts_subdir: str) -> str:
     """Return a glob string matching all count Parquet files across partitions."""
@@ -104,23 +106,19 @@ def _build_junc_stream(
     if spliced.is_empty():
         return pl.DataFrame(schema={f.name: _pa_to_pl(f.type) for f in L1_JUNC_SCHEMA})
 
-    exploded = (
-        spliced.explode("junctions_crossed")
-        .select(
-            "read_id",
-            "length",
-            "strand",
-            pl.col("junctions_crossed").struct.field("donor"),
-            pl.col("junctions_crossed").struct.field("acceptor"),
-        )
+    exploded = spliced.explode("junctions_crossed").select(
+        "read_id",
+        "length",
+        "strand",
+        pl.col("junctions_crossed").struct.field("donor"),
+        pl.col("junctions_crossed").struct.field("acceptor"),
     )
 
     # Only the spliced reads' counts — semi-join keeps the materialised counts
     # tiny (junction-spanning reads are a small fraction of the cohort).
     read_ids = exploded.select(pl.col("read_id").unique())
-    counts_df = (
-        counts_lf.join(read_ids.lazy(), on="read_id", how="semi")
-        .collect(engine="streaming")
+    counts_df = counts_lf.join(read_ids.lazy(), on="read_id", how="semi").collect(
+        engine="streaming"
     )
 
     result = (
@@ -136,6 +134,7 @@ def _build_junc_stream(
 def _pa_to_pl(pa_type) -> pl.PolarsDataType:
     """Minimal PyArrow→Polars type mapping for schema construction."""
     import pyarrow as pa
+
     mapping = {
         pa.int64(): pl.Int64,
         pa.int8(): pl.Int8,
@@ -149,6 +148,7 @@ def _pa_to_pl(pa_type) -> pl.PolarsDataType:
 # Per-chrom worker (runs in subprocess via ProcessPoolExecutor)
 # ---------------------------------------------------------------------------
 
+
 def _chrom_worker(
     chrom: str,
     l0b_shard: str,
@@ -161,6 +161,7 @@ def _chrom_worker(
     Returns (chrom, n_pos_rows, n_junc_rows).
     """
     import logging as _logging
+
     _logging.basicConfig(level=logging.INFO)
 
     pos_path = Path(out_dir) / f"{chrom}_pos.parquet"
@@ -199,6 +200,7 @@ def _chrom_worker(
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 def build_l1(
     l0b_dir: Path,
@@ -272,6 +274,7 @@ def build_l1(
     pool_kwargs: dict = {"max_workers": workers}
     try:
         import inspect
+
         if "max_tasks_per_child" in inspect.signature(ProcessPoolExecutor).parameters:
             pool_kwargs["max_tasks_per_child"] = 1
     except (ValueError, TypeError):
@@ -315,8 +318,7 @@ def build_l1(
 
     if errors:
         raise RuntimeError(
-            f"L1 build finished with {len(errors)} failed chromosomes:\n" +
-            "\n".join(errors)
+            f"L1 build finished with {len(errors)} failed chromosomes:\n" + "\n".join(errors)
         )
 
     log.info("L1 build complete: %d pos rows, %d junc rows → %s", total_pos, total_junc, out_dir)

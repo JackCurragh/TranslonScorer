@@ -173,24 +173,17 @@ def calibrate_cohort(
     if len_parts:
         length_all = pl.concat(len_parts)
         # Aggregate length histogram per sample across partitions
-        length_hist = (
-            length_all.group_by(["sample_name", "length"])
-            .agg(pl.col("count").sum())
-        )
+        length_hist = length_all.group_by(["sample_name", "length"]).agg(pl.col("count").sum())
         for (sname,), grp in length_hist.group_by("sample_name"):
             lc = {int(row["length"]): float(row["count"]) for row in grp.iter_rows(named=True)}
-            reads_qc_rows.setdefault(str(sname), {}).update(
-                _length_distribution_metrics(lc)
-            )
+            reads_qc_rows.setdefault(str(sname), {}).update(_length_distribution_metrics(lc))
             reads_qc_rows[str(sname)]["_rld"] = lc
 
     if dinuc_parts:
         dinuc_all = pl.concat(dinuc_parts)
         # Cohort-wide background: aggregate across all samples per (end, dinuc)
-        cohort_bg = (
-            dinuc_all.group_by(["end", "dinuc"])
-            .agg(pl.col("count").sum())
-        )
+        cohort_bg = dinuc_all.group_by(["end", "dinuc"]).agg(pl.col("count").sum())
+
         def _to_freq(df: pl.DataFrame) -> Dict[str, float]:
             total = float(df["count"].sum()) or 1.0
             return {row["dinuc"]: row["count"] / total for row in df.iter_rows(named=True)}
@@ -199,15 +192,16 @@ def calibrate_cohort(
         bg3 = _to_freq(cohort_bg.filter(pl.col("end") == "3p"))
 
         # Per-sample dinucleotide aggregation
-        dinuc_agg = (
-            dinuc_all.group_by(["sample_name", "end", "dinuc"])
-            .agg(pl.col("count").sum())
-        )
+        dinuc_agg = dinuc_all.group_by(["sample_name", "end", "dinuc"]).agg(pl.col("count").sum())
         for (sname,), grp in dinuc_agg.group_by(["sample_name"]):
-            five = {row["dinuc"]: float(row["count"])
-                    for row in grp.filter(pl.col("end") == "5p").iter_rows(named=True)}
-            three = {row["dinuc"]: float(row["count"])
-                     for row in grp.filter(pl.col("end") == "3p").iter_rows(named=True)}
+            five = {
+                row["dinuc"]: float(row["count"])
+                for row in grp.filter(pl.col("end") == "5p").iter_rows(named=True)
+            }
+            three = {
+                row["dinuc"]: float(row["count"])
+                for row in grp.filter(pl.col("end") == "3p").iter_rows(named=True)
+            }
             reads_qc_rows.setdefault(str(sname), {}).update(
                 _ligation_bias_metrics(five, three, bg5, bg3)
             )
@@ -220,13 +214,10 @@ def calibrate_cohort(
             rfd = _json.loads(row.get("read_frame_distribution") or "{}")
             # rfd format: {length_str: [f0_count, f1_count, f2_count]}
             rfd_int: Dict[int, Dict[int, float]] = {
-                int(L): {i: float(c) for i, c in enumerate(fd)}
-                for L, fd in rfd.items()
+                int(L): {i: float(c) for i, c in enumerate(fd)} for L, fd in rfd.items()
             }
             offsets_for_sample = {
-                int(L): int(off)
-                for (sn, L), off in offsets_dict.items()
-                if sn == sid
+                int(L): int(off) for (sn, L), off in offsets_dict.items() if sn == sid
             }
             perio_lookup[sid] = {
                 "rfd": rfd_int,
@@ -268,12 +259,8 @@ def calibrate_cohort(
     if offsets_dict:
         offsets_df = pl.DataFrame(
             {
-                "sample_name": pl.Series(
-                    [s for s, _ in offsets_dict.keys()], dtype=pl.Utf8
-                ),
-                "length": pl.Series(
-                    [int(L) for _, L in offsets_dict.keys()], dtype=pl.Int64
-                ),
+                "sample_name": pl.Series([s for s, _ in offsets_dict.keys()], dtype=pl.Utf8),
+                "length": pl.Series([int(L) for _, L in offsets_dict.keys()], dtype=pl.Int64),
                 "offset": pl.Series(list(offsets_dict.values()), dtype=pl.Int64),
             }
         )
@@ -380,21 +367,11 @@ def _build_worker(pdir_str: str) -> bytes:
 
     aln = pl.DataFrame(
         {
-            "read_id": pl.Series(
-                [read_id_list[i] for i in in_cds_idx], dtype=pl.UInt64
-            ),
-            "chrom": pl.Series(
-                [chrom_list[i] for i in in_cds_idx], dtype=pl.Utf8
-            ),
-            "pos5": pl.Series(
-                [pos5_list[i] for i in in_cds_idx], dtype=pl.Int32
-            ),
-            "strand": pl.Series(
-                [strand_list[i] for i in in_cds_idx], dtype=pl.Boolean
-            ),
-            "length": pl.Series(
-                [length_list[i] for i in in_cds_idx], dtype=pl.UInt8
-            ),
+            "read_id": pl.Series([read_id_list[i] for i in in_cds_idx], dtype=pl.UInt64),
+            "chrom": pl.Series([chrom_list[i] for i in in_cds_idx], dtype=pl.Utf8),
+            "pos5": pl.Series([pos5_list[i] for i in in_cds_idx], dtype=pl.Int32),
+            "strand": pl.Series([strand_list[i] for i in in_cds_idx], dtype=pl.Boolean),
+            "length": pl.Series([length_list[i] for i in in_cds_idx], dtype=pl.UInt8),
         }
     )
 
@@ -428,13 +405,13 @@ def _build_worker(pdir_str: str) -> bytes:
     strand_arr = joined["strand"].to_numpy()
 
     offset_arr = np.array(
-        [offset_lookup.get((int(s), int(l)), default_offset)
-         for s, l in zip(sid_arr, len_arr)],
+        [offset_lookup.get((int(s), int(l)), default_offset) for s, l in zip(sid_arr, len_arr)],
         dtype=np.int32,
     )
     # + strand: p_site = pos5 + offset; - strand: p_site = pos5 - offset
-    p_site_arr = np.where(strand_arr, pos5_arr.astype(np.int64) + offset_arr,
-                          pos5_arr.astype(np.int64) - offset_arr).astype(np.int32)
+    p_site_arr = np.where(
+        strand_arr, pos5_arr.astype(np.int64) + offset_arr, pos5_arr.astype(np.int64) - offset_arr
+    ).astype(np.int32)
 
     out = (
         joined.with_columns(pl.Series("p_site", p_site_arr, dtype=pl.Int32))
@@ -510,10 +487,7 @@ def build_psite_index(
     frame_ivs = _build_frame_intervals(cds_df, cds_df, bam_refs)
     if chrom:
         # restrict CDS intervals to target chrom — reads on other chroms are skipped
-        frame_ivs = {
-            k: v for k, v in frame_ivs.items()
-            if k[0] == chrom or k[0] == f"chr{chrom}"
-        }
+        frame_ivs = {k: v for k, v in frame_ivs.items() if k[0] == chrom or k[0] == f"chr{chrom}"}
 
     mp0, manifest0 = _manifest(dirs[0])
     sample_map = _samples_df(mp0, manifest0).select(
@@ -533,15 +507,9 @@ def build_psite_index(
     if offset_lookup:
         pl.DataFrame(
             {
-                "sample_id": pl.Series(
-                    [k[0] for k in offset_lookup], dtype=pl.UInt16
-                ),
-                "length": pl.Series(
-                    [k[1] for k in offset_lookup], dtype=pl.UInt8
-                ),
-                "offset": pl.Series(
-                    list(offset_lookup.values()), dtype=pl.Int8
-                ),
+                "sample_id": pl.Series([k[0] for k in offset_lookup], dtype=pl.UInt16),
+                "length": pl.Series([k[1] for k in offset_lookup], dtype=pl.UInt8),
+                "offset": pl.Series(list(offset_lookup.values()), dtype=pl.Int8),
             }
         ).write_parquet(out_dir / "offsets_numeric.parquet")
 
@@ -571,9 +539,7 @@ def build_psite_index(
             initializer=_build_worker_init,
             initargs=(frame_ivs, bam_refs, sample_map, offset_lookup),
         ) as pool:
-            for i, ipc in enumerate(
-                pool.imap_unordered(_build_worker, dir_strs, chunksize=1)
-            ):
+            for i, ipc in enumerate(pool.imap_unordered(_build_worker, dir_strs, chunksize=1)):
                 df = pl.read_ipc(io.BytesIO(ipc))
                 if not df.is_empty():
                     parts.append(df)
@@ -588,8 +554,7 @@ def build_psite_index(
     log_info(f"  {combined.height:,} raw rows; grouping and writing per-chrom shards …")
 
     combined = (
-        combined
-        .group_by(["chrom", "p_site", "strand", "length", "sample_id"])
+        combined.group_by(["chrom", "p_site", "strand", "length", "sample_id"])
         .agg(pl.col("count").sum())
         .with_columns(
             pl.col("p_site").cast(pl.Int32),
@@ -606,9 +571,7 @@ def build_psite_index(
         (
             shard.drop("chrom")
             .sort("p_site")
-            .write_parquet(
-                shard_dir / "data.parquet", statistics=True, compression="zstd"
-            )
+            .write_parquet(shard_dir / "data.parquet", statistics=True, compression="zstd")
         )
 
     log_info(f"build_psite_index: done — {out_dir}")
@@ -652,9 +615,7 @@ def _exon_intervals_for_chrom(
         exons = list(zip(starts, stops, tran_starts))
         g_min = min(s for s, _, _ in exons)
         g_max = max(e for _, e, _ in exons)
-        out.append(
-            (str(row["tran_id"]), str(row["strand"]), g_min, g_max, len(exons), exons)
-        )
+        out.append((str(row["tran_id"]), str(row["strand"]), g_min, g_max, len(exons), exons))
     return out
 
 
@@ -711,9 +672,7 @@ def _assign_psite_to_features(
         ex_tran = np.array([e[2] for e in exons], dtype=np.int32)
 
         ps_sub = p_site_arr[idxs]
-        in_exon = (ps_sub[:, None] >= ex_starts[None, :]) & (
-            ps_sub[:, None] < ex_stops[None, :]
-        )
+        in_exon = (ps_sub[:, None] >= ex_starts[None, :]) & (ps_sub[:, None] < ex_stops[None, :])
         exon_idx = np.argmax(in_exon, axis=1)
         hit_mask = in_exon[np.arange(len(idxs)), exon_idx]
 
@@ -721,9 +680,7 @@ def _assign_psite_to_features(
         hit_exon = exon_idx[hit_mask]
         hit_ps = p_site_arr[hit_idxs]
 
-        tx_pos_arr = ex_tran[hit_exon] + (hit_ps - ex_starts[hit_exon]).astype(
-            np.int32
-        )
+        tx_pos_arr = ex_tran[hit_exon] + (hit_ps - ex_starts[hit_exon]).astype(np.int32)
 
         feat_ids.extend([fid] * len(hit_idxs))
         samp_ids.extend(sample_id_arr[hit_idxs].tolist())
@@ -802,9 +759,7 @@ def query_frame_rollup(
 
     assigned_all = pl.concat(parts)
     rollup = (
-        assigned_all.with_columns(
-            (pl.col("tx_pos") % 3).cast(pl.Int8).alias("frame")
-        )
+        assigned_all.with_columns((pl.col("tx_pos") % 3).cast(pl.Int8).alias("frame"))
         .group_by(["feature_id", "sample_id", "length", "frame"])
         .agg(pl.col("count").sum())
         .pivot(
@@ -988,9 +943,7 @@ def query_genomic_coverage(
         if group_level == "sample":
             window = window.join(sample_map, on="sample_id", how="left")
             group_cols.append("sample_name")
-        agg = window.group_by(group_cols).agg(
-            pl.col("count").sum().cast(pl.Float64).alias("count")
-        )
+        agg = window.group_by(group_cols).agg(pl.col("count").sum().cast(pl.Float64).alias("count"))
         parts.append(agg.select(list(schema.keys())))
 
     if not parts:

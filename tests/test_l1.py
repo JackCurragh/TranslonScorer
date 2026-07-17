@@ -1,4 +1,5 @@
 """Tests for L1 schema and builder."""
+
 from __future__ import annotations
 
 import time
@@ -27,6 +28,7 @@ KEY = VersionKey("GRCh38.p14", "testcfg", "GENCODE_v44", "2026-06", "unique_only
 # Schema unit tests (fast, no data)
 # ---------------------------------------------------------------------------
 
+
 def test_pos_schema_field_names():
     names = [f.name for f in L1_POS_SCHEMA]
     assert names == ["pos5", "strand", "length", "sample_id", "count"]
@@ -40,6 +42,7 @@ def test_junc_schema_field_names():
 # ---------------------------------------------------------------------------
 # Builder integration tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def l1_dir(tmp_path_factory):
@@ -57,6 +60,7 @@ def l1_dir(tmp_path_factory):
 
 def test_meta_written(l1_dir):
     from TranslonScorer.l0b.contracts import read_meta
+
     meta = read_meta(l1_dir)
     assert meta["status"] == "complete"
     assert meta["total_pos_rows"] > 0
@@ -100,11 +104,13 @@ def test_unique_only_policy(l1_dir):
     """L1 must contain only unique-mapping reads (nh==1 from L0b)."""
     l0b = pl.read_parquet(L0B_PREBUILT / "chr1.parquet", columns=["read_id", "nh", "is_secondary"])
     unique_rids = set(
-        l0b.filter((pl.col("nh") == 1) & (~pl.col("is_secondary")))["read_id"].cast(pl.UInt64).to_list()
+        l0b.filter((pl.col("nh") == 1) & (~pl.col("is_secondary")))["read_id"]
+        .cast(pl.UInt64)
+        .to_list()
     )
-    multi_rids = set(
-        l0b.filter(pl.col("nh") > 1)["read_id"].cast(pl.UInt64).to_list()
-    ) - unique_rids  # reads that appear ONLY as multimappers
+    multi_rids = (
+        set(l0b.filter(pl.col("nh") > 1)["read_id"].cast(pl.UInt64).to_list()) - unique_rids
+    )  # reads that appear ONLY as multimappers
 
     # If multi_rids contributed to L1, we'd find their pos5 values in the shard.
     # Since this cohort is small, sample a few multimapper positions and confirm
@@ -146,9 +152,9 @@ def test_count_reconciles_with_source(l1_dir):
         expected_count = src_row["count"]
         l1_match = l1_rows.filter(pl.col("sample_id") == sid)
         assert len(l1_match) == 1, f"no L1 row for sample_id={sid}"
-        assert l1_match["count"][0] >= expected_count, (
-            f"L1 count {l1_match['count'][0]} < source count {expected_count}"
-        )
+        assert (
+            l1_match["count"][0] >= expected_count
+        ), f"L1 count {l1_match['count'][0]} < source count {expected_count}"
 
 
 def test_all_samples_present(l1_dir):

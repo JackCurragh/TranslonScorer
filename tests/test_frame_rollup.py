@@ -398,9 +398,9 @@ def test_build_coverage_index_gapdh():
     prof = prof.with_columns((pl.col("tx_pos") % 3).alias("phase"))
     phase_totals = prof.group_by("phase").agg(pl.col("count").sum()).sort("phase")
     counts = phase_totals["count"].to_list()
-    assert max(counts) / sum(counts) > 0.40, (
-        "Expected dominant triplet phase > 40% of CoverageIndex reads"
-    )
+    assert (
+        max(counts) / sum(counts) > 0.40
+    ), "Expected dominant triplet phase > 40% of CoverageIndex reads"
 
 
 # ---------------------------------------------------------------------------
@@ -500,9 +500,7 @@ def test_prevalence_from_rollup_gapdh():
         multimap_mode="unique",
         n_workers=1,
     )
-    agg = rollup.group_by(["sample_name", "length", "strand", "phase0"]).agg(
-        pl.col("count").sum()
-    )
+    agg = rollup.group_by(["sample_name", "length", "strand", "phase0"]).agg(pl.col("count").sum())
     offsets = calibrate_offsets(agg, target_frame=0)
     scored = score_frame_rollup(rollup, offsets, default_offset=12)
 
@@ -512,9 +510,7 @@ def test_prevalence_from_rollup_gapdh():
     assert not prev.is_empty()
     row = prev.filter(pl.col("feature_id") == "ENST00000229239").row(0, named=True)
     assert row["n_eligible_samples"] >= 1, "Expected at least 1 eligible sample"
-    assert row["prevalence"] > 0.5, (
-        f"Expected GAPDH prevalence > 50%, got {row['prevalence']:.1%}"
-    )
+    assert row["prevalence"] > 0.5, f"Expected GAPDH prevalence > 50%, got {row['prevalence']:.1%}"
 
 
 @pytest.mark.skipif(not HAS_MATRIX, reason="local matrix partition not in data/")
@@ -537,9 +533,7 @@ def test_score_elongation_from_rollup_canonical_cds_supported():
         multimap_mode="unique",
         n_workers=1,
     )
-    agg = rollup.group_by(["sample_name", "length", "strand", "phase0"]).agg(
-        pl.col("count").sum()
-    )
+    agg = rollup.group_by(["sample_name", "length", "strand", "phase0"]).agg(pl.col("count").sum())
     offsets = calibrate_offsets(agg, target_frame=0)
     scored = score_frame_rollup(rollup, offsets, default_offset=12)
 
@@ -593,7 +587,14 @@ def test_build_frame_rollup_gapdh_produces_rollup():
         n_workers=1,
     )
     assert not rollup.is_empty()
-    assert set(rollup.columns) >= {"sample_name", "feature_id", "length", "strand", "phase0", "count"}
+    assert set(rollup.columns) >= {
+        "sample_name",
+        "feature_id",
+        "length",
+        "strand",
+        "phase0",
+        "count",
+    }
     assert rollup["feature_id"].unique().to_list() == ["ENST00000229239"]
     assert rollup["count"].sum() > 0
 
@@ -618,9 +619,7 @@ def test_build_frame_rollup_gapdh_calibrated_periodicity():
         n_workers=1,
     )
     # Calibrate per-(sample,length) offsets
-    agg = rollup.group_by(["sample_name", "length", "strand", "phase0"]).agg(
-        pl.col("count").sum()
-    )
+    agg = rollup.group_by(["sample_name", "length", "strand", "phase0"]).agg(pl.col("count").sum())
     offsets = calibrate_offsets(agg, target_frame=0)
 
     # Score

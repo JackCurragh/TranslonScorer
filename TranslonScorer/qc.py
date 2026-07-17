@@ -222,6 +222,7 @@ def frame_dominance_matrix(
 # Length distribution metrics  (RiboMetric equivalents, pure transforms)
 # ---------------------------------------------------------------------------
 
+
 def _weighted_percentile(lengths: np.ndarray, counts: np.ndarray, q: float) -> float:
     """Weighted percentile via cumulative sum of sorted lengths."""
     order = np.argsort(lengths)
@@ -247,11 +248,20 @@ def _length_distribution_metrics(length_counts: Dict[int, float]) -> Dict[str, f
         total_reads           — sum of all counts
     """
     if not length_counts:
-        return {k: 0.0 for k in (
-            "rld_IQR_metric", "rld_CV_metric", "rld_normality_metric",
-            "rld_max_prop_metric", "rld_bimodality",
-            "peak_length", "mean_length", "rpf_28_32_prop", "total_reads",
-        )}
+        return {
+            k: 0.0
+            for k in (
+                "rld_IQR_metric",
+                "rld_CV_metric",
+                "rld_normality_metric",
+                "rld_max_prop_metric",
+                "rld_bimodality",
+                "peak_length",
+                "mean_length",
+                "rpf_28_32_prop",
+                "total_reads",
+            )
+        }
 
     lengths = np.array(sorted(length_counts), dtype=float)
     counts = np.array([length_counts[int(l)] for l in lengths], dtype=float)
@@ -279,13 +289,14 @@ def _length_distribution_metrics(length_counts: Dict[int, float]) -> Dict[str, f
     # Bimodality coefficient (Sarle's B)
     try:
         from scipy.stats import skew as _skew, kurtosis as _kurt, normaltest as _ntest
+
         expanded = np.repeat(lengths.astype(int), counts.astype(int).clip(0))
         if len(expanded) >= 20:
             n = len(expanded)
             sk = float(_skew(expanded))
             ku = float(_kurt(expanded))
             denom = ku + 3.0 * ((n - 1) ** 2) / ((n - 2) * (n - 3)) if n > 3 else 1.0
-            bm = (sk ** 2 + 1) / denom if denom != 0 else 0.0
+            bm = (sk**2 + 1) / denom if denom != 0 else 0.0
             bimodality = float(1.0 / (1.0 + max(bm, 0.0)))
             norm_pval = float(_ntest(expanded).pvalue)
             normality_metric = float(max(0.0, min(1.0, 1.0 - norm_pval)))
@@ -375,6 +386,7 @@ def _ligation_bias_metrics(
 # ---------------------------------------------------------------------------
 # Derived / composite metrics
 # ---------------------------------------------------------------------------
+
 
 def _recommend_read_lengths(
     rfd: Dict[int, Dict[int, float]],

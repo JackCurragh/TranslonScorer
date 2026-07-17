@@ -10,6 +10,7 @@ Pipeline
 All chromosomes run in parallel (``--workers``); per-chrom shard presence is
 the checkpoint so the job is fully resumable.
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,9 +44,7 @@ def _is_trivial_cigar(cigar_str: str) -> bool:
     return len(ops) == 1 and ops[0][1] == "M"
 
 
-def _junctions_from_cigar(
-    cigar_str: str, ref_start: int
-) -> list[dict[str, int]]:
+def _junctions_from_cigar(cigar_str: str, ref_start: int) -> list[dict[str, int]]:
     """Return list of {donor, acceptor} dicts for N (intron-skip) operations."""
     junctions: list[dict[str, int]] = []
     pos = ref_start
@@ -66,6 +65,7 @@ def _junctions_from_cigar(
 # Per-record extraction
 # ---------------------------------------------------------------------------
 
+
 def _extract_record(
     rec: pysam.AlignedSegment,
     chrom: str,
@@ -75,7 +75,7 @@ def _extract_record(
     is_reverse = bool(flag & 0x10)
     strand: int = -1 if is_reverse else 1
 
-    ref_start: int = rec.reference_start      # 0-based
+    ref_start: int = rec.reference_start  # 0-based
     ref_end: int = rec.reference_end or (ref_start + rec.query_length)
     read_len: int = rec.query_length or 0
 
@@ -118,20 +118,20 @@ def _extract_record(
         read_id = hash(qname) & 0x7FFFFFFFFFFFFFFF
 
     return {
-        "read_id":           read_id,
-        "chrom":             chrom,
-        "pos5":              pos5,
-        "end":               ref_end,
-        "strand":            strand,
-        "length":            read_len,
-        "cigar":             stored_cigar,
-        "mapq":              rec.mapping_quality or 0,
-        "nh":                nh,
-        "is_secondary":      bool(flag & 0x100),
-        "aln_score":         aln_score,
-        "mismatches":        mismatches,
+        "read_id": read_id,
+        "chrom": chrom,
+        "pos5": pos5,
+        "end": ref_end,
+        "strand": strand,
+        "length": read_len,
+        "cigar": stored_cigar,
+        "mapq": rec.mapping_quality or 0,
+        "nh": nh,
+        "is_secondary": bool(flag & 0x100),
+        "aln_score": aln_score,
+        "mismatches": mismatches,
         "junctions_crossed": junctions,
-        "weight":            None,
+        "weight": None,
     }
 
 
@@ -139,7 +139,7 @@ def _extract_record(
 # Per-chrom streaming scan → Parquet
 # ---------------------------------------------------------------------------
 
-_BATCH_SIZE = 100_000   # rows per in-memory batch before flushing to Parquet
+_BATCH_SIZE = 100_000  # rows per in-memory batch before flushing to Parquet
 
 
 def _scan_chrom_bam_to_parquet(
@@ -250,9 +250,7 @@ def _build_junction_array(col: list) -> pa.Array:
 
 def _write_empty_shard(out_path: Path) -> None:
     writer = pq.ParquetWriter(str(out_path), L0B_SCHEMA, compression="zstd")
-    empty = pa.record_batch(
-        [pa.array([], type=f.type) for f in L0B_SCHEMA], schema=L0B_SCHEMA
-    )
+    empty = pa.record_batch([pa.array([], type=f.type) for f in L0B_SCHEMA], schema=L0B_SCHEMA)
     writer.write_batch(empty)
     writer.close()
 
@@ -260,6 +258,7 @@ def _write_empty_shard(out_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # samtools merge/sort → per-chrom BAMs
 # ---------------------------------------------------------------------------
+
 
 def _get_chroms(bam_paths: list[Path]) -> list[str]:
     """Return chromosomes present in *bam_paths[0]*'s header (all BAMs share the same header)."""
@@ -277,9 +276,11 @@ def _ensure_indexed(bam_paths: list[Path], threads: int = 4) -> None:
     ``samtools index`` will fail loudly if one is not.
     """
     missing = [
-        p for p in bam_paths
-        if not (p.with_suffix(p.suffix + ".bai").exists()
-                or p.with_suffix(p.suffix + ".csi").exists())
+        p
+        for p in bam_paths
+        if not (
+            p.with_suffix(p.suffix + ".bai").exists() or p.with_suffix(p.suffix + ".csi").exists()
+        )
     ]
     if not missing:
         return
@@ -288,7 +289,8 @@ def _ensure_indexed(bam_paths: list[Path], threads: int = 4) -> None:
     def _index_one(p: Path) -> None:
         proc = subprocess.run(
             ["samtools", "index", f"-@{threads}", str(p)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
         if proc.returncode != 0:
             raise RuntimeError(
@@ -321,26 +323,30 @@ def _merge_sort_chrom(
     # samtools merge -R restricts to one reference sequence
     inputs = [str(p) for p in bam_paths]
     merge_cmd = [
-        "samtools", "merge",
-        "-f",                   # overwrite output
-        "-R", chrom,            # region filter
+        "samtools",
+        "merge",
+        "-f",  # overwrite output
+        "-R",
+        chrom,  # region filter
         f"--threads={threads}",
-        "-",                    # output to stdout
+        "-",  # output to stdout
     ] + inputs
 
     sort_cmd = [
-        "samtools", "sort",
+        "samtools",
+        "sort",
         f"--threads={threads}",
-        "-m", "768M",                       # cap per-thread RAM; spill beyond it
-        "-T", str(work_dir / f".sort_{chrom}"),  # spill to work_dir (disk), not /tmp (often tmpfs/RAM)
-        "-o", str(out_bam),
+        "-m",
+        "768M",  # cap per-thread RAM; spill beyond it
+        "-T",
+        str(work_dir / f".sort_{chrom}"),  # spill to work_dir (disk), not /tmp (often tmpfs/RAM)
+        "-o",
+        str(out_bam),
         "-",
     ]
 
     log.debug("merge+sort %s", chrom)
-    merge_proc = subprocess.Popen(
-        merge_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+    merge_proc = subprocess.Popen(merge_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     sort_proc = subprocess.Popen(
         sort_cmd,
         stdin=merge_proc.stdout,
@@ -366,6 +372,7 @@ def _merge_sort_chrom(
 # Per-chrom worker (runs in subprocess)
 # ---------------------------------------------------------------------------
 
+
 def _chrom_worker(
     bam_paths: list[str],
     chrom: str,
@@ -378,6 +385,7 @@ def _chrom_worker(
     Returns (chrom, n_rows).
     """
     import logging as _logging
+
     _logging.basicConfig(level=logging.INFO)
     _log = _logging.getLogger(__name__)
 
@@ -402,6 +410,7 @@ def _chrom_worker(
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 def build_l0b(
     partition_dir: Path,
@@ -498,6 +507,7 @@ def build_l0b(
     pool_kwargs: dict = {"max_workers": workers}
     try:
         import inspect
+
         if "max_tasks_per_child" in inspect.signature(ProcessPoolExecutor).parameters:
             pool_kwargs["max_tasks_per_child"] = 1
     except (ValueError, TypeError):
@@ -507,7 +517,11 @@ def build_l0b(
         futures = {
             pool.submit(
                 _chrom_worker,
-                bam_strs, chrom, work_str, out_str, samtools_threads,
+                bam_strs,
+                chrom,
+                work_str,
+                out_str,
+                samtools_threads,
             ): chrom
             for chrom in target_chroms
         }
@@ -539,8 +553,7 @@ def build_l0b(
 
     if errors:
         raise RuntimeError(
-            f"L0b build finished with {len(errors)} failed chromosomes:\n" +
-            "\n".join(errors)
+            f"L0b build finished with {len(errors)} failed chromosomes:\n" + "\n".join(errors)
         )
 
     log.info("L0b build complete: %d total rows → %s", total_rows, out_dir)

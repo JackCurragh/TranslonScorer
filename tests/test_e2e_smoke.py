@@ -4,8 +4,9 @@ Unlike the data-backed tests (test_bam_provider / test_frame_rollup / psite),
 these generate every fixture in tmp_path (tiny FASTA + bigwig via pyBigWig, tiny
 BAM via pysam), so they exercise genome/sequence -> candidate ORF extraction ->
 coverage provider -> scoring INSIDE CI, where the gitignored data/ fixtures are
-absent. They lock in the two silent-failure bugs fixed during real-data E2E
-validation: the bigwig out-of-bounds clamp and the annotation guard.
+absent. The bigwig test's ORF ends at the contig edge on purpose, so it also
+guards the out-of-bounds clamp fix. (The annotation fail-loud guard is covered
+separately in test_new_tree_units.)
 """
 
 from __future__ import annotations

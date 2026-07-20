@@ -45,9 +45,14 @@ Triggered by pushing a `v*` tag (which `bump2version` creates):
 
 1. **Reserve the name / first upload via TestPyPI** to validate metadata:
    `make release-test` (uploads to TestPyPI; needs a TestPyPI token locally).
-2. **PyPI Trusted Publisher:** on https://pypi.org/manage/project/TranslonScorer/
-   add a trusted publisher → repo `JackCurragh/TranslonScorer`, workflow
-   `release.yml`, environment `pypi`.
+2. **PyPI Trusted Publisher (PENDING flow — first release).** The project is
+   NOT yet on PyPI, so its project page does not exist and you cannot add a
+   publisher there. Instead register a *pending* publisher at the account level:
+   https://pypi.org/manage/account/publishing/ → "Add a new pending publisher":
+   PyPI project name `TranslonScorer`, owner `JackCurragh`, repo `TranslonScorer`,
+   workflow `release.yml`, environment `pypi`. On the first successful publish
+   PyPI creates the project and binds it to this publisher. (After that, manage
+   it at https://pypi.org/manage/project/TranslonScorer/ as usual.)
 3. **GitHub:** create an Environment named `pypi` (Settings → Environments);
    optionally require a reviewer for publish.
 4. **Codecov:** enable the repo (no token needed for public repos).

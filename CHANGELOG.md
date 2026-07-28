@@ -32,6 +32,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shipped scorer is diffed against on every run.
 
 ### Changed
+- **CLI surface: 27 top-level commands → 15 + 2 groups.** Nothing is deleted or
+  deprecated; twelve commands moved under two groups so the top level reads as
+  the product:
+  - `research` — `score-compare-frame`, `score-compare-existing`,
+    `compare-profiles`, `compare-frame-methods`, `frame-disambiguation`,
+    `compare-read-assignment`, `validate-panel`, `export-rdg-flux`
+  - `legacy` — `plot`, `orfs-import`, `assemble`, `map-orfs`
+
+  Invoke as `translonscorer research compare-profiles …`. Scripts calling these
+  at the top level need the group name inserted.
 - `MatrixProvider` now requires `psite_index_dir` and raises if it is missing,
   rather than silently defaulting to the flat offset.
 - Matrix and BAM/bigWig remain two first-class coverage strategies that differ

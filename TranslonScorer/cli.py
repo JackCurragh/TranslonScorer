@@ -158,15 +158,41 @@ def common_options(func):
 def cli():
     """TranslonScorer: identify and score translational events from Ribo-seq data.
 
-    Event-scoring workflow (recommended):
+    The event-scoring workflow:
       pipeline        one-shot: extract-events → score → report
-      extract-events  annotation sqlite → genomic event store
+      extract-events  any feature source → deduplicated genomic event store
       score-matrix    score events against the sparse annotation-scale matrix
       score-bams      score events against 1-20 genome/transcriptome BAMs
+      score-bigwig    score events against 1-20 bigWigs (coverage only)
       report          compose per-translon report + consequentiality
       consequential   re-gate an existing report under a policy
 
+    Two command groups hold work that is not part of that path:
+      research        frame-assignment experiments and method comparisons
+      legacy          the older ORF-composite workflow
+
     Run `translonscorer <command> --help` for details.
+    """
+
+
+@cli.group("research")
+def research():
+    """Experimental frame-assignment work and method comparisons.
+
+    These are research tools, not part of the scoring path: nothing under
+    `research` is imported by the scorer. They are grouped here so the
+    top-level surface stays the workflow, not deleted — the analyses they
+    support are live.
+    """
+
+
+@cli.group("legacy")
+def legacy():
+    """The older ORF-composite workflow (pre-event-scoring).
+
+    Self-contained: no module under `orf/` is imported by the event-scoring
+    spine. Grouped rather than removed — these commands still run and the
+    ORF-from-sequence work behind them is used.
     """
 
 
@@ -832,7 +858,7 @@ def profiles(**kwargs):
             log_info(f"Frame support written to: {cfg.frame_support_out}")
 
 
-@cli.command("score-compare-frame")
+@research.command("score-compare-frame")
 @click.option("--orfs", required=True, help="ORFs to score (CSV/TSV/Parquet).")
 @click.option("--exons", required=True, help="Transcript exon table (CSV/TSV/Parquet).")
 @click.option("--bigwig", required=True, help="BigWig coverage track.")
@@ -889,7 +915,7 @@ def score_compare_frame_cmd(
         log_info(f"{label}: {path}")
 
 
-@cli.command("validate-panel")
+@research.command("validate-panel")
 @click.option(
     "--panel-manifest", required=True, help="Panel manifest to validate/freeze (CSV/TSV/Parquet)."
 )
@@ -909,7 +935,7 @@ def validate_panel_cmd(panel_manifest: str, out_csv: Optional[str]):
         click.echo(report)
 
 
-@cli.command("score-compare-existing")
+@research.command("score-compare-existing")
 @click.option("--raw-scores", required=True, help="Existing raw score table (CSV/TSV/Parquet).")
 @click.option(
     "--frame-scores", required=True, help="Existing frame-weighted score table (CSV/TSV/Parquet)."
@@ -933,7 +959,7 @@ def score_compare_existing_cmd(
         log_info(f"{label}: {path}")
 
 
-@cli.command("compare-profiles")
+@research.command("compare-profiles")
 @click.option("--profile-a", required=True, help="First transcript profile table.")
 @click.option("--profile-b", required=True, help="Second transcript profile table.")
 @click.option("--out-prefix", required=True, help="Output prefix for profile comparison.")
@@ -961,7 +987,7 @@ def compare_profiles_cmd(
         log_info(f"{label}: {path}")
 
 
-@cli.command("compare-frame-methods")
+@research.command("compare-frame-methods")
 @click.option(
     "--profiles",
     required=True,
@@ -1037,7 +1063,7 @@ def compare_frame_methods_cmd(
         log_info(f"{label}: {path}")
 
 
-@cli.command("export-rdg-flux")
+@research.command("export-rdg-flux")
 @click.option(
     "--profiles",
     required=True,
@@ -1167,7 +1193,7 @@ def export_rdg_flux_cmd(
         log_info(f"{label}: {path}")
 
 
-@cli.command("frame-disambiguation")
+@research.command("frame-disambiguation")
 @click.option("--bam", help="BAM to project onto transcript candidates.")
 @click.option("--annotation", "-a", help="GTF annotation used for transcript models.")
 @click.option(
@@ -1222,7 +1248,7 @@ def frame_disambiguation_cmd(
         log_info(f"{label}: {path}")
 
 
-@cli.command("compare-read-assignment")
+@research.command("compare-read-assignment")
 @click.option(
     "--candidates",
     required=True,
@@ -1341,7 +1367,7 @@ def compare_read_assignment_cmd(
         log_info(f"{label}: {path}")
 
 
-@cli.command("plot")
+@legacy.command("plot")
 @click.option("--scored-orfs", "-s", required=True, help="CSV file of scored ORFs")
 @click.option("--bigwig", "-w", required=True, help="BigWig file containing Ribo-seq coverage")
 @click.option("--exons", "-e", required=True, help="CSV file containing exon positions")
@@ -1406,7 +1432,7 @@ def index_from_bam_cmd(
     log_info(f"Read index written: {path}")
 
 
-@cli.command("orfs-import")
+@legacy.command("orfs-import")
 @click.option("--bed12", required=True, help="Input ORFs in BED12 format.")
 @click.option(
     "--annotation", "-a", required=True, help="GTF annotation file for exon/transcript models."
@@ -1491,7 +1517,7 @@ def features(
         log_info("Legacy feature tables written")
 
 
-@cli.command("assemble")
+@legacy.command("assemble")
 @click.option(
     "--orfs-parquet", required=True, help="ORF candidates with composite scores (Parquet)."
 )
@@ -1507,7 +1533,7 @@ def assemble_cmd(orfs_parquet: str, out_parquet: str, solver: str, timeout_sec: 
     log_info("Translome assembly complete")
 
 
-@cli.command("map-orfs")
+@legacy.command("map-orfs")
 @click.option(
     "--orfs",
     "orfs_parquet",

@@ -59,6 +59,70 @@ def test_deprecated_commands_removed(name):
 
 
 # ---------------------------------------------------------------------------
+# Command grouping: the top level is the workflow; research/legacy are grouped
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "group,name",
+    [
+        ("research", "score-compare-frame"),
+        ("research", "score-compare-existing"),
+        ("research", "compare-profiles"),
+        ("research", "compare-frame-methods"),
+        ("research", "frame-disambiguation"),
+        ("research", "compare-read-assignment"),
+        ("research", "validate-panel"),
+        ("research", "export-rdg-flux"),
+        ("legacy", "plot"),
+        ("legacy", "orfs-import"),
+        ("legacy", "assemble"),
+        ("legacy", "map-orfs"),
+    ],
+)
+def test_grouped_commands_moved_not_deleted(group, name):
+    """Grouped commands left the top level but still run.
+
+    The point of the grouping is to shrink the advertised surface without
+    losing anything, so assert BOTH halves: gone from the top level, present
+    and invokable under its group.
+    """
+    assert name not in cli.commands, f"{name} should no longer be top-level"
+    assert name in cli.commands[group].commands
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [group, name, "--help"])
+    assert result.exit_code == 0, result.output
+
+
+def test_top_level_is_the_workflow():
+    """Top level holds the scoring path + build/inspect infra, nothing else."""
+    expected = {
+        # the workflow
+        "pipeline",
+        "extract-events",
+        "score-matrix",
+        "score-bams",
+        "score-bigwig",
+        "report",
+        "consequential",
+        # build/inspect infrastructure the workflow depends on
+        "build-cache",
+        "build-matrix-cache",
+        "build-psite-index",
+        "features",
+        "index-from-bam",
+        "inspect",
+        "process-bam",
+        "profiles",
+        # the two groups
+        "research",
+        "legacy",
+    }
+    assert set(cli.commands) == expected
+
+
+# ---------------------------------------------------------------------------
 # Shared per-chrom scoring helper (the core of score-matrix/score-bams)
 # ---------------------------------------------------------------------------
 

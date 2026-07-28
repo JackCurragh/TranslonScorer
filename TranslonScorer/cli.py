@@ -1876,13 +1876,6 @@ def build_matrix_cache_cmd(matrix_dir, n_workers):
 )
 @click.option("--annotation-version", default="", help="Annotation version stamped into the store.")
 @click.option(
-    "--ref-offset",
-    type=int,
-    default=15,
-    show_default=True,
-    help="P-site offset used when the matrix was built.",
-)
-@click.option(
     "--sample",
     "sample_names",
     multiple=True,
@@ -1899,29 +1892,16 @@ def build_matrix_cache_cmd(matrix_dir, n_workers):
     "--n-workers", type=int, default=None, help="Worker processes for partition scanning."
 )
 @click.option(
-    "--gtf",
-    default=None,
-    help=(
-        "GTF annotation file.  When provided the FrameRollup scoring path is used: "
-        "reads are projected to transcriptome coordinates, P-site offsets are "
-        "calibrated per (sample, length), and frame scoring is offset-correct. "
-        "ELONGATION ONLY (no init/term/junction/mappability). Prefer --psite-index "
-        "WITHOUT --gtf instead: same offset accuracy, every event type, one pipeline."
-    ),
-)
-@click.option(
     "--psite-index",
     "psite_index_dir",
-    default=None,
+    required=True,
     help=(
-        "Directory produced by build-psite-index. Meaning depends on --gtf: "
-        "WITH --gtf (legacy) — offsets feed the FrameRollup path (elongation only). "
-        "WITHOUT --gtf (recommended) — coverage is read directly from the P-site "
-        "index (per-(sample, length) offset-corrected genomic positions), scoring "
-        "every event type (init/term/elongation/junction) with the same accuracy "
-        "fix, through the normal pipeline (splice-aware flanks, mappability, etc. "
-        "all apply). Either way, (sample, length) pairs listed in "
-        "usable_sample_lengths.parquet (if present in the index dir) are honoured."
+        "Directory produced by build-psite-index. Coverage is read from it as "
+        "per-(sample, length) offset-corrected genomic positions — the only "
+        "matrix coverage strategy, because a flat offset across read lengths "
+        "collapses elong_in_frame to the ~0.33 random floor. (sample, length) "
+        "pairs listed in usable_sample_lengths.parquet (if present in the index "
+        "dir) are honoured."
     ),
 )
 @click.option(
@@ -1952,11 +1932,9 @@ def score_matrix_cmd(
     store_dir,
     data_version,
     annotation_version,
-    ref_offset,
     sample_names,
     site,
     n_workers,
-    gtf,
     psite_index_dir,
     context_gtf,
     mappability_bigwig,
@@ -1966,15 +1944,13 @@ def score_matrix_cmd(
     The matrix is sharded by read sequence; point --matrix-dir at the root and
     all partitions are scanned together (there is no valid single-partition use).
 
-    Three modes: --psite-index alone (RECOMMENDED — accurate per-(sample,length)
-    offsets, every event type); --gtf (+ optional --psite-index for offsets) —
-    the older FrameRollup path, elongation only, kept for backwards
-    compatibility; neither — legacy flat-offset path (frame scoring may be
-    inaccurate; --ref-offset applies).
+    Coverage always comes from --psite-index (build it with build-psite-index),
+    giving per-(sample, length) offset-corrected positions and scoring every
+    event type through the same pipeline as score-bams / score-bigwig.
     """
     setup_logging()
     from .io.matrix import discover_partitions
-    from .workflows import score_matrix_rollup_workflow, score_matrix_workflow
+    from .workflows import score_matrix_workflow
 
     if bool(matrix_dir) == bool(partitions):
         raise click.BadParameter(
@@ -1984,58 +1960,20 @@ def score_matrix_cmd(
         [str(p) for p in discover_partitions(matrix_dir)] if matrix_dir else list(partitions)
     )
     log_info(f"Scoring against {len(part_dirs)} matrix partitions")
+    log_info(f"Reading offset-corrected coverage from P-site index {psite_index_dir}")
 
-    if gtf:
-        from .io.annotation import build_cds_blocks
-
-        if context_gtf:
-            log_info(
-                "--context-gtf is ignored on the FrameRollup path (--gtf): "
-                "init/term are not scored there yet, only elongation."
-            )
-        if mappability_bigwig:
-            log_info(
-                "--mappability-bigwig is ignored on the FrameRollup path (--gtf): "
-                "not wired into score_matrix_rollup_workflow."
-            )
-        log_info(
-            "Tip: --psite-index without --gtf now gives the same offset accuracy "
-            "plus init/term/junction/mappability in one pass; --gtf/FrameRollup is "
-            "elongation-only and kept for backwards compatibility."
-        )
-        log_info(f"FrameRollup path: loading CDS from {gtf}")
-        cds_df = build_cds_blocks(gtf)
-        written = score_matrix_rollup_workflow(
-            events_dir,
-            part_dirs,
-            store_dir,
-            cds_df,
-            data_version=data_version,
-            annotation_version=annotation_version,
-            sample_names=list(sample_names) or None,
-            n_workers=n_workers,
-            psite_index_dir=psite_index_dir,
-        )
-    else:
-        if psite_index_dir:
-            log_info(f"P-site index path: reading offset-corrected coverage from {psite_index_dir}")
-        else:
-            log_info(
-                "Legacy flat-offset path (no --gtf/--psite-index); frame scoring may be inaccurate"
-            )
-        written = score_matrix_workflow(
-            events_dir,
-            part_dirs,
-            store_dir,
-            data_version=data_version,
-            annotation_version=annotation_version,
-            ref_offset=ref_offset,
-            psite_index_dir=psite_index_dir,
-            sample_names=list(sample_names) or None,
-            n_workers=n_workers,
-            context_gtf=context_gtf,
-            mappability_bigwig=mappability_bigwig,
-        )
+    written = score_matrix_workflow(
+        events_dir,
+        part_dirs,
+        store_dir,
+        data_version=data_version,
+        annotation_version=annotation_version,
+        psite_index_dir=psite_index_dir,
+        sample_names=list(sample_names) or None,
+        n_workers=n_workers,
+        context_gtf=context_gtf,
+        mappability_bigwig=mappability_bigwig,
+    )
     log_info(f"Scores written: {written or '(no events scored)'}")
 
 
@@ -2495,27 +2433,6 @@ def consequential_cmd(
     help="Consequential expression-percentile floor.",
 )
 @click.option(
-    "--cds-bigbed",
-    "cds_bigbed_path",
-    default=None,
-    help=(
-        "BigBed file providing CDS exon structure for FrameRollup scoring "
-        "(calibrated per-sample P-site offsets, transcriptome-coordinate frame "
-        "scoring).  Pass the same BigBed used as the feature source (--bigbed) "
-        "or a separate CDS annotation BigBed.  Activates the FrameRollup path "
-        "instead of the legacy flat-offset path."
-    ),
-)
-@click.option(
-    "--cds-gtf",
-    "cds_gtf_path",
-    default=None,
-    help=(
-        "GTF file providing CDS exon structure for FrameRollup scoring. "
-        "Use instead of --cds-bigbed when the feature source is a GTF or sqlite."
-    ),
-)
-@click.option(
     "--n-workers", type=int, default=None, help="Worker processes for matrix partition scanning."
 )
 @click.option(
@@ -2544,8 +2461,7 @@ def consequential_cmd(
     help=(
         "Precomputed mappability track (Umap/GEM-mappability style bigwig, values "
         "~0..1). Annotates every scored event with a diagnostic map_track_mean/"
-        "map_track_low, surfaced in the report — never affects eligibility/call. "
-        "Ignored on the FrameRollup path (--cds-bigbed/--cds-gtf)."
+        "map_track_low, surfaced in the report — never affects eligibility/call."
     ),
 )
 @click.option(
@@ -2553,12 +2469,10 @@ def consequential_cmd(
     "psite_index_dir",
     default=None,
     help=(
-        "Directory produced by build-psite-index (matrix mode). Routes coverage "
-        "through per-(sample, length) offset-corrected genomic positions instead "
-        "of a flat offset — fixes the elong_in_frame accuracy floor while still "
-        "scoring init/term/junction/mappability. RECOMMENDED over --cds-bigbed/"
-        "--cds-gtf (FrameRollup), which is elongation-only; ignored when either "
-        "of those is also given (FrameRollup takes precedence, unchanged)."
+        "Directory produced by build-psite-index. REQUIRED in matrix mode "
+        "(--matrix-dir): supplies the per-(sample, length) offset-corrected "
+        "genomic coverage. Not used in BAM mode, which calibrates its own "
+        "offsets (see --offset-method)."
     ),
 )
 def pipeline_cmd(
@@ -2585,8 +2499,6 @@ def pipeline_cmd(
     annotation,
     min_tier_confidence,
     min_expression_percentile,
-    cds_bigbed_path,
-    cds_gtf_path,
     n_workers,
     context_gtf,
     context_flank,
@@ -2616,6 +2528,10 @@ def pipeline_cmd(
         )
     partition_dirs = [str(p) for p in discover_partitions(matrix_dir)] if matrix_dir else None
     if partition_dirs:
+        if not psite_index_dir:
+            raise click.BadParameter(
+                "matrix mode requires --psite-index (build it with build-psite-index)"
+            )
         log_info(f"Scoring against {len(partition_dirs)} matrix partitions")
     exon_df = None
     if transcriptome:
@@ -2628,20 +2544,6 @@ def pipeline_cmd(
         min_tier_confidence=min_tier_confidence,
         min_expression_percentile=min_expression_percentile,
     )
-    cds_df = None
-    if cds_bigbed_path or cds_gtf_path:
-        if cds_bigbed_path and cds_gtf_path:
-            raise click.BadParameter("provide only one of --cds-bigbed or --cds-gtf, not both")
-        if cds_bigbed_path:
-            from .io.annotation import build_cds_blocks_from_bigbed
-
-            log_info(f"FrameRollup path: loading CDS blocks from BigBed {cds_bigbed_path}")
-            cds_df = build_cds_blocks_from_bigbed(cds_bigbed_path)
-        else:
-            from .io.annotation import build_cds_blocks
-
-            log_info(f"FrameRollup path: loading CDS blocks from GTF {cds_gtf_path}")
-            cds_df = build_cds_blocks(cds_gtf_path)
     paths = pipeline_workflow(
         out_dir,
         partition_dirs=partition_dirs,
@@ -2655,7 +2557,6 @@ def pipeline_cmd(
         sample_names=list(sample_names) or None,
         site=site,
         transcriptome=transcriptome,
-        cds_df=cds_df,
         n_workers=n_workers,
         exon_df=exon_df,
         policy=policy,

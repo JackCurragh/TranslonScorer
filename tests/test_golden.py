@@ -708,7 +708,7 @@ def test_provider_capabilities():
     assert callable(getattr(provider, "size_factors", None))
     assert not hasattr(provider, "junction_support")
 
-    mp = MatrixProvider([])
+    mp = MatrixProvider([], psite_index_dir="/nonexistent/index")
     for method in ("coverage", "size_factors", "junction_support", "mappability_ledger"):
         assert callable(getattr(mp, method, None)), method
 

@@ -562,13 +562,33 @@ def test_score_bigwig_cmd_rejects_mismatched_strand_pair_counts(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# --psite-index without --gtf (previously raised UsageError; now the
-# recommended matrix-scoring mode — MatrixProvider reads offset-corrected
-# genomic coverage directly, no FrameRollup needed)
+# --psite-index is the only matrix coverage strategy: required, and forwarded
 # ---------------------------------------------------------------------------
 
 
-def test_score_matrix_cmd_psite_index_without_gtf_no_longer_errors(monkeypatch, tmp_path: Path):
+def test_score_matrix_cmd_requires_psite_index(tmp_path: Path):
+    """Omitting --psite-index is a usage error, not a silent fall back to a
+    flat offset (which would pin elong_in_frame to the ~0.33 random floor)."""
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "score-matrix",
+            "--events-dir",
+            str(tmp_path / "events"),
+            "--matrix-dir",
+            str(tmp_path / "matrix"),
+            "--store-dir",
+            str(tmp_path / "scores"),
+            "--data-version",
+            "d1",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "psite-index" in result.output
+
+
+def test_score_matrix_cmd_forwards_psite_index(monkeypatch, tmp_path: Path):
     import TranslonScorer.io.matrix as io_matrix
     import TranslonScorer.workflows as workflows_mod
 

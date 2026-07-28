@@ -115,16 +115,15 @@ The PIF filter recovered 883 samples missed by the old periodicity ≥ 0.5 thres
 
 ## 5. Scoring: `score-matrix` Command
 
-### `--psite-index` alone, no `--gtf` (RECOMMENDED, added 2026-07-14)
+### One path: `--psite-index` (required since 2026-07-28)
 
-`MatrixProvider` now reads coverage directly from the P-site index
-(`psite_index.query_genomic_coverage`) instead of applying a flat offset —
-same per-(sample, length) offset accuracy as FrameRollup below, but through
-the ordinary `_score_events_over_provider` pipeline, so init/term/junction/
-mappability are all scored too, not just elongation. `(sample, length)` pairs
-in `usable_sample_lengths.parquet` are honoured automatically if that file is
-present in the index dir. This supersedes the FrameRollup path for scoring;
-prefer it going forward.
+`MatrixProvider` reads coverage from the P-site index
+(`psite_index.query_genomic_coverage`), which stores per-(sample, length)
+offset-corrected genomic positions. Scoring then runs through the ordinary
+`_score_events_over_provider` pipeline, so init/term/junction/mappability are
+scored alongside elongation. `(sample, length)` pairs in
+`usable_sample_lengths.parquet` are honoured automatically if that file is
+present in the index dir.
 
 ```bash
 translonscorer score-matrix \
@@ -135,28 +134,39 @@ translonscorer score-matrix \
   --psite-index /hps/.../translonscorer_6k/psite_index_filtered
 ```
 
-### The FrameRollup path (`--gtf`) — elongation-only, kept for backwards compatibility
+Omitting `--psite-index` is now a usage error rather than a silent fall back.
 
-- Projects reads to transcriptome coordinates
-- Uses per-(sample, length) calibrated P-site offsets
-- Computes `phase0 = (cds_phase + 5'pos) % 3` — offset-independent, calibrated analytically
-- Aggregates across samples into per-(feature_id, length) `elong_in_frame`
-- **Does not score init/term/junction, and ignores `--context-gtf`/`--mappability-bigwig`** —
-  a structurally separate pipeline (`score_matrix_rollup_workflow`) that never
-  goes through `_score_events_over_provider`. Not being extended further;
-  `score_matrix_rollup_workflow`/`score_frame_rollup`/`score_elongation_from_rollup`
-  are candidates for deletion once `--psite-index` (no `--gtf`) is validated
-  on real cohort-scale data — that validation is a manual/HPC step, not done
-  as part of adding it.
+### Why the two removed paths were removed
 
-`--psite-index` combined *with* `--gtf` still works exactly as before (added
-2026-06-27): loads `offsets.parquet`, filters to `usable_sample_lengths.parquet`,
-feeds the FrameRollup rollup. Falls back to `calibrate_offsets()` if
-`--psite-index` isn't given.
+**Flat offset (`--ref-offset`, formerly the default).** It applied
+`ref_offset=15` to every read length. True P-site offsets are per read length
+(28 nt → 12, 29 nt → 12, …); a single flat offset smears the P-site across
+frames, collapsing `elong_in_frame` to ~0.33 (random). Canonical protein-coding
+CDS scored ~0.342 in-frame — indistinguishable from noise. `init_rise` and
+`term_drop` were unaffected (coverage-shape metrics, not frame-dependent).
+A mode whose only behaviour is to produce noise is a footgun, not an option.
 
-### Why flat-offset scoring is broken
+**FrameRollup (`--gtf`).** It got the offsets right, but as a structurally
+separate pipeline in transcript coordinates that never went through
+`_score_events_over_provider` — so it scored elongation only, ignored
+`--context-gtf`/`--mappability-bigwig`, and hardcoded `identifiability=None,
+breadth=1.0`. The P-site index gives the same offset accuracy with every event
+type through the shared scorer, so FrameRollup had nothing left to offer as a
+*scoring* path.
 
-The legacy path (neither `--gtf` nor `--psite-index`) uses `ref_offset=15` for all read lengths. True P-site offsets are per read length (28 nt → 12, 29 nt → 12, etc.). A single flat offset smears the P-site across frames, collapsing `elong_in_frame` to ~0.33 (random). Canonical protein-coding CDS (PT) scored at ~0.342 in-frame — indistinguishable from noise — because of this bug. `init_rise` and `term_drop` are unaffected (coverage-shape metrics, not frame-dependent). `--psite-index` alone (see above) is the fix.
+The FrameRollup *utilities* (`build_frame_rollup`, `calibrate_offsets`,
+`score_frame_rollup` in `matrix/rollup.py`) are unchanged and still in use:
+`build-psite-index` is built on them, and the QC/figure scripts use
+`score_frame_rollup` to demonstrate calibrated-vs-flat periodicity. Only the
+scoring path was removed.
+
+### The two coverage strategies (deliberately kept)
+
+`MatrixProvider` (annotation scale, thousands of samples via a prebuilt index)
+and `BamSetProvider`/`BigwigSetProvider` (1–20 files read directly) are both
+first-class. They differ **only** in how per-locus coverage is obtained — one
+`provider.coverage(regions, site=...)` call at `workflows.py:294`. Events,
+scorer, report, consequentiality and store below that line are identical.
 
 ---
 
@@ -284,7 +294,7 @@ Active work in `RiboMetric/` (two checkouts: `RiboMetric/` and `RiboMetric-v120/
 
 | Bug | Location | Status |
 |-----|----------|--------|
-| `elong_in_frame` at ~0.33 random floor | matrix scoring flat offset | **Fixed 2026-07-14** (pending real-data validation): `--psite-index` **without** `--gtf` now routes `MatrixProvider.coverage()` through the P-site index directly (`psite_index.query_genomic_coverage`) — same calibrated-offset accuracy as the `--gtf`/FrameRollup path, but through `_score_events_over_provider` so init/term/junction/mappability score too, not just elongation. See §5. |
+| `elong_in_frame` at ~0.33 random floor | matrix scoring flat offset | **Fixed 2026-07-14, path removed 2026-07-28** (still pending real-cohort validation): `MatrixProvider.coverage()` reads the P-site index (`psite_index.query_genomic_coverage`) and there is no longer a flat-offset alternative to fall into — `--psite-index` is required and `--ref-offset`/`--gtf` are gone. See §5. |
 | Junction scoring dead (all n_reads=0) | `workflows._score_events_over_provider` | **Fixed 2026-07-14**: root cause was `_score_events_over_provider` never calling `provider.junction_support()` — both `MatrixProvider`/`BamSetProvider` implement it, it was just never invoked. See `_junction_support_for_chrom`. |
 | init_rise/term_drop spuriously inflated near a splice site | `scoring/aspects.py` leader/UTR flank | **Fixed 2026-07-14**: flank was flat genomic, reading intronic sequence when the true leader/UTR was spliced. Now splice-aware via `--context-gtf` on score-matrix/score-bams/pipeline. See `_project_flank`. |
 | Bigwig scoring unreachable from the event pipeline | `coverage/bigwig.py`, `workflows.py` | **Fixed 2026-07-14**: `BigwigSetProvider` existed but was never imported by `workflows.py`, and its `stranded` flag was a stub (always sum-merged fwd+rev). New `score_bigwigs_workflow` + `score-bigwig` CLI command; `coverage()` now emits a real `strand` column. Still lossy by design: no P/A site, no junction spanning, no mappability. |

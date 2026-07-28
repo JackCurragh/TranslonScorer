@@ -6,6 +6,30 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+- **Flat-offset matrix coverage.** `score-matrix --ref-offset` is gone and
+  `--psite-index` is now **required** (likewise in `pipeline` matrix mode).
+  A single offset applied across all read lengths smears the P-site across
+  frames and pinned `elong_in_frame` to the ~0.33 random floor, so the mode's
+  only behaviour was to produce noise that looked like a score.
+- **The FrameRollup *scoring* path.** `score-matrix --gtf`, `pipeline
+  --cds-gtf/--cds-bigbed`, `workflows.score_matrix_rollup_workflow` and
+  `scoring.run.score_elongation_from_rollup` are removed. It got offsets right
+  but ran as a separate transcript-coordinate pipeline that never went through
+  `_score_events_over_provider`: elongation only, `--context-gtf` and
+  `--mappability-bigwig` ignored, `identifiability`/`breadth` hardcoded. The
+  P-site index delivers the same offset accuracy for every event type through
+  the shared scorer.
+  The FrameRollup **utilities** (`build_frame_rollup`, `calibrate_offsets`,
+  `score_frame_rollup`) are unchanged and still used by `build-psite-index`
+  and the QC/figure scripts.
+
+### Changed
+- `MatrixProvider` now requires `psite_index_dir` and raises if it is missing,
+  rather than silently defaulting to the flat offset.
+- Matrix and BAM/bigWig remain two first-class coverage strategies that differ
+  only at `provider.coverage()`; everything downstream is one shared path.
+
 ## [0.2.0] - 2026-06-26
 
 ### Added

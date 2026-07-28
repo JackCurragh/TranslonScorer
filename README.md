@@ -116,12 +116,24 @@ The sparse matrix is **one logical matrix sharded into partition directories by
 read sequence**. Reads for any locus are spread across *all* partitions, so the
 matrix must **always be used in full** — there is no single-partition or subset
 usage. You point at the matrix **root** and every partition under it is scanned
-together:
+together.
+
+Matrix scoring needs a **P-site index** built once per matrix. It supplies the
+per-(sample, length) P-site offsets: a single flat offset across read lengths
+smears the P-site across frames and collapses in-frame fraction to the ~0.33
+random floor, so the index is required, not optional.
 
 ```sh
+# once per matrix — calibrates offsets and bakes the index
+translonscorer build-psite-index \
+  --matrix-dir matrix/global_partitioned \
+  --cds-gtf annotation.gtf --calibration-gtf annotation.gtf \
+  --out-dir matrix/psite_index
+
 translonscorer pipeline \
   --sqlite annotation.translons.sqlite \
   --matrix-dir matrix/global_partitioned \
+  --psite-index matrix/psite_index \
   --chrom chr12 \
   --out-dir results_chr12/ \
   --data-version matrix_v1
@@ -131,6 +143,10 @@ translonscorer pipeline \
 not restrict the matrix — all partitions are still read. Omit it for the whole
 genome. See [`runs/run_matrix_scoring.sh`](runs/run_matrix_scoring.sh) for a
 reproducible matrix run you can copy.
+
+BAM/bigWig mode needs no index — it calibrates its own offsets per file (see
+`--offset-method`). That is the only difference between the two modes: the
+events, the scorer, the report and the store are identical.
 
 ### C. Step by step (full control)
 
@@ -143,9 +159,11 @@ translonscorer extract-events --gtf annotation.gtf --feature-type CDS \
 # 2a. score from BAMs ...
 translonscorer score-bams  --events-dir run/events --bam a.bam --bam b.bam \
     --store-dir run/scores --data-version v1
-# 2b. ... or from the whole matrix (all partitions under the root)
+# 2b. ... or from the whole matrix (all partitions under the root).
+#     --psite-index is required; build it once with build-psite-index.
 translonscorer score-matrix --events-dir run/events \
     --matrix-dir matrix/global_partitioned \
+    --psite-index matrix/psite_index \
     --store-dir run/scores --data-version v1
 
 # 3. compose the per-translon report (+ default consequentiality)

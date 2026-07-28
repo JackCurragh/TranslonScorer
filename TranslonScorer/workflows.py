@@ -341,8 +341,7 @@ def score_matrix_workflow(
     store_dir: str,
     *,
     data_version: str,
-    ref_offset: int = 15,
-    psite_index_dir: Optional[str] = None,
+    psite_index_dir: str,
     sample_names: Optional[List[str]] = None,
     n_workers: Optional[int] = None,
     site: str = "A",
@@ -355,15 +354,12 @@ def score_matrix_workflow(
 ) -> str:
     """Score events against the sparse annotation-scale matrix; persist results.
 
-    ``psite_index_dir``, if given (a directory produced by ``build-psite-index``),
-    routes coverage through per-(sample, length) offset-corrected genomic
-    positions instead of the flat ``ref_offset`` — fixes the elong_in_frame
-    ~0.33 accuracy floor without leaving this pipeline, unlike the separate
-    FrameRollup/``score_matrix_rollup_workflow`` path (elongation-only). This
-    is now the recommended way to get accurate matrix scoring: it also gets
-    init/term/junction/mappability, which FrameRollup never will. See
-    MatrixProvider and psite_index.query_genomic_coverage. ``ref_offset`` is
-    ignored when this is set.
+    ``psite_index_dir`` (a directory produced by ``build-psite-index``) is
+    required: coverage is read as per-(sample, length) offset-corrected genomic
+    positions. A single flat offset across all read lengths smears the P-site
+    across frames and collapses ``elong_in_frame`` to the ~0.33 random floor,
+    so there is no flat-offset mode — the index is the only matrix coverage
+    strategy. See MatrixProvider and psite_index.query_genomic_coverage.
 
     ``context_gtf``, if given, provides the host-transcript exon models used to
     project init/term leader/UTR flanks across nearby introns (see
@@ -383,7 +379,6 @@ def score_matrix_workflow(
     events = read_events(events_dir)
     provider = MatrixProvider(
         partition_dirs,
-        ref_offset=ref_offset,
         psite_index_dir=psite_index_dir,
         sample_names=sample_names,
         n_workers=n_workers,
@@ -402,111 +397,6 @@ def score_matrix_workflow(
     )
     return persist_scores(
         scored,
-        store_dir,
-        data_version=data_version,
-        annotation_version=annotation_version,
-    )
-
-
-# ---------------------------------------------------------------------------
-# score-matrix-rollup  (FrameRollup path — NFR2, FR2/FR3)
-# ---------------------------------------------------------------------------
-
-
-def score_matrix_rollup_workflow(
-    events_dir: str,
-    partition_dirs,
-    store_dir: str,
-    cds_df: pl.DataFrame,
-    *,
-    data_version: str,
-    sample_names: Optional[List[str]] = None,
-    n_workers: Optional[int] = None,
-    multimap_mode: str = "unique",
-    annotation_version: str = "",
-    thr: ScoreThresholds = DEFAULT_THRESHOLDS,
-    psite_index_dir: Optional[str] = None,
-) -> str:
-    """Score elongation events using the FrameRollup (calibrated per-sample, per-length offsets).
-
-    Replaces the flat-offset MatrixProvider path for the elongation aspect.
-    init_rise / term_drop scoring is not yet wired here (retained in score_matrix_workflow).
-
-    Parameters
-    ----------
-    cds_df : output of build_cds_blocks(), used to build the FrameRollup.
-    """
-    from TranslonScorer.matrix.rollup import (
-        build_frame_rollup,
-        calibrate_offsets,
-        score_frame_rollup,
-    )
-    from TranslonScorer.scoring.evidence import _RECORD_SCHEMA, event_record
-    from TranslonScorer.scoring.run import score_elongation_from_rollup
-
-    events = read_events(events_dir)
-    if events.is_empty():
-        from TranslonScorer.scoring.evidence import _RECORD_SCHEMA as _S
-
-        return persist_scores(pl.DataFrame(schema=_S), store_dir, data_version=data_version)
-
-    # Build FrameRollup for CDS features referenced by events
-    rollup = build_frame_rollup(
-        partition_dirs,
-        cds_df,
-        multimap_mode=multimap_mode,
-        sample_names=sample_names,
-        n_workers=n_workers,
-    )
-
-    # Load or calibrate per-(sample, length) offsets
-    if psite_index_dir is not None:
-        offsets_path = Path(psite_index_dir) / "offsets.parquet"
-        usable_path = Path(psite_index_dir) / "usable_sample_lengths.parquet"
-        offsets_df = pl.read_parquet(offsets_path)
-        offsets = {
-            (str(r["sample_name"]), int(r["length"])): int(r["offset"])
-            for r in offsets_df.iter_rows(named=True)
-        }
-        if usable_path.exists():
-            usable_df = (
-                pl.read_parquet(usable_path)
-                .rename({"sample_id": "sample_name"})
-                .select(["sample_name", pl.col("length").cast(pl.Int64)])
-                .with_columns(pl.lit(True).alias("_keep"))
-            )
-            rollup = (
-                rollup.join(usable_df, on=["sample_name", "length"], how="left")
-                .filter(pl.col("_keep").fill_null(False))
-                .drop("_keep")
-            )
-    else:
-        agg = rollup.group_by(["sample_name", "length", "strand", "phase0"]).agg(
-            pl.col("count").sum()
-        )
-        offsets = calibrate_offsets(agg, target_frame=0)
-
-    # Score: aggregate across samples → per-(feature_id, length) elong_in_frame
-    scored = score_frame_rollup(rollup, offsets, default_offset=12)
-
-    # Map feature-level scores to events
-    elong_ev = score_elongation_from_rollup(events, scored, thr=thr)
-
-    # Serialise to long-form record table
-    rows = []
-    for r in events.filter(pl.col("type") == "elongation").iter_rows(named=True):
-        raw = elong_ev.get(r["event_id"])
-        if raw is None:
-            continue
-        rows.append(
-            event_record(r["event_id"], "elongation", "aggregate", "aggregate", raw, thr.version)
-        )
-
-    result = (
-        pl.from_dicts(rows, schema=_RECORD_SCHEMA) if rows else pl.DataFrame(schema=_RECORD_SCHEMA)
-    )
-    return persist_scores(
-        result,
         store_dir,
         data_version=data_version,
         annotation_version=annotation_version,
@@ -730,7 +620,6 @@ def pipeline_workflow(
     transcriptome: bool = False,
     exon_df: Optional[pl.DataFrame] = None,
     policy: Optional[ConsequentialityPolicy] = None,
-    cds_df: Optional[pl.DataFrame] = None,
     n_workers: Optional[int] = None,
     context_gtf: Optional[str] = None,
     context_flank: int = 200,
@@ -747,16 +636,9 @@ def pipeline_workflow(
     coverage source; ``source_kwargs`` selects the feature source for
     extract-events (sqlite_path | gtf_path | bed12_path | bigbed_path | fasta_path).
 
-    cds_df: if provided (from build_cds_blocks or build_cds_blocks_from_bigbed),
-    matrix mode uses the FrameRollup path with per-(sample,length) calibrated
-    P-site offsets — but elongation only (no init/term/junction/mappability).
-    Prefer ``psite_index_dir`` instead: same offset accuracy, full event-type
-    coverage, one pipeline. Without either, the legacy flat-offset path is used.
-
-    psite_index_dir: directory from ``build-psite-index``; routes matrix
-    scoring through per-(sample, length) offset-corrected genomic coverage
-    (see score_matrix_workflow, MatrixProvider). Ignored when ``cds_df`` is
-    also given (FrameRollup takes precedence, unchanged behaviour).
+    psite_index_dir: directory from ``build-psite-index``; required in matrix
+    mode, where it supplies the per-(sample, length) offset-corrected genomic
+    coverage (see score_matrix_workflow, MatrixProvider).
 
     context_gtf: host-transcript exon models, forwarded to BOTH extract-events
     (adds context junction events near ORF boundaries) and scoring (projects
@@ -781,30 +663,23 @@ def pipeline_workflow(
         **source_kwargs,
     )
     if partition_dirs:
-        if cds_df is not None:
-            score_matrix_rollup_workflow(
-                events_dir,
-                list(partition_dirs),
-                store_dir,
-                cds_df,
-                data_version=data_version,
-                sample_names=sample_names,
-                annotation_version=annotation_version,
-                n_workers=n_workers,
+        if not psite_index_dir:
+            raise ValueError(
+                "matrix mode requires psite_index_dir (build it with "
+                "`translonscorer build-psite-index`)"
             )
-        else:
-            score_matrix_workflow(
-                events_dir,
-                list(partition_dirs),
-                store_dir,
-                data_version=data_version,
-                sample_names=sample_names,
-                site=site,
-                annotation_version=annotation_version,
-                context_gtf=context_gtf,
-                mappability_bigwig=mappability_bigwig,
-                psite_index_dir=psite_index_dir,
-            )
+        score_matrix_workflow(
+            events_dir,
+            list(partition_dirs),
+            store_dir,
+            data_version=data_version,
+            sample_names=sample_names,
+            site=site,
+            annotation_version=annotation_version,
+            context_gtf=context_gtf,
+            mappability_bigwig=mappability_bigwig,
+            psite_index_dir=psite_index_dir,
+        )
     else:
         score_bams_workflow(
             events_dir,

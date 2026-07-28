@@ -261,53 +261,6 @@ def test_score_frame_rollup_empty():
 # ---------------------------------------------------------------------------
 
 
-def test_score_elongation_from_rollup_unit():
-    """Unit: known elong_in_frame → correct call; missing feature → INSUFFICIENT."""
-    from TranslonScorer.scoring.run import score_elongation_from_rollup
-
-    scored = pl.DataFrame(
-        {
-            "sample_name": ["S1"],
-            "feature_id": ["F1"],
-            "length": [29],
-            "n_reads": [1000.0],
-            "frame0_count": [800.0],
-            "frame1_count": [100.0],
-            "frame2_count": [100.0],
-            "elong_in_frame": [0.80],
-            "dominant_frame": [0],
-        }
-    )
-    events = pl.DataFrame(
-        {
-            "event_id": [1, 2],
-            "type": ["elongation", "elongation"],
-            "feature_id": ["F1", "MISSING"],
-            "start": [100, 200],
-            "end": [400, 500],
-            "strand": [1, 1],
-            "phase": [0, 0],
-            "chrom": ["chr1", "chr1"],
-        },
-        schema={
-            "event_id": pl.UInt64,
-            "type": pl.Utf8,
-            "feature_id": pl.Utf8,
-            "start": pl.Int64,
-            "end": pl.Int64,
-            "strand": pl.Int64,
-            "phase": pl.Int64,
-            "chrom": pl.Utf8,
-        },
-    )
-    ev = score_elongation_from_rollup(events, scored)
-    assert ev[1]["call"] == "SUPPORTED", f"Expected SUPPORTED, got {ev[1]['call']}"
-    assert ev[1]["metric"] == pytest.approx(0.80)
-    # Missing feature: 0 reads → INSUFFICIENT
-    assert ev[2]["eligibility"] == "INSUFFICIENT"
-    assert ev[2]["call"] is None
-
-
 # ---------------------------------------------------------------------------
 # profile_from_index (CoverageIndex helpers — unit, no BAM needed)
 # ---------------------------------------------------------------------------
@@ -511,63 +464,6 @@ def test_prevalence_from_rollup_gapdh():
     row = prev.filter(pl.col("feature_id") == "ENST00000229239").row(0, named=True)
     assert row["n_eligible_samples"] >= 1, "Expected at least 1 eligible sample"
     assert row["prevalence"] > 0.5, f"Expected GAPDH prevalence > 50%, got {row['prevalence']:.1%}"
-
-
-@pytest.mark.skipif(not HAS_MATRIX, reason="local matrix partition not in data/")
-def test_score_elongation_from_rollup_canonical_cds_supported():
-    """FR3 positive-control gate: canonical GAPDH CDS must score SUPPORTED via FrameRollup."""
-    from TranslonScorer.io.annotation import build_cds_blocks
-    from TranslonScorer.matrix.rollup import (
-        build_frame_rollup,
-        calibrate_offsets,
-        score_frame_rollup,
-    )
-    from TranslonScorer.scoring.run import score_elongation_from_rollup
-
-    cds = build_cds_blocks(str(REPO_ROOT / "data" / "genes.gtf"))
-    gapdh = cds.filter(pl.col("tran_id") == "ENST00000229239")
-
-    rollup = build_frame_rollup(
-        REPO_ROOT / "data" / "global_partitioned",
-        gapdh,
-        multimap_mode="unique",
-        n_workers=1,
-    )
-    agg = rollup.group_by(["sample_name", "length", "strand", "phase0"]).agg(pl.col("count").sum())
-    offsets = calibrate_offsets(agg, target_frame=0)
-    scored = score_frame_rollup(rollup, offsets, default_offset=12)
-
-    # Build a minimal synthetic elongation event for GAPDH CDS
-    fake_events = pl.DataFrame(
-        {
-            "event_id": [12345678],
-            "type": ["elongation"],
-            "feature_id": ["ENST00000229239"],
-            "start": [6534832],
-            "end": [6538167],
-            "strand": [1],
-            "phase": [0],
-            "chrom": ["chr12"],
-        },
-        schema={
-            "event_id": pl.UInt64,
-            "type": pl.Utf8,
-            "feature_id": pl.Utf8,
-            "start": pl.Int64,
-            "end": pl.Int64,
-            "strand": pl.Int64,
-            "phase": pl.Int64,
-            "chrom": pl.Utf8,
-        },
-    )
-    ev = score_elongation_from_rollup(fake_events, scored)
-    assert 12345678 in ev, "Expected evidence for GAPDH elongation event"
-    result = ev[12345678]
-    assert result["eligibility"] == "ELIGIBLE", f"Expected ELIGIBLE, got {result['eligibility']}"
-    assert result["call"] == "SUPPORTED", (
-        f"FR3 positive-control gate FAILED: canonical CDS should score SUPPORTED, "
-        f"got {result['call']!r} (elong_in_frame={result['metric']:.1%})"
-    )
 
 
 @pytest.mark.skipif(not HAS_MATRIX, reason="local matrix partition not in data/")

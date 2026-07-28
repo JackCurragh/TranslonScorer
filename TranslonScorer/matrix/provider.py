@@ -1,12 +1,14 @@
 """MatrixProvider — coverage from the sparse annotation-scale matrix.
 
-Wraps `matrix_rollup.region_coverage` and `tabulate_junctions` behind
-the capability-Protocol interface defined in `coverage/base.py`.
+Coverage comes from the P-site index built by `build-psite-index`, which
+stores per-(sample, length) offset-corrected genomic P-site positions.
+`site` selection shifts by one codon (A = P + 3).
 
-The matrix stores pre-computed A-site positions at a configurable offset;
-`site` selection is supported by shifting the query region when asking for
-P-site coverage (P = A − 3, so the query is shifted by +3 to align the
-stored A-site positions).
+This is the matrix half of the two coverage strategies: `MatrixProvider`
+scans a pre-built index over thousands of samples, `BamSetProvider` /
+`BigwigSetProvider` read a handful of files directly. They diverge only in
+how per-locus coverage is obtained — the events, the scorer, the report and
+the store below them are identical (see workflows._score_events_over_provider).
 
 Capabilities (duck-typed; see coverage/base.py)
 -----------------------------------------------
@@ -36,34 +38,27 @@ class MatrixProvider:
     ----------
     partition_dirs  : path(s) to partition directories produced by the matrix
                       pipeline (each directory contains a unique-read BAM and
-                      count/manifest parquets). Always required — still used
-                      for junction_support()/mappability_ledger() regardless
-                      of which coverage strategy is active.
-    ref_offset      : flat P-site read offset applied to every read
-                      regardless of sample/length (used to interpret stored
-                      positions). Ignored when `psite_index_dir` is given.
+                      count/manifest parquets). Required — used for
+                      junction_support()/mappability_ledger(), which read the
+                      partition BAMs rather than the index.
     psite_index_dir : directory produced by `build-psite-index` (Phase 2).
-                      When given, coverage() reads per-(sample, length)
-                      offset-corrected genomic P-site positions from the
-                      index instead of applying the flat `ref_offset` —
-                      fixes the elong_in_frame ~0.33 accuracy floor that the
-                      flat-offset mode has, without leaving the
-                      CoverageProvider/_score_events_over_provider pipeline
-                      (unlike the FrameRollup path, which is a separate,
-                      elongation-only pipeline in transcript coordinates).
+                      Required. coverage() reads per-(sample, length)
+                      offset-corrected genomic P-site positions from it. A
+                      single flat offset across read lengths smears the P-site
+                      across frames and pins elong_in_frame to the ~0.33 random
+                      floor, so no flat-offset alternative is offered.
                       See psite_index.query_genomic_coverage.
     sample_names    : optional list of sample names to include (None = all).
     n_workers       : worker processes for parallel partition scanning
-                      (ref_offset mode only; the psite_index mode reads
-                      pre-built Parquet shards directly, no scanning).
+                      (junction_support only — coverage reads pre-built
+                      Parquet shards directly, no scanning).
     """
 
     def __init__(
         self,
         partition_dirs: Union[PathLike, List[PathLike]],
         *,
-        ref_offset: int = 15,
-        psite_index_dir: Optional[PathLike] = None,
+        psite_index_dir: PathLike,
         sample_names: Optional[List[str]] = None,
         n_workers: Optional[int] = None,
     ) -> None:
@@ -71,8 +66,14 @@ class MatrixProvider:
             self._dirs: List[Path] = [Path(partition_dirs)]
         else:
             self._dirs = [Path(d) for d in partition_dirs]
-        self._ref_offset = int(ref_offset)
-        self._psite_index_dir = Path(psite_index_dir) if psite_index_dir else None
+        if not psite_index_dir:
+            raise ValueError(
+                "MatrixProvider requires psite_index_dir (build it with "
+                "`translonscorer build-psite-index`). Matrix coverage must use "
+                "per-(sample, length) P-site offsets; a flat offset collapses "
+                "elong_in_frame to the ~0.33 random floor."
+            )
+        self._psite_index_dir = Path(psite_index_dir)
         self._sample_names = sample_names
         self._n_workers = n_workers
 
@@ -89,13 +90,9 @@ class MatrixProvider:
     ) -> pl.DataFrame:
         """Return per-position coverage over genomic regions.
 
-        With `psite_index_dir` set, reads already-offset-corrected positions
-        from the P-site index (see psite_index.query_genomic_coverage) — no
-        further shift needed for site="P"; site="A" applies +3 nt exactly as
-        the flat-offset mode below does. Without it, the matrix stores
-        positions at the flat P-site offset used during matrix construction
-        (`ref_offset`); site="A" (default) shifts forward by 3 nt to convert
-        stored P-site to A-site coordinates.
+        Positions come from the P-site index already offset-corrected per
+        (sample, length), so site="P" needs no shift and site="A" applies the
+        +3 nt (one codon) shift.
 
         Parameters
         ----------
@@ -105,45 +102,20 @@ class MatrixProvider:
 
         Returns
         -------
-        DataFrame with columns pos, count[, strand][, sample_name].
+        DataFrame with columns pos, count, strand[, sample_name].
         """
         if site not in {"P", "A"}:
             raise ValueError(f"site must be 'P' or 'A', got {site!r}")
 
-        if self._psite_index_dir is not None:
-            from TranslonScorer.matrix.psite_index import query_genomic_coverage
+        from TranslonScorer.matrix.psite_index import query_genomic_coverage
 
-            return query_genomic_coverage(
-                self._psite_index_dir,
-                [(r.chrom, r.start, r.end) for r in regions],
-                site=site,
-                sample_names=self._sample_names,
-                group_level="sample" if by_sample else "aggregate",
-            )
-
-        from TranslonScorer.matrix.rollup import region_coverage
-
-        a_shift = 3 if site == "A" else 0
-        query_regions = [Region(r.chrom, r.start - a_shift, r.end - a_shift) for r in regions]
-
-        group_level = "sample" if by_sample else "aggregate"
-        df = region_coverage(
-            self._dirs,
-            [(r.chrom, r.start, r.end) for r in query_regions],
-            ref_offset=self._ref_offset,
-            group_level=group_level,
+        return query_genomic_coverage(
+            self._psite_index_dir,
+            [(r.chrom, r.start, r.end) for r in regions],
+            site=site,
             sample_names=self._sample_names,
-            n_workers=self._n_workers,
+            group_level="sample" if by_sample else "aggregate",
         )
-        if df.is_empty():
-            schema: Dict[str, type] = {"pos": pl.Int64, "count": pl.Float64}
-            if by_sample:
-                schema["sample_name"] = pl.Utf8
-            return pl.DataFrame(schema=schema)
-
-        if a_shift and "pos" in df.columns:
-            df = df.with_columns((pl.col("pos") + a_shift).alias("pos"))
-        return df
 
     def size_factors(self) -> Dict[str, float]:
         """Per-sample library-size factors (stub: all 1.0 until ledger is built)."""

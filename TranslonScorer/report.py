@@ -43,7 +43,7 @@ def compose_report(
 
     Parameters
     ----------
-    scores : output of score_events / score_events_vectorised — must have
+    scores : output of score_events — must have
              columns event_id, aspect, eligibility, call, group, tier and
              (for composition) n_reads, metric.
     feature_event : translon→event membership (feature_id, event_id, role[,

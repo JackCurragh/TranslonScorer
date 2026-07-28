@@ -24,11 +24,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `score_frame_rollup`) are unchanged and still used by `build-psite-index`
   and the QC/figure scripts.
 
+- **The second scorer.** `scoring.run.score_events_vectorised` is renamed to
+  `score_events` and is now the only scorer in product code. The scalar
+  implementation — which carried a "must reproduce this" docstring and so was a
+  standing hand-sync drift risk — moved to `tests/reference_scorer.py` as
+  `score_events_scalar`, where it stays useful as an independent oracle the
+  shipped scorer is diffed against on every run.
+
 ### Changed
 - `MatrixProvider` now requires `psite_index_dir` and raises if it is missing,
   rather than silently defaulting to the flat offset.
 - Matrix and BAM/bigWig remain two first-class coverage strategies that differ
   only at `provider.coverage()`; everything downstream is one shared path.
+- **`score_events` signature**: coverage is now a `cov_df` DataFrame
+  (`pos`, `count`), matching what providers return. The old scalar took a
+  `{pos: count}` dict; that shape survives only in the test reference.
+- The GAPDH golden test now runs the **shipped** scorer. It previously ran the
+  scalar reference, so the product was only validated against the golden
+  transitively via the scalar≡vectorised comparison.
 
 ## [0.2.0] - 2026-06-26
 

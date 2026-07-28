@@ -4,11 +4,12 @@ Gate command:  make gate   (= pytest tests/test_golden.py -q)
 
 Assertions
 ----------
-1. GAPDH golden: score_events on the synthetic GAPDH-locus fixture reproduces
-   outputs/reference_scores_gapdh.parquet with max|Δmetric|==0 and 0
-   call/eligibility mismatches.
-2. Scalar ≡ vectorised: score_events and score_events_vectorised agree (Δ=0)
-   on the same fixture, including a contended elongation pair.
+1. GAPDH golden: the shipped ``scoring.run.score_events`` on the synthetic
+   GAPDH-locus fixture reproduces outputs/reference_scores_gapdh.parquet with
+   max|Δmetric|==0 and 0 call/eligibility mismatches.
+2. Product ≡ reference: the shipped scorer and the independent scalar
+   implementation in ``tests/reference_scorer.py`` agree (Δ=0) on the same
+   fixture, including a contended elongation pair.
 
 To regenerate the golden (only needed when intentionally changing the scorer):
     python3 tests/test_golden.py
@@ -20,12 +21,10 @@ from pathlib import Path
 
 import polars as pl
 
+from tests.reference_scorer import score_events_scalar
 from TranslonScorer.events import extract_events
 from TranslonScorer.model import ScoreThresholds
-from TranslonScorer.scoring.run import (
-    score_events,
-    score_events_vectorised,
-)
+from TranslonScorer.scoring.run import score_events
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -119,10 +118,22 @@ def _gapdh_coverage() -> dict:
     return cov
 
 
+def _cov_df(cov: dict) -> pl.DataFrame:
+    return pl.DataFrame(
+        {"pos": list(cov.keys()), "count": list(cov.values())},
+        schema={"pos": pl.Int64, "count": pl.Float64},
+    )
+
+
 def _run_gapdh() -> pl.DataFrame:
+    """Golden is produced by the SHIPPED scorer, not the test-only reference.
+
+    (It used to run the scalar reference, so the golden only reached the
+    product transitively via the scalar≡vectorised test.)
+    """
     return score_events(
         _gapdh_events(),
-        _gapdh_coverage(),
+        _cov_df(_gapdh_coverage()),
         group="gapdh",
         tier="aggregate",
         thr=_THR,
@@ -256,37 +267,30 @@ def test_gapdh_golden():
     _assert_identical(result, golden, "gapdh_golden")
 
 
-def test_scalar_equals_vectorised_gapdh():
-    """score_events and score_events_vectorised agree on the GAPDH fixture."""
+def test_product_equals_scalar_reference_gapdh():
+    """Shipped score_events agrees with the independent scalar reference."""
     events = _gapdh_events()
     cov_dict = _gapdh_coverage()
-    cov_df = pl.DataFrame(
-        {"pos": list(cov_dict.keys()), "count": list(cov_dict.values())},
-        schema={"pos": pl.Int64, "count": pl.Float64},
-    )
-    scalar = score_events(events, cov_dict, group="gapdh", tier="aggregate", thr=_THR)
-    vec = score_events_vectorised(events, cov_df, group="gapdh", tier="aggregate", thr=_THR)
-    _assert_identical(scalar, vec, "scalar_vs_vec_gapdh")
+    scalar = score_events_scalar(events, cov_dict, group="gapdh", tier="aggregate", thr=_THR)
+    product = score_events(events, _cov_df(cov_dict), group="gapdh", tier="aggregate", thr=_THR)
+    _assert_identical(scalar, product, "scalar_vs_product_gapdh")
 
 
-def test_scalar_equals_vectorised_contended():
-    """score_events and score_events_vectorised agree on a contended-elong fixture."""
+def test_product_equals_scalar_reference_contended():
+    """Same, on a contended elongation pair — where the prefix-sum kernel is
+    least obvious by inspection and the reference earns its keep."""
     events = _contend_events()
     cov_dict = _contend_coverage()
-    cov_df = pl.DataFrame(
-        {"pos": list(cov_dict.keys()), "count": list(cov_dict.values())},
-        schema={"pos": pl.Int64, "count": pl.Float64},
-    )
     overlaps_dict = _contend_overlaps_dict()
     overlaps_df = _contend_overlaps_df()
 
-    scalar = score_events(
+    scalar = score_events_scalar(
         events, cov_dict, overlaps=overlaps_dict, group="test", tier="aggregate", thr=_THR
     )
-    vec = score_events_vectorised(
-        events, cov_df, overlaps_df=overlaps_df, group="test", tier="aggregate", thr=_THR
+    product = score_events(
+        events, _cov_df(cov_dict), overlaps_df=overlaps_df, group="test", tier="aggregate", thr=_THR
     )
-    _assert_identical(scalar, vec, "scalar_vs_vec_contended")
+    _assert_identical(scalar, product, "scalar_vs_product_contended")
 
 
 # ---------------------------------------------------------------------------
@@ -691,10 +695,10 @@ def test_gapdh_golden_via_provider():
 
     # Score using both paths and assert bit-identical
     direct = score_events(
-        _gapdh_events(), _gapdh_coverage(), group="gapdh", tier="aggregate", thr=_THR
+        _gapdh_events(), _cov_df(_gapdh_coverage()), group="gapdh", tier="aggregate", thr=_THR
     )
     via_provider = score_events(
-        _gapdh_events(), cov_via_provider, group="gapdh", tier="aggregate", thr=_THR
+        _gapdh_events(), _cov_df(cov_via_provider), group="gapdh", tier="aggregate", thr=_THR
     )
     _assert_identical(direct, via_provider, "gapdh_via_provider")
 

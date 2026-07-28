@@ -54,14 +54,12 @@ IDs match the review of 2026-07-16. `file:line` anchors are current at time of w
 
 ### B. Path divergence (make matrix analogous to bigwig/aggregate)
 
-- **B1 — flat-offset default → ~0.33 in-frame floor.** `matrix.py:49,124`. Frame scoring is noise by default.
-- **B2 — FrameRollup scores elongation only.** `run.py:47`. init/term/junction never scored on `--gtf`; features get a partial report.
-- **B3 — FrameRollup elongation hardcodes `identifiability=None, breadth=1.0, covered_nt=0`.** `run.py:98-111` + `evidence.py:126`. No overlap disambiguation; breadth gate disabled. Materially different decision surface.
-  **Fix (B1–B3):** delete FrameRollup as a scoring path (`score_elongation_from_rollup`, `score_matrix_rollup_workflow`, the `--gtf` mode) **and** the flat-offset mode. Matrix coverage always goes through correct per-(sample,length) offsets, yielding per-position genomic coverage exactly like bigwig/BAM. One matrix coverage path; matrix/bigwig/BAM identical downstream.
-  **Open decision:** correct offsets come from the precomputed psite-index (exists today, needs a `build-psite-index` step) **or** computed on the fly (no prep step, more work per run). Recommendation: keep precompute, make it the only path. See §5.
+- ~~**B1 — flat-offset default → ~0.33 in-frame floor.**~~ ~~**B2 — FrameRollup scores elongation only.**~~ ~~**B3 — FrameRollup elongation hardcodes `identifiability=None, breadth=1.0, covered_nt=0`.**~~
+  **ALL DONE 2026-07-28.** Both the flat-offset mode and the FrameRollup scoring path are deleted (`score_elongation_from_rollup`, `score_matrix_rollup_workflow`, `--gtf`, `--ref-offset`, `pipeline --cds-gtf/--cds-bigbed`). `MatrixProvider` requires `psite_index_dir` and raises without it. Matrix coverage is per-position genomic exactly like bigwig/BAM; the three sources now diverge at a single line (`provider.coverage()` in `_score_events_over_provider`) and are identical downstream.
+  **Open decision RESOLVED:** precompute (psite-index) is the only matrix path; the `build-psite-index` step is required. BAM/bigwig still calibrate on the fly per file, which is the right trade at 1–20 files.
+  The FrameRollup *utilities* (`build_frame_rollup`, `calibrate_offsets`, `score_frame_rollup`) are retained — `build-psite-index` is built on them and the QC/figure scripts use them.
 
-- **B4 — two scorers (scalar `score_events` + vectorised `score_events_vectorised`) hand-synced.** `run.py:246,306`. Docstring says one "must reproduce" the other — standing drift risk.
-  **Fix:** collapse to one implementation per aspect. Elongation vectorised (prefix sums, keep); junction vectorised (group-by, easy); init/term stay a plain per-event loop (far fewer point events; clearer than a fiddly vectorisation). Tests assert against fixtures, not a second implementation. Not "vectorise everything for its own sake" — one code path each, vectorised where the volume is.
+- ~~**B4 — two scorers (scalar `score_events` + vectorised `score_events_vectorised`) hand-synced.**~~ **DONE 2026-07-28.** Product ships one `scoring.run.score_events` (elongation batched via prefix sums; init/term/junction a per-event loop). The scalar implementation moved to `tests/reference_scorer.py` as an independent oracle — kept deliberately, because the prefix-sum elongation kernel is not obviously correct by inspection and a second implementation to diff against is worth more than it costs. It must never be imported by product code. The GAPDH golden now runs the **shipped** scorer (it previously ran the scalar, reaching the product only transitively).
 
 ### C. Normalisation / cross-sample
 
@@ -125,15 +123,15 @@ Label and aggregate stay two steps (different matrices; labels have standalone Q
 
 Each stage gate-green before the next; no literal cutoffs reintroduced.
 
-1. **Measure/report/decide-late inversion + un-hardcode (A1, A2, A3, D3).** Scorers become pure measurement; long-form all-metrics store; aspect-agnostic composition; cutoffs into thresholds/policy. Mostly `scoring/` + `report.py` + `consequential.py`. Highest leverage; directly serves the goal.
-2. **Path convergence (B1, B2, B3, D1).** Delete FrameRollup + flat-offset; one correctly-offset matrix coverage path; matrix ≡ bigwig ≡ BAM downstream. Resolve the §2-B open decision (precompute vs on-the-fly offsets).
-3. **One scorer + de-ceremony (B4, §5).** Collapse the scalar/vectorised pair; delete `ScoreRecord`/`DictCoverageProvider`/the Protocols; simplify providers.
-4. **Size factors + `group_level` wiring (C1, C2, C3, §4).** Implement size factors; thread `group_level`; land per-sample prevalence and clustering through the one path.
+1. **Measure/report/decide-late inversion + un-hardcode (A1, A2, A3, D3).** Scorers become pure measurement; long-form all-metrics store; aspect-agnostic composition; cutoffs into thresholds/policy. Mostly `scoring/` + `report.py` + `consequential.py`. Highest leverage; directly serves the goal. — **NOT STARTED** (A1 partly done: composition is already aspect-agnostic).
+2. ~~**Path convergence (B1, B2, B3, D1).**~~ — **DONE 2026-07-28**, except D1 (unstranded coverage still mixes strands).
+3. ~~**One scorer + de-ceremony (B4, §5).**~~ — **DONE.** B4 done 2026-07-28; `ScoreRecord`/`DictCoverageProvider`/the Protocols were removed 2026-07-16.
+4. **Size factors + `group_level` wiring (C1, C2, C3, §4).** Implement size factors; thread `group_level`; land per-sample prevalence and clustering through the one path. — **NOT STARTED.**
 
 ---
 
 ## 7. Open decisions
 
-- **Offsets: precompute (psite-index, needs a build step) vs on-the-fly.** Default-path UX vs per-run cost. Recommendation: precompute, single path.
+- ~~**Offsets: precompute vs on-the-fly.**~~ **RESOLVED 2026-07-28:** precompute (psite-index) is the only matrix path; BAM/bigwig calibrate per file.
 - **Clustering trigger:** when is a locus "confusing enough" to cluster rather than aggregate? Lives next to identifiability in the decision pass. Heuristic TBD.
-- **Init/term vectorisation:** left as a per-event loop in stage 3; revisit only if it shows up in profiles.
+- **Init/term vectorisation:** left as a per-event loop; revisit only if it shows up in profiles.

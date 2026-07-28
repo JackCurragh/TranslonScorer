@@ -12,7 +12,7 @@ These tests build small synthetic (chrom, strand) intron maps and assert:
      (backward compatibility — the golden gate covers this too).
   2. the leader/UTR flank is correctly projected across a nearby intron to
      the true upstream/downstream exon when splice_context is given.
-  3. scalar (score_events) and vectorised (score_events_vectorised) agree
+  3. the shipped scorer and the test-only scalar reference agree
      when splice_context is threaded through end-to-end.
 """
 
@@ -20,13 +20,14 @@ from __future__ import annotations
 
 import polars as pl
 
+from tests.reference_scorer import score_events_scalar
 from TranslonScorer.model import ScoreThresholds
 from TranslonScorer.scoring.aspects import (
     _project_flank,
     score_initiation_event,
     score_termination_event,
 )
-from TranslonScorer.scoring.run import score_events, score_events_vectorised
+from TranslonScorer.scoring.run import score_events
 
 _THR = ScoreThresholds()
 
@@ -171,10 +172,10 @@ def test_scalar_equals_vectorised_with_splice_context():
         schema={"pos": pl.Int64, "count": pl.Float64},
     )
 
-    scalar = score_events(events, cov, group="g", tier="t", thr=_THR, splice_context=splice_ctx)
-    vec = score_events_vectorised(
-        events, cov_df, group="g", tier="t", thr=_THR, splice_context=splice_ctx
+    scalar = score_events_scalar(
+        events, cov, group="g", tier="t", thr=_THR, splice_context=splice_ctx
     )
+    vec = score_events(events, cov_df, group="g", tier="t", thr=_THR, splice_context=splice_ctx)
 
     scalar = scalar.sort("event_id")
     vec = vec.sort("event_id")

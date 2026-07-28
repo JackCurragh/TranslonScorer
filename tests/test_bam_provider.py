@@ -208,10 +208,10 @@ def test_srr_bam_offsets_calibrated_once():
 def test_srr_gapdh_score_sane():
     """Score GAPDH locus from SRR11005875 BAM; assert sane init/elong/term calls."""
     # Minimal GAPDH annotation (single-exon proxy; real test would use full exon_df)
+    from tests.reference_scorer import score_events_scalar
     from tests.test_golden import _gapdh_events
     from TranslonScorer.coverage.bam import BamSetProvider
     from TranslonScorer.model import OffsetParams, Region, ScoreThresholds
-    from TranslonScorer.scoring.run import score_events
 
     provider = BamSetProvider(
         [str(GENOME_BAM)],
@@ -228,7 +228,7 @@ def test_srr_gapdh_score_sane():
 
     thr = ScoreThresholds()
     events = _gapdh_events()
-    result = score_events(events, cov_dict, group="gapdh", tier="aggregate", thr=thr)
+    result = score_events_scalar(events, cov_dict, group="gapdh", tier="aggregate", thr=thr)
 
     assert result.height > 0, "expected non-empty score results"
     calls = dict(zip(result["aspect"].to_list(), result["call"].to_list()))

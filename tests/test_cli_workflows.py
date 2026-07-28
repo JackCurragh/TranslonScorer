@@ -66,7 +66,7 @@ def test_deprecated_commands_removed(name):
 def test_score_events_over_provider_matches_direct():
     """_score_events_over_provider reproduces a direct vectorised score."""
     from tests.test_golden import _gapdh_coverage, _gapdh_events
-    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS, score_events_vectorised
+    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS, score_events
     from TranslonScorer.workflows import _score_events_over_provider
 
     events = _gapdh_events().with_columns(pl.lit("chr12").alias("chrom"))
@@ -85,9 +85,7 @@ def test_score_events_over_provider_matches_direct():
         tier="aggregate",
         thr=DEFAULT_THRESHOLDS,
     )
-    direct = score_events_vectorised(
-        events, cov_df, group="gapdh", tier="aggregate", thr=DEFAULT_THRESHOLDS
-    )
+    direct = score_events(events, cov_df, group="gapdh", tier="aggregate", thr=DEFAULT_THRESHOLDS)
     assert via_helper.sort("event_id").equals(direct.sort("event_id"))
     assert via_helper.height == events.height
 

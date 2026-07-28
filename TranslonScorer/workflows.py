@@ -15,7 +15,7 @@ pipeline_workflow        — one-shot extract → score → report (matrix or BA
 
 Scoring contract (shared by score_matrix/score_bams, mirrors the golden gate):
 a single per-position A-site coverage table per chromosome is fed to
-score_events_vectorised, which scores init/term scalar and elongation via prefix
+score_events, which scores init/term scalar and elongation via prefix
 sums. Coverage is queried per chromosome so genomic positions never collide
 across chromosomes.
 """
@@ -42,7 +42,7 @@ from TranslonScorer.model import (
     ScoreThresholds,
 )
 from TranslonScorer.report import compose_report
-from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS, score_events_vectorised
+from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS, score_events
 
 # ---------------------------------------------------------------------------
 # extract-events
@@ -268,7 +268,7 @@ def _score_events_over_provider(
     chromosome-spanning region: identical scores, but only reads near events are
     pulled — critical on a deep matrix where a whole-chromosome span is enormous.
 
-    ``splice_context``, if given, is forwarded to score_events_vectorised so
+    ``splice_context``, if given, is forwarded to score_events so
     init/term leader/UTR flanks near a splice site are projected across the
     intron instead of read as raw flanking genomic bases.
 
@@ -310,7 +310,7 @@ def _score_events_over_provider(
             ).select(["pos", "count"])
             # collapse any duplicate positions deterministically
             cov_s = cov_s.group_by("pos").agg(pl.col("count").sum()).sort("pos")
-            scored = score_events_vectorised(
+            scored = score_events(
                 ev_s,
                 cov_s,
                 group=group,

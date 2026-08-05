@@ -1,11 +1,11 @@
-"""L0b builder: merge partitioned prefix BAMs → per-chrom L0b Parquet shards.
+"""Alignment-table builder: merge partitioned prefix BAMs → per-chrom alignment Parquet shards.
 
 Pipeline
 --------
 257 prefix BAMs
   → samtools merge/sort (per-chrom, coordinate-sorted)
   → single streaming pysam pass per chrom
-  → L0b Parquet shards (one file per chrom, zstd, pos5-sorted)
+  → alignment Parquet shards (one file per chrom, zstd, pos5-sorted)
 
 All chromosomes run in parallel (``--workers``); per-chrom shard presence is
 the checkpoint so the job is fully resumable.
@@ -25,7 +25,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pysam
 
-from .contracts import L0B_SCHEMA, VersionKey, write_meta
+from .provenance import VersionKey, write_meta
+from .schema import ALIGNMENT_SCHEMA
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ def _extract_record(
     rec: pysam.AlignedSegment,
     chrom: str,
 ) -> dict:
-    """Convert one pysam record to a row dict matching L0B_SCHEMA."""
+    """Convert one pysam record to a row dict matching ALIGNMENT_SCHEMA."""
     flag = rec.flag
     is_reverse = bool(flag & 0x10)
     strand: int = -1 if is_reverse else 1
@@ -146,7 +147,7 @@ def _scan_chrom_bam_to_parquet(
     out_path: Path,
     mask_regions: list[tuple[int, int]] | None = None,
 ) -> int:
-    """Stream one chrom from *bam_path* → write L0b Parquet shard.
+    """Stream one chrom from *bam_path* → write alignment Parquet shard.
 
     Returns the number of rows written.
 
@@ -167,7 +168,7 @@ def _scan_chrom_bam_to_parquet(
         if writer is None:
             writer = pq.ParquetWriter(
                 str(out_path),
-                L0B_SCHEMA,
+                ALIGNMENT_SCHEMA,
                 compression="zstd",
                 write_statistics=True,
             )
@@ -201,15 +202,15 @@ def _scan_chrom_bam_to_parquet(
 
 
 def _rows_to_batch(rows: list[dict]) -> pa.RecordBatch:
-    """Convert a list of row dicts to a PyArrow RecordBatch matching L0B_SCHEMA."""
+    """Convert a list of row dicts to a PyArrow RecordBatch matching ALIGNMENT_SCHEMA."""
     arrays: list[pa.Array] = []
-    for field in L0B_SCHEMA:
+    for field in ALIGNMENT_SCHEMA:
         col: list = [r[field.name] for r in rows]
         if field.name == "junctions_crossed":
             arrays.append(_build_junction_array(col))
         else:
             arrays.append(pa.array(col, type=field.type))
-    return pa.record_batch(arrays, schema=L0B_SCHEMA)
+    return pa.record_batch(arrays, schema=ALIGNMENT_SCHEMA)
 
 
 def _build_junction_array(col: list) -> pa.Array:
@@ -244,8 +245,10 @@ def _build_junction_array(col: list) -> pa.Array:
 
 
 def _write_empty_shard(out_path: Path) -> None:
-    writer = pq.ParquetWriter(str(out_path), L0B_SCHEMA, compression="zstd")
-    empty = pa.record_batch([pa.array([], type=f.type) for f in L0B_SCHEMA], schema=L0B_SCHEMA)
+    writer = pq.ParquetWriter(str(out_path), ALIGNMENT_SCHEMA, compression="zstd")
+    empty = pa.record_batch(
+        [pa.array([], type=f.type) for f in ALIGNMENT_SCHEMA], schema=ALIGNMENT_SCHEMA
+    )
     writer.write_batch(empty)
     writer.close()
 
@@ -375,7 +378,7 @@ def _chrom_worker(
     out_dir: str,
     samtools_threads: int,
 ) -> tuple[str, int]:
-    """Top-level function for ProcessPoolExecutor: build one chrom's L0b shard.
+    """Top-level function for ProcessPoolExecutor: build one chrom's alignment shard.
 
     Returns (chrom, n_rows).
     """
@@ -407,7 +410,7 @@ def _chrom_worker(
 # ---------------------------------------------------------------------------
 
 
-def build_l0b(
+def build_alignments(
     partition_dir: Path,
     out_dir: Path,
     version_key: VersionKey,
@@ -418,14 +421,14 @@ def build_l0b(
     work_dir: Path | None = None,
     bam_glob: str = "unique_reads.*.bam",
 ) -> Path:
-    """Build the L0b Parquet store from all prefix-partition BAMs.
+    """Build the alignment Parquet store from all prefix-partition BAMs.
 
     Parameters
     ----------
     partition_dir:
         Root of the ``global_partitioned`` directory (contains per-prefix subdirs).
     out_dir:
-        Where to write L0b shards.  Created if absent.
+        Where to write alignment shards.  Created if absent.
     version_key:
         The 0.4 version key; written to ``out_dir/_meta.json``.
     chroms:
@@ -442,7 +445,7 @@ def build_l0b(
 
     Returns
     -------
-    Path to the L0b output directory.
+    Path to the alignment output directory.
     """
     out_dir = out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -473,12 +476,12 @@ def build_l0b(
     # Chromosome list
     all_chroms = _get_chroms(bam_paths)
     target_chroms: list[str] = chroms if chroms is not None else all_chroms
-    log.info("Building L0b for %d chromosomes", len(target_chroms))
+    log.info("Building alignments for %d chromosomes", len(target_chroms))
 
     # Work dir for per-chrom sorted BAMs
     _tmp_ctx = None
     if work_dir is None:
-        _tmp_ctx = tempfile.TemporaryDirectory(dir=out_dir, prefix="l0b_work_")
+        _tmp_ctx = tempfile.TemporaryDirectory(dir=out_dir, prefix="alignment_work_")
         work_dir = Path(_tmp_ctx.name)
     else:
         work_dir = work_dir.resolve()
@@ -548,8 +551,8 @@ def build_l0b(
 
     if errors:
         raise RuntimeError(
-            f"L0b build finished with {len(errors)} failed chromosomes:\n" + "\n".join(errors)
+            f"alignment build finished with {len(errors)} failed chromosomes:\n" + "\n".join(errors)
         )
 
-    log.info("L0b build complete: %d total rows → %s", total_rows, out_dir)
+    log.info("alignment build complete: %d total rows → %s", total_rows, out_dir)
     return out_dir

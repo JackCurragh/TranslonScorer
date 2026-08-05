@@ -5,6 +5,14 @@ system should be; this one maps the path from the current code to it, with an
 **optimal-implementation assessment for every task** — the realistic best way to
 build it, not just a checkbox.
 
+> **Naming note.** The L0–L4 labels below are a conceptual layering, not module
+> names. Two of these layers exist as packages and were renamed to say what they
+> hold: **L0b → `TranslonScorer/alignments/`** (one row per alignment) and
+> **L1 → `TranslonScorer/counts/`** (5′-end and junction counts per sample).
+> `VersionKey.l0a_version` is now `source_data_version`. The remaining layers
+> (L0a upstream counts, L2 QC gate, L3 aggregate, L4 scoring) have no package of
+> their own, so the labels are retained here as design vocabulary only.
+
 ---
 
 ## Current state (ground truth)

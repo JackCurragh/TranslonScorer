@@ -207,14 +207,17 @@ def legacy():
     "--out-dir",
     "-o",
     required=True,
-    help="Output root; L0b written to <out-dir>/l0b/, L1 to <out-dir>/l1/.",
+    help="Output root; alignments written to <out-dir>/alignments/, counts to <out-dir>/counts/.",
 )
 @click.option("--genome-id", default="GRCh38.p14", show_default=True, help="Genome assembly ID.")
 @click.option(
     "--junction-set-id", default="GENCODE_v44", show_default=True, help="Junction set label."
 )
 @click.option(
-    "--l0a-version", default="2026-06", show_default=True, help="L0a data-release version."
+    "--source-data-version",
+    default="2026-06",
+    show_default=True,
+    help="Upstream read-data release version.",
 )
 @click.option(
     "--aligner-cfg-hash", default="default", show_default=True, help="Aligner config fingerprint."
@@ -226,7 +229,10 @@ def legacy():
 )
 @click.option("--workers", default=4, show_default=True, help="Parallel chromosome workers.")
 @click.option(
-    "--samtools-threads", default=2, show_default=True, help="Threads per samtools call (L0b only)."
+    "--samtools-threads",
+    default=2,
+    show_default=True,
+    help="Threads per samtools call (alignment build only).",
 )
 @click.option(
     "--bam-glob",
@@ -237,32 +243,32 @@ def legacy():
     "raw and a filtered BAM are present.",
 )
 @click.option(
-    "--skip-l0b",
+    "--skip-alignments",
     is_flag=True,
     default=False,
-    help="Skip L0b build (use when L0b already exists in <out-dir>/l0b/).",
+    help="Skip the alignment build (use when <out-dir>/alignments/ already exists).",
 )
 @click.option(
-    "--skip-l1",
+    "--skip-counts",
     is_flag=True,
     default=False,
-    help="Skip L1 build.",
+    help="Skip the count-table build.",
 )
 def build_cache(
     partition_dir,
     out_dir,
     genome_id,
     junction_set_id,
-    l0a_version,
+    source_data_version,
     aligner_cfg_hash,
     chroms,
     workers,
     samtools_threads,
     bam_glob,
-    skip_l0b,
-    skip_l1,
+    skip_alignments,
+    skip_counts,
 ):
-    """Build the durable evidence cache: L0b alignment loci + L1 raw 5′ positional index.
+    """Build the durable evidence cache: the alignment table + raw 5′ count tables.
 
     This is the one-time (per junction-set release) build that scans the partitioned BAMs
     and produces the Parquet artefacts everything else reads from.
@@ -279,7 +285,7 @@ def build_cache(
       translonscorer build-cache \\
         --partition-dir /data/global_partitioned \\
         --out-dir /cache/GRCh38_v44 \\
-        --skip-l0b \\
+        --skip-alignments \\
         --chroms chr1 --chroms chr2 \\
         --workers 4
     """
@@ -288,29 +294,29 @@ def build_cache(
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    from .l0b import build_l0b
-    from .l0b.contracts import VersionKey
-    from .l1 import build_l1
+    from .alignments import build_alignments
+    from .alignments.provenance import VersionKey
+    from .counts import build_counts
 
     key = VersionKey(
         genome_id=genome_id,
         aligner_cfg_hash=aligner_cfg_hash,
         junction_set_id=junction_set_id,
-        l0a_version=l0a_version,
+        source_data_version=source_data_version,
         multimap_policy="unique_only",
     )
 
     partition_path = Path(partition_dir)
     out_path = Path(out_dir)
-    l0b_path = out_path / "l0b"
-    l1_path = out_path / "l1"
+    alignment_path = out_path / "alignments"
+    count_path = out_path / "counts"
     chrom_list = list(chroms) or None
 
-    if not skip_l0b:
-        logging.info("=== Building L0b ===")
-        build_l0b(
+    if not skip_alignments:
+        logging.info("=== Building alignment table ===")
+        build_alignments(
             partition_path,
-            l0b_path,
+            alignment_path,
             key,
             chroms=chrom_list,
             workers=workers,
@@ -318,22 +324,24 @@ def build_cache(
             bam_glob=bam_glob,
         )
     else:
-        logging.info("Skipping L0b (--skip-l0b set); expecting shards in %s", l0b_path)
+        logging.info(
+            "Skipping alignments (--skip-alignments set); expecting shards in %s", alignment_path
+        )
 
-    if not skip_l1:
-        logging.info("=== Building L1 ===")
-        build_l1(
-            l0b_path,
+    if not skip_counts:
+        logging.info("=== Building count tables ===")
+        build_counts(
+            alignment_path,
             partition_path,
-            l1_path,
+            count_path,
             key,
             chroms=chrom_list,
             workers=workers,
         )
     else:
-        logging.info("Skipping L1 (--skip-l1 set)")
+        logging.info("Skipping counts (--skip-counts set)")
 
-    logging.info("Cache build complete. L0b → %s  L1 → %s", l0b_path, l1_path)
+    logging.info("Cache build complete. alignments → %s  counts → %s", alignment_path, count_path)
 
 
 @cli.command("process-bam")
@@ -561,8 +569,7 @@ def profiles(**kwargs):
     else:
         cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
 
-    from .coverage.locus_profiles import build_locus_profiles_zarr
-    from .coverage.profiles import (
+    from .coverage.cohort_profiles import (
         gene_expression_matrix_from_profiles,
         profiles_from_bam,
         profiles_from_bigwig,
@@ -570,6 +577,7 @@ def profiles(**kwargs):
         profiles_from_zarr,
         write_profiles_parquet,
     )
+    from .coverage.locus_profiles import build_locus_profiles_zarr
     from .coverage.transcript_coords import cds_to_transcript_space
 
     log_info(

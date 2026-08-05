@@ -42,7 +42,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..core.scoring import assigningscore, existingscore, globalscores, newscoring, oldscoring
+from ..core.orf_scoring import assigningscore, existingscore, globalscores, newscoring, oldscoring
 from ..utils.logging import log_error, log_info, log_warning
 
 
@@ -1232,11 +1232,11 @@ def score_single_transcript(
 
                 # Score ORFs based on method
                 if old_scoring:
-                    from ..core.scoring import oldscoring
+                    from ..core.orf_scoring import oldscoring
 
                     scored_orfs = oldscoring(type_orfs, coverage_df, sru_range, orf_type)
                 else:
-                    from ..core.scoring import (
+                    from ..core.orf_scoring import (
                         assigningscore,
                         existingscore,
                         globalscores,

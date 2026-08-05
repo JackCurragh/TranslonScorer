@@ -8,8 +8,7 @@ This module contains the core algorithms and functionality including:
 """
 
 from .coordinates import change_point_analysis, classify_orf, orfrelativeposition
-from .orffinder import build_codon_automaton, find_all_positions, find_orfs, preporfs
-from .scoring import (
+from .orf_scoring import (
     assigningscore,
     calculate_scores,
     existingscore,
@@ -18,6 +17,7 @@ from .scoring import (
     oldscoring,
     sru_score,
 )
+from .orffinder import build_codon_automaton, find_all_positions, find_orfs, preporfs
 
 __all__ = [
     # Scoring functions

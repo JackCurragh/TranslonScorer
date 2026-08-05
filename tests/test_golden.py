@@ -579,7 +579,7 @@ def test_coverage_base_schema_and_duck_typing():
 
 def test_coverage_profile_apply_offsets_psite():
     """apply_offsets with site='P' adds P-site offset to tran_start_bam."""
-    from TranslonScorer.coverage.profile import apply_offsets
+    from TranslonScorer.coverage.psite_profile import apply_offsets
 
     reads = pl.DataFrame(
         {
@@ -599,7 +599,7 @@ def test_coverage_profile_apply_offsets_psite():
 
 def test_coverage_profile_apply_offsets_asite():
     """apply_offsets with site='A' adds P-site offset + 3."""
-    from TranslonScorer.coverage.profile import apply_offsets
+    from TranslonScorer.coverage.psite_profile import apply_offsets
 
     reads = pl.DataFrame(
         {
@@ -616,7 +616,7 @@ def test_coverage_profile_apply_offsets_asite():
 
 def test_coverage_profile_apply_offsets_empty():
     """apply_offsets on empty reads returns correct schema."""
-    from TranslonScorer.coverage.profile import apply_offsets
+    from TranslonScorer.coverage.psite_profile import apply_offsets
 
     reads = pl.DataFrame(
         schema={
@@ -636,8 +636,8 @@ def test_coverage_profile_prefix_sums_bit_identical():
     as the re-exported versions in scoring/run.py (bit-identical after migration)."""
     import numpy as np
 
-    from TranslonScorer.coverage.profile import _prefix_sums as prof_ps
-    from TranslonScorer.coverage.profile import _range_sums as prof_rs
+    from TranslonScorer.coverage.psite_profile import _prefix_sums as prof_ps
+    from TranslonScorer.coverage.psite_profile import _range_sums as prof_rs
     from TranslonScorer.scoring.run import _prefix_sums as run_ps
     from TranslonScorer.scoring.run import _range_sums as run_rs
 

@@ -1,8 +1,8 @@
-"""L1 builder: join L0b loci (unique reads) × L0a counts → per-chrom L1 Parquet.
+"""Count-table builder: join alignment loci (unique reads) × source counts → per-chrom the count tables Parquet.
 
 No BAM access — purely Parquet join over:
-  - L0b per-chrom shards  (read_id, pos5, strand, length, nh, is_secondary, ...)
-  - L0a count parquets    (read_id, sample_id, count)
+  - alignment per-chrom shards  (read_id, pos5, strand, length, nh, is_secondary, ...)
+  - source count parquets    (read_id, sample_id, count)
 
 Two output files per chromosome:
   {chrom}_pos.parquet   — positional stream  (pos5, strand, length, sample_id) → count
@@ -11,14 +11,14 @@ Two output files per chromosome:
 Memory model
 ------------
 For each chromosome we:
-  1. Scan L0b shard, filter unique reads (nh==1, not secondary), pull minimal columns.
+  1. Scan alignment shard, filter unique reads (nh==1, not secondary), pull minimal columns.
   2. Collect the junction rows (spliced reads only) — small relative to all reads.
-  3. Scan all count parquets lazily via glob; join lazily to L0b (positional path)
+  3. Scan all count parquets lazily via glob; join lazily to the alignment table (positional path)
      and collected-then-joined for the junction path.
   4. Group-by + aggregate with Polars streaming engine (positional) or in-memory
      (junction — explode is not supported in streaming).
 
-Peak memory per worker ≈ (L0b_chrom_unique_pos_rows × 4 int cols)
+Peak memory per worker ≈ (alignment_chrom_unique_pos_rows × 4 int cols)
                          + (all_counts in memory for junction path)
                          + output aggregates.
 At full cohort scale the counts glob grows; switch to partition-chunked joins then.
@@ -32,13 +32,13 @@ from pathlib import Path
 
 import polars as pl
 
-from ..l0b.contracts import VersionKey, read_meta, write_meta
-from .schema import L1_JUNC_SCHEMA
+from ..alignments.provenance import VersionKey, read_meta, write_meta
+from .schema import JUNCTION_COUNT_SCHEMA
 
 log = logging.getLogger(__name__)
 
-# Column names used by the unique-read filter on L0b
-_L0B_UNIQUE_FILTER = (pl.col("nh") == 1) & (~pl.col("is_secondary"))
+# Column names used by the unique-read filter on the alignment table
+_UNIQUE_ALIGNMENT_FILTER = (pl.col("nh") == 1) & (~pl.col("is_secondary"))
 
 
 # ---------------------------------------------------------------------------
@@ -52,18 +52,18 @@ def _counts_glob(partition_dir: Path, counts_subdir: str) -> str:
 
 
 def _build_pos_stream(
-    l0b_shard: Path,
+    alignment_shard: Path,
     counts_lf: pl.LazyFrame,
 ) -> pl.LazyFrame:
-    """Lazy plan for the positional L1 stream of one chromosome.
+    """Lazy plan for the positional count stream of one chromosome.
 
     Returned as a LazyFrame so the caller can ``sink_parquet`` it — streaming the
     result straight to disk instead of materialising it (and the join hash table)
     in RAM, which OOMs at full cohort scale.
     """
-    l0b = (
-        pl.scan_parquet(str(l0b_shard))
-        .filter(_L0B_UNIQUE_FILTER)
+    alignments = (
+        pl.scan_parquet(str(alignment_shard))
+        .filter(_UNIQUE_ALIGNMENT_FILTER)
         .select(
             pl.col("read_id").cast(pl.UInt64),
             "pos5",
@@ -73,7 +73,7 @@ def _build_pos_stream(
     )
 
     return (
-        l0b.join(counts_lf, on="read_id", how="inner")
+        alignments.join(counts_lf, on="read_id", how="inner")
         .group_by("pos5", "strand", "length", "sample_id")
         .agg(pl.col("count").sum())
         .sort("pos5")
@@ -82,18 +82,18 @@ def _build_pos_stream(
 
 
 def _build_junc_stream(
-    l0b_shard: Path,
+    alignment_shard: Path,
     counts_lf: pl.LazyFrame,
 ) -> pl.DataFrame:
-    """Build the junction L1 stream for one chromosome.
+    """Build the junction count stream for one chromosome.
 
-    Collects the spliced L0b rows first (small — only junction-spanning reads),
+    Collects the spliced the alignment table rows first (small — only junction-spanning reads),
     then pulls *only those reads'* counts via a semi-join, instead of
     materialising the entire cohort count matrix (which OOMs at scale).
     """
     spliced = (
-        pl.scan_parquet(str(l0b_shard))
-        .filter(_L0B_UNIQUE_FILTER & pl.col("junctions_crossed").is_not_null())
+        pl.scan_parquet(str(alignment_shard))
+        .filter(_UNIQUE_ALIGNMENT_FILTER & pl.col("junctions_crossed").is_not_null())
         .select(
             pl.col("read_id").cast(pl.UInt64),
             "length",
@@ -104,7 +104,7 @@ def _build_junc_stream(
     )
 
     if spliced.is_empty():
-        return pl.DataFrame(schema={f.name: _pa_to_pl(f.type) for f in L1_JUNC_SCHEMA})
+        return pl.DataFrame(schema={f.name: _pa_to_pl(f.type) for f in JUNCTION_COUNT_SCHEMA})
 
     exploded = spliced.explode("junctions_crossed").select(
         "read_id",
@@ -151,12 +151,12 @@ def _pa_to_pl(pa_type) -> pl.PolarsDataType:
 
 def _chrom_worker(
     chrom: str,
-    l0b_shard: str,
+    alignment_shard: str,
     out_dir: str,
     partition_dir: str,
     counts_subdir: str,
 ) -> tuple[str, int, int]:
-    """Build L1 pos + junc shards for one chromosome.
+    """Build count pos + junc shards for one chromosome.
 
     Returns (chrom, n_pos_rows, n_junc_rows).
     """
@@ -173,9 +173,9 @@ def _chrom_worker(
         log.info("checkpoint %s: pos=%d junc=%d", chrom, n_pos, n_junc)
         return chrom, n_pos, n_junc
 
-    log.info("building L1 %s ...", chrom)
+    log.info("building the count tables %s ...", chrom)
 
-    shard = Path(l0b_shard)
+    shard = Path(alignment_shard)
     glob_str = _counts_glob(Path(partition_dir), counts_subdir)
 
     # ------------------------------------------------------------------
@@ -193,7 +193,7 @@ def _chrom_worker(
     junc_df.write_parquet(str(junc_path), compression="zstd", statistics=True)
     n_junc = len(junc_df)
 
-    log.info("done L1 %s: pos=%d junc=%d", chrom, n_pos, n_junc)
+    log.info("done the count tables %s: pos=%d junc=%d", chrom, n_pos, n_junc)
     return chrom, n_pos, n_junc
 
 
@@ -202,8 +202,8 @@ def _chrom_worker(
 # ---------------------------------------------------------------------------
 
 
-def build_l1(
-    l0b_dir: Path,
+def build_counts(
+    alignment_dir: Path,
     partition_dir: Path,
     out_dir: Path,
     version_key: VersionKey,
@@ -212,21 +212,21 @@ def build_l1(
     workers: int = 4,
     counts_subdir: str = "counts",
 ) -> Path:
-    """Build the L1 raw 5′ cache from L0b loci and L0a counts.
+    """Build the raw 5′ count cache from alignment loci and source counts.
 
     Parameters
     ----------
-    l0b_dir:
-        Directory of L0b per-chrom Parquet shards (``{chrom}.parquet``).
+    alignment_dir:
+        Directory of the alignment table per-chrom Parquet shards (``{chrom}.parquet``).
     partition_dir:
         Root of the ``global_partitioned`` directory (contains per-prefix subdirs).
     out_dir:
-        Where to write L1 shards.  Created if absent.
+        Where to write count shards.  Created if absent.
     version_key:
         The 0.4 version key; written to ``out_dir/_meta.json``.
     chroms:
         Subset of chromosomes to build (default: all ``*_pos.parquet``-able chroms
-        found in *l0b_dir*).
+        found in *alignment_dir*).
     workers:
         Parallel chromosome workers.
     counts_subdir:
@@ -236,28 +236,30 @@ def build_l1(
 
     Returns
     -------
-    Path to the L1 output directory.
+    Path to the count output directory.
     """
-    # Validate L0b version key
-    l0b_meta = read_meta(l0b_dir)
-    if l0b_meta.get("version_key") != version_key.as_dict():
+    # Validate alignment version key
+    alignment_meta = read_meta(alignment_dir)
+    if alignment_meta.get("version_key") != version_key.as_dict():
         raise ValueError(
-            f"L0b version key mismatch.\n"
+            f"alignment version key mismatch.\n"
             f"  requested: {version_key.as_dict()}\n"
-            f"  found:     {l0b_meta.get('version_key')}"
+            f"  found:     {alignment_meta.get('version_key')}"
         )
 
     out_dir = out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Discover chroms from L0b shards
-    available = {p.stem: p for p in sorted(l0b_dir.glob("*.parquet")) if not p.stem.startswith("_")}
+    # Discover chroms from alignment shards
+    available = {
+        p.stem: p for p in sorted(alignment_dir.glob("*.parquet")) if not p.stem.startswith("_")
+    }
     target_chroms = chroms if chroms is not None else list(available.keys())
     missing = [c for c in target_chroms if c not in available]
     if missing:
-        raise FileNotFoundError(f"L0b shards not found for: {missing}")
+        raise FileNotFoundError(f"alignment shards not found for: {missing}")
 
-    log.info("Building L1 for %d chromosomes", len(target_chroms))
+    log.info("Building counts for %d chromosomes", len(target_chroms))
     write_meta(out_dir, version_key, {"status": "building", "n_chroms": len(target_chroms)})
 
     total_pos = total_junc = 0
@@ -318,8 +320,8 @@ def build_l1(
 
     if errors:
         raise RuntimeError(
-            f"L1 build finished with {len(errors)} failed chromosomes:\n" + "\n".join(errors)
+            f"count build finished with {len(errors)} failed chromosomes:\n" + "\n".join(errors)
         )
 
-    log.info("L1 build complete: %d pos rows, %d junc rows → %s", total_pos, total_junc, out_dir)
+    log.info("count build complete: %d pos rows, %d junc rows → %s", total_pos, total_junc, out_dir)
     return out_dir

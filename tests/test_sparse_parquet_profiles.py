@@ -4,7 +4,7 @@ from pathlib import Path
 import polars as pl
 import pysam
 
-from TranslonScorer.coverage.profiles import (
+from TranslonScorer.coverage.cohort_profiles import (
     gene_expression_matrix_from_profiles,
     profiles_from_sparse_parquet_matrix,
 )

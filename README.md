@@ -255,9 +255,9 @@ TranslonScorer/
 │   ├── store.py          event + fact_event_score Parquet store read/write
 │   └── inspect.py        Parquet inspection helper (the `inspect` command)
 │
-│   ── in-flight: a layered read/position index (nothing reads it yet) ──
-├── l0b/                 builder.py, contracts.py   (unique-read alignment layer)
-├── l1/                  builder.py, schema.py      (per-position / junction layer)
+│   ── in-flight: a read/position index (nothing reads it yet) ──
+├── alignments/         builder.py, schema.py, provenance.py  (one row per alignment)
+├── counts/             builder.py, schema.py      (5′-end + junction counts per sample)
 │
 │   ── research: frame assignment (the `research` command group) ──
 ├── frame_support.py    frame-posterior estimation (linear/latent/HMM)

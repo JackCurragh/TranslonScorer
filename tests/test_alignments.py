@@ -1,4 +1,4 @@
-"""Tests for L0b contracts and builder.
+"""Tests for the alignment schema, provenance and builder.
 
 Correctness checks against the local global_partitioned cohort.
 """
@@ -10,8 +10,9 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 
-from TranslonScorer.l0b.builder import build_l0b
-from TranslonScorer.l0b.contracts import L0B_SCHEMA, VersionKey, read_meta, write_meta
+from TranslonScorer.alignments.builder import build_alignments
+from TranslonScorer.alignments.provenance import VersionKey, read_meta, write_meta
+from TranslonScorer.alignments.schema import ALIGNMENT_SCHEMA
 
 DATA_DIR = Path(__file__).parent.parent / "data" / "global_partitioned"
 pytestmark = pytest.mark.skipif(not DATA_DIR.exists(), reason="local cohort data not present")
@@ -23,7 +24,7 @@ pytestmark = pytest.mark.skipif(not DATA_DIR.exists(), reason="local cohort data
 
 
 def test_schema_field_names():
-    names = [f.name for f in L0B_SCHEMA]
+    names = [f.name for f in ALIGNMENT_SCHEMA]
     required = [
         "read_id",
         "chrom",
@@ -77,11 +78,11 @@ def test_read_meta_missing(tmp_path):
 
 
 @pytest.fixture(scope="module")
-def l0b_dir(tmp_path_factory):
-    """Build L0b for chr1 only (fast)."""
-    out = tmp_path_factory.mktemp("l0b_out")
+def alignment_dir(tmp_path_factory):
+    """Build alignments for chr1 only (fast)."""
+    out = tmp_path_factory.mktemp("alignments_out")
     key = VersionKey("GRCh38.p14", "testcfg", "GENCODE_v44", "2026-06", "unique_only")
-    build_l0b(
+    build_alignments(
         DATA_DIR,
         out,
         key,
@@ -92,24 +93,24 @@ def l0b_dir(tmp_path_factory):
     return out
 
 
-def test_meta_written(l0b_dir):
-    meta = read_meta(l0b_dir)
+def test_meta_written(alignment_dir):
+    meta = read_meta(alignment_dir)
     assert meta["status"] == "complete"
     assert meta["version_key"]["genome_id"] == "GRCh38.p14"
 
 
-def test_shard_exists(l0b_dir):
-    shard = l0b_dir / "chr1.parquet"
+def test_shard_exists(alignment_dir):
+    shard = alignment_dir / "chr1.parquet"
     assert shard.exists(), "chr1.parquet not found"
 
 
-def test_shard_schema(l0b_dir):
-    shard = l0b_dir / "chr1.parquet"
+def test_shard_schema(alignment_dir):
+    shard = alignment_dir / "chr1.parquet"
     tbl = pq.read_table(str(shard))
-    assert tbl.schema.equals(L0B_SCHEMA, check_metadata=False)
+    assert tbl.schema.equals(ALIGNMENT_SCHEMA, check_metadata=False)
 
 
-def test_shard_pos5_sorted_within_row_groups(l0b_dir):
+def test_shard_pos5_sorted_within_row_groups(alignment_dir):
     """Each Parquet row group must have pos5 sorted internally (enables predicate pushdown).
 
     Global sort is NOT required: reverse-strand reads use pos5=ref_end-1 so
@@ -118,7 +119,7 @@ def test_shard_pos5_sorted_within_row_groups(l0b_dir):
     """
     import pyarrow.parquet as pq
 
-    shard = l0b_dir / "chr1.parquet"
+    shard = alignment_dir / "chr1.parquet"
     pf = pq.ParquetFile(str(shard))
     for rg_idx in range(pf.metadata.num_row_groups):
         tbl = pf.read_row_group(rg_idx, columns=["pos5"])
@@ -126,9 +127,9 @@ def test_shard_pos5_sorted_within_row_groups(l0b_dir):
         assert pos == sorted(pos), f"row group {rg_idx} pos5 not sorted"
 
 
-def test_shard_pos5_rowgroup_statistics(l0b_dir):
+def test_shard_pos5_rowgroup_statistics(alignment_dir):
     """Row-group min/max statistics must be written for pos5 (Parquet predicate pushdown)."""
-    shard = l0b_dir / "chr1.parquet"
+    shard = alignment_dir / "chr1.parquet"
     pf = pq.ParquetFile(str(shard))
     md = pf.metadata
     pos5_col_idx = pq.read_schema(str(shard)).get_field_index("pos5")
@@ -140,7 +141,7 @@ def test_shard_pos5_rowgroup_statistics(l0b_dir):
         assert stats.has_min_max, f"row group {rg_idx} missing min/max for pos5"
 
 
-def test_shard_row_count_vs_samtools(l0b_dir):
+def test_shard_row_count_vs_samtools(alignment_dir):
     """Row count in Parquet should equal number of chr1 alignments across all BAMs."""
     import subprocess
 
@@ -162,18 +163,18 @@ def test_shard_row_count_vs_samtools(l0b_dir):
         )
         total_from_samtools += int(r.stdout.strip())
 
-    shard = l0b_dir / "chr1.parquet"
+    shard = alignment_dir / "chr1.parquet"
     n_parquet = len(pl.read_parquet(shard))
     assert (
         n_parquet == total_from_samtools
     ), f"row count mismatch: parquet={n_parquet}, samtools={total_from_samtools}"
 
 
-def test_read_id_uniqueness_not_enforced_at_l0b(l0b_dir):
-    """read_id is NOT unique in L0b — multimappers appear once per alignment."""
+def test_read_id_uniqueness_not_enforced_at_alignment_level(alignment_dir):
+    """read_id is NOT unique in the alignment table — multimappers appear once per alignment."""
     import polars as pl
 
-    shard = l0b_dir / "chr1.parquet"
+    shard = alignment_dir / "chr1.parquet"
     df = pl.read_parquet(shard)
     n_rows = len(df)
     n_unique_ids = df["read_id"].n_unique()
@@ -181,30 +182,30 @@ def test_read_id_uniqueness_not_enforced_at_l0b(l0b_dir):
     assert n_rows >= n_unique_ids
 
 
-def test_nh_tag_used_not_count(l0b_dir):
+def test_nh_tag_used_not_count(alignment_dir):
     """NH values > 1 must appear (not just 1s from bad fallback)."""
     import polars as pl
 
-    shard = l0b_dir / "chr1.parquet"
+    shard = alignment_dir / "chr1.parquet"
     df = pl.read_parquet(shard)
     assert df.filter(pl.col("nh") > 1).height > 0, "expected multimapper rows with NH>1"
 
 
-def test_chrom_column_correct(l0b_dir):
+def test_chrom_column_correct(alignment_dir):
     import polars as pl
 
-    shard = l0b_dir / "chr1.parquet"
+    shard = alignment_dir / "chr1.parquet"
     df = pl.read_parquet(shard)
     assert df["chrom"].unique().to_list() == ["chr1"]
 
 
-def test_resumable_no_rebuild(l0b_dir):
-    """Re-running build_l0b with the same output dir returns immediately (checkpoint)."""
+def test_resumable_no_rebuild(alignment_dir):
+    """Re-running build_alignments with the same output dir returns immediately (checkpoint)."""
     import time
 
     key = VersionKey("GRCh38.p14", "testcfg", "GENCODE_v44", "2026-06", "unique_only")
     t0 = time.monotonic()
-    build_l0b(DATA_DIR, l0b_dir, key, chroms=["chr1"], workers=1, samtools_threads=1)
+    build_alignments(DATA_DIR, alignment_dir, key, chroms=["chr1"], workers=1, samtools_threads=1)
     elapsed = time.monotonic() - t0
     # A checkpoint hit should be much faster than a full build
     assert elapsed < 30, f"Re-build took {elapsed:.1f}s — checkpoint not working?"

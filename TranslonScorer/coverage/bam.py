@@ -7,7 +7,7 @@ Architecture contract (non-negotiable)
    called lazily and its result cached; downstream `coverage()` calls reuse
    the cached offset table without recomputing.
 2. Profile generation is then pure: reads + offset table + site → positions.
-   The pure function `coverage.profile.apply_offsets` is used for this.
+   The pure function `coverage.psite_profile.apply_offsets` is used for this.
 3. A-site = P-site + 3 nt by default unless the offset table specifies a
    distinct A-site column (future extension).
 4. Unique mappers by default; multimappers recorded in mappability_ledger.
@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import polars as pl
 
 from TranslonScorer.coverage.base import MAPPABILITY_LEDGER_SCHEMA
-from TranslonScorer.coverage.profile import site_position
+from TranslonScorer.coverage.psite_profile import site_position
 from TranslonScorer.model import OffsetParams, Region
 from TranslonScorer.offsets import global_offsets, make_offset_table, metagene_offsets
 

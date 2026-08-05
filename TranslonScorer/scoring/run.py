@@ -39,7 +39,7 @@ DEFAULT_THRESHOLDS = ScoreThresholds()
 # ---------------------------------------------------------------------------
 # Prefix-sum helpers — canonical implementation in coverage/profile.py
 # ---------------------------------------------------------------------------
-from TranslonScorer.coverage.profile import (  # noqa: E402, F401
+from TranslonScorer.coverage.psite_profile import (  # noqa: E402, F401
     _prefix_sums,
     _range_sums,
 )

@@ -128,7 +128,7 @@ def test_transcriptome_requires_exon_df():
 
 def test_site_position_strand_aware():
     """P/A-site placement is strand-aware: + uses 5'=ref_start, - uses 5'=ref_end-1."""
-    from TranslonScorer.coverage.profile import site_position
+    from TranslonScorer.coverage.psite_profile import site_position
 
     # + strand read [1000, 1029): 5'=1000; P=1000+12=1012; A=1015
     assert site_position(1000, 1029, False, 12, "P") == (1, 1012)

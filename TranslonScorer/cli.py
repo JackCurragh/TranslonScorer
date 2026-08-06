@@ -1174,7 +1174,7 @@ def export_rdg_flux_cmd(
 ):
     """Export RDG-Flux v1 per-position frame posterior substrate."""
     setup_logging()
-    from .orf.rdg_flux_export import export_rdg_flux_v1
+    from .frame.rdg_flux_export import export_rdg_flux_v1
 
     paths = export_rdg_flux_v1(
         profiles_path=profiles,
@@ -1535,7 +1535,7 @@ def features(
 def assemble_cmd(orfs_parquet: str, out_parquet: str, solver: str, timeout_sec: int):
     """Assemble a locus translome by selecting a consistent set of ORFs under soft penalties."""
     setup_logging()
-    from .orf.assemble import assemble_translome
+    from .assemble import assemble_translome
 
     assemble_translome(orfs_parquet, out_parquet, solver=solver, timeout_sec=timeout_sec)
     log_info("Translome assembly complete")

@@ -1,3 +1,9 @@
+"""RDG-Flux v1 export: position-level frame-posterior tables.
+
+Lives with the frame algorithms because that is what it exports — it is built
+on ``frame_support.build_frame_support``, not on any ORF-composite code.
+"""
+
 from __future__ import annotations
 
 import json

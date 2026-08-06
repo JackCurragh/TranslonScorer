@@ -1,3 +1,9 @@
+"""Translome assembly: resolve overlapping ORF calls into a coherent set.
+
+Sits next to ``consequential.py`` because both are late composition passes over
+already-scored candidates — this one resolves spatial conflicts between them.
+"""
+
 from __future__ import annotations
 
 from typing import List
@@ -13,7 +19,7 @@ except Exception:
 
 import click
 
-from ..utils.logging import log_info
+from .utils.logging import log_info
 
 
 def overlap_penalty(orf_i: dict, orf_j: dict) -> float:

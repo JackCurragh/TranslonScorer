@@ -66,15 +66,9 @@ def test_deprecated_commands_removed(name):
 @pytest.mark.parametrize(
     "group,name",
     [
-        ("research", "score-compare-frame"),
-        ("research", "score-compare-existing"),
-        ("research", "compare-profiles"),
-        ("research", "compare-frame-methods"),
-        ("research", "frame-disambiguation"),
         ("research", "compare-read-assignment"),
         ("research", "validate-panel"),
         ("research", "export-rdg-flux"),
-        ("legacy", "plot"),
         ("legacy", "orfs-import"),
         ("legacy", "assemble"),
         ("legacy", "map-orfs"),

@@ -263,27 +263,27 @@ TranslonScorer/
 ├── frame_support.py    frame-posterior estimation (linear/latent/HMM)
 ├── frame/
 │   ├── bleed.py, deblur.py, hmm.py, latent.py   frame-correction models
-│   ├── frame_method_compare.py, frame_disambiguation.py
+│   ├── validation.py             posteriors vs annotated CDS frame
+│   ├── rdg_flux_export.py        RDG-Flux per-position frame-posterior export
 │   └── read_assignment.py        unique/fractional/EM/frame-aware assignment
 │
-│   ── the older ORF-composite path (the `legacy` command group) ──
+│   ── ORF table handling (the `legacy` command group) ──
 ├── orf/
-│   ├── score_schema.py, score_gates.py, panel_manifest.py, profile_compare.py
-│   ├── orfs_import.py (BED12→transcripts), map_orfs.py, assemble.py
-│   └── rdg_flux_export.py   RDG-Flux per-position frame-posterior export
+│   ├── orfs_import.py (BED12→transcripts), map_orfs.py
+│   └── score_schema.py, panel_manifest.py
+├── assemble.py         overlap resolution over scored candidates
 │
 │   ── single-sample path (kept for `process-bam` / `profiles`) ──
 ├── config.py           Config dataclass + validate_config
 ├── legacy_workflow.py  process-bam / zarr orchestration
 ├── qc.py               periodicity / frame-dominance QC (pure)
-├── core/               coordinates.py, orffinder.py, scoring.py
+├── core/               coordinates.py, orffinder.py
 │                       (orffinder is NOT legacy — it is the shared ORF-from-
 │                        sequence rule engine behind feature_sources.from_fasta)
 │
 │   ── lower-level format readers & misc ──
 ├── file_handlers/      bam.py, bed.py, bigwig.py, sparse_parquet.py, zarr.py
-├── utils/              io.py, logging.py
-└── visualization/      plots.py, report.py (HTML)
+└── utils/              io.py, logging.py
 ```
 
 ### Reading the CLI
@@ -291,13 +291,13 @@ TranslonScorer/
 `translonscorer --help` shows the workflow plus build/inspect infrastructure.
 Two groups hold everything that is not on the scoring path:
 
-- **`research`** — `compare-*`, `frame-disambiguation`, `score-compare-*`,
-  `validate-panel`, `export-rdg-flux`. Nothing under `frame/` is imported by
-  the scorer; these support the frame-assignment analyses.
-- **`legacy`** — `plot`, `orfs-import`, `assemble`, `map-orfs`. The older
-  ORF-composite workflow; `orf/` is not imported by the spine.
+- **`research`** — `compare-read-assignment`, `validate-panel`,
+  `export-rdg-flux`. Nothing under `frame/` is imported by the scorer; these
+  support the frame-assignment analyses.
+- **`legacy`** — `orfs-import`, `assemble`, `map-orfs`. ORF table handling;
+  `orf/` is not imported by the spine.
 
-Both still run (`translonscorer research compare-profiles --help`). They are
+Both still run (`translonscorer research export-rdg-flux --help`). They are
 grouped, not deprecated — the split exists so the top level reads as the
 product.
 

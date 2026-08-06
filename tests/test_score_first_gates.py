@@ -5,20 +5,12 @@ import polars as pl
 
 from TranslonScorer.coverage.transcript_coords import cds_to_transcript_space
 from TranslonScorer.frame.bleed import apply_confusion, apply_confusion_counts, learn_confusion
-from TranslonScorer.frame.frame_disambiguation import (
-    candidate_frame_table,
-    summarize_frame_disambiguation,
-)
-from TranslonScorer.frame.frame_method_compare import (
-    compare_frame_support_tables,
-    validate_frame_support_on_cds,
-)
 from TranslonScorer.frame.latent import fit_latent
+from TranslonScorer.frame.rdg_flux_export import export_rdg_flux_v1, rdg_flux_position_table
+from TranslonScorer.frame.validation import validate_frame_support_on_cds
 from TranslonScorer.frame_support import build_frame_support
 from TranslonScorer.model import FrameSupportParams
 from TranslonScorer.orf.panel_manifest import merge_panel_manifest, validate_panel_manifest
-from TranslonScorer.orf.profile_compare import compare_profiles
-from TranslonScorer.orf.rdg_flux_export import export_rdg_flux_v1, rdg_flux_position_table
 from TranslonScorer.orf.score_schema import (
     add_frame_score_columns,
     compare_score_tables,
@@ -131,42 +123,6 @@ def test_panel_manifest_validation_and_merge():
     assert merged["category"][0] == "annotated_cds"
 
 
-def test_compare_profiles_summary():
-    a = pl.DataFrame({"tran_id": ["tx1", "tx1"], "pos": [0, 1], "count": [1.0, 2.0]})
-    b = pl.DataFrame({"tran_id": ["tx1", "tx1"], "pos": [0, 2], "count": [1.0, 3.0]})
-    joined, summary = compare_profiles(a, b, label_a="a", label_b="b")
-    assert joined.height == 3
-    assert summary["n_positions_shared_nonzero"][0] == 1
-    assert summary["total_count_a"][0] == 3.0
-    assert summary["total_count_b"][0] == 4.0
-
-
-def test_frame_disambiguation_counts_frame_discordant_candidates():
-    candidates = pl.DataFrame(
-        {
-            "read_key": ["r1", "r1", "r2", "r2", "r3"],
-            "tran_id": ["tx1", "tx2", "tx1", "tx2", "tx1"],
-            "tran_start_bam": [12, 13, 21, 24, 30],
-            "count": [1.0, 1.0, 2.0, 2.0, 1.0],
-        }
-    )
-    cds = pl.DataFrame(
-        {
-            "tran_id": ["tx1", "tx2"],
-            "start": [0, 0],
-            "stop": [90, 90],
-        }
-    )
-    frames = candidate_frame_table(candidates, cds)
-    classes, summary = summarize_frame_disambiguation(frames)
-    r1 = classes.filter(pl.col("read_key") == "r1")
-    r2 = classes.filter(pl.col("read_key") == "r2")
-    assert bool(r1["is_frame_discordant"][0])
-    assert not bool(r2["is_frame_discordant"][0])
-    assert summary["n_ambiguous_read_keys"][0] == 2
-    assert summary["n_frame_discordant_read_keys"][0] == 1
-
-
 def test_confusion_learning_preserves_asymmetric_leakage():
     profiles = pl.DataFrame(
         {
@@ -252,10 +208,6 @@ def test_frame_support_outputs_adjusted_counts_for_linear_and_latent():
     codon_11 = linear.filter(pl.col("codon") == 11)
     assert codon_11["adjusted_f0"][0] > codon_11["observed_f0"][0]
     assert codon_11["p0"][0] > 0.9
-
-    comparison, summary = compare_frame_support_tables(linear, latent)
-    assert comparison.height == 2
-    assert summary["n_joined"][0] == 2
 
 
 def test_frame_validation_uses_cds_start_transcript_frame():

@@ -1,5 +1,9 @@
-"""ORF-composite scoring path (legacy/deprecated CLI commands).
+"""ORF table handling: import, mapping, schema and benchmark panels.
 
-Migrated out of pipeline/ in T15.6; backs the deprecated orf-composite,
-score-orfs and feature-metrics era commands plus score-table schema helpers.
+- orfs_import:    BED12 → transcript-mapped canonical ORF tables
+- map_orfs:       ORFs → per-ORF feature chains and slices
+- score_schema:   score-table schema helpers (stable ORF keys, column sets)
+- panel_manifest: frozen benchmark panel + sha256 provenance
+
+Scoring itself lives on the spine (events → scoring/ → report), not here.
 """

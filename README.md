@@ -41,11 +41,17 @@ provider** changes:
 | source | provider | command |
 |---|---|---|
 | 1–20 genome/transcriptome BAMs | `BamSetProvider` | `score-bams` |
-| 1–20 bigWigs (coverage only) | `BigwigSetProvider` | (via API) |
+| 1–N bigWigs (coverage only) | `BigwigSetProvider` | `score-bigwig` |
 | annotation-scale sparse matrix | `MatrixProvider` | `score-matrix` |
 
 All three feed one scoring core and produce the same `fact_event_score` store
-and per-translon report.
+and per-translon report, and all three run under `pipeline` as a single call.
+
+**bigWig is the simplest source and the most lossy.** No offsets to calibrate
+and no index to build, but per-base depth carries no read-level splice
+information — so **junction events cannot be scored at all** and come back
+`INSUFFICIENT` with a null call (unassessable, *not* unsupported). The run warns
+with the count. Score junctions with `--bam` or matrix mode.
 
 The **feature source** (what to score) and the **coverage source** (the reads)
 are independent — mix any of them: e.g. score GTF CDSs against your BAMs, or your
@@ -68,7 +74,7 @@ The end-to-end flow is four steps:
 ```
 extract-events        feature source (GTF/BED/FASTA/sqlite) ─► genomic event store
    │
-score-bams / score-matrix   events + coverage ─► append-only score store
+score-bams / score-bigwig / score-matrix   events + coverage ─► score store
    │
 report                scores + events ─► per-translon report (+ consequentiality)
    │
@@ -110,7 +116,25 @@ translonscorer pipeline \
   --out-dir results/
 ```
 
-### B. The matrix (annotation scale)
+### B. Coverage tracks (bigWig)
+
+If all you have is coverage, pass bigWigs. Ribo-seq is stranded, so prefer the
+forward/reverse pair — an unstranded track mixes +/- signal at every position:
+
+```sh
+# one-shot: feature source = --gtf, coverage source = stranded bigWig pair
+translonscorer pipeline \
+  --gtf annotation.gtf --feature-type CDS --chrom 12 \
+  --forward-bigwig fwd.bw --reverse-bigwig rev.bw \
+  --sample mysample \
+  --out-dir results/
+```
+
+Repeat `--forward-bigwig`/`--reverse-bigwig` for more samples (Nth pairs with
+Nth). `--bigwig` takes unstranded tracks instead. Junction events are not
+scorable from bigWig — see the caveat above.
+
+### C. The matrix (annotation scale)
 
 The sparse matrix is **one logical matrix sharded into partition directories by
 read sequence**. Reads for any locus are spread across *all* partitions, so the
@@ -148,7 +172,7 @@ BAM/bigWig mode needs no index — it calibrates its own offsets per file (see
 `--offset-method`). That is the only difference between the two modes: the
 events, the scorer, the report and the store are identical.
 
-### C. Step by step (full control)
+### D. Step by step (full control)
 
 ```sh
 # 1. events (once per feature set; reused across all scoring runs).

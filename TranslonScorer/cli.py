@@ -2150,6 +2150,30 @@ def consequential_cmd(
     "--bam", "bams", multiple=True, help="Genome/transcriptome BAM (repeatable) → BAM mode."
 )
 @click.option(
+    "--bigwig",
+    "bigwigs",
+    multiple=True,
+    help=(
+        "Unstranded genomic bigwig (repeatable, 1-N samples) → bigwig mode. "
+        "Prefer --forward-bigwig/--reverse-bigwig: Ribo-seq is stranded and an "
+        "unstranded track mixes +/- signal at every position. NOTE: bigwig "
+        "coverage cannot score junction events (no read-level splice info) — "
+        "they are recorded INSUFFICIENT."
+    ),
+)
+@click.option(
+    "--forward-bigwig",
+    "forward_bigwigs",
+    multiple=True,
+    help="Forward/plus-strand bigwig (repeatable; Nth pairs with Nth --reverse-bigwig).",
+)
+@click.option(
+    "--reverse-bigwig",
+    "reverse_bigwigs",
+    multiple=True,
+    help="Reverse/minus-strand bigwig (repeatable; pairs with --forward-bigwig).",
+)
+@click.option(
     "--chrom", "chroms", multiple=True, help="Restrict to chromosome(s) (repeatable; default: all)."
 )
 @click.option(
@@ -2264,6 +2288,9 @@ def pipeline_cmd(
     stop_codons,
     matrix_dir,
     bams,
+    bigwigs,
+    forward_bigwigs,
+    reverse_bigwigs,
     chroms,
     data_version,
     annotation_version,
@@ -2282,21 +2309,44 @@ def pipeline_cmd(
     mappability_bigwig,
     psite_index_dir,
 ):
-    """One-shot event-scoring run: extract-events → score (matrix or BAMs) → report.
+    """One-shot event-scoring run: extract-events → score → report.
 
     Feature source (exactly one): --gtf / --bed12 / --bigbed / --fasta / --sqlite.
-    Coverage source (exactly one): --matrix-dir (whole sharded matrix) or --bam
-    (1-20 BAMs). Equivalent to running extract-events, score-matrix/score-bams and
-    report in sequence, into one output directory.
+    Coverage source (exactly one): --matrix-dir (whole sharded matrix), --bam
+    (1-20 BAMs), or bigwigs (--bigwig, or --forward-bigwig/--reverse-bigwig
+    pairs). Equivalent to running extract-events, score-matrix/score-bams/
+    score-bigwig and report in sequence, into one output directory.
+
+    Bigwig is the simplest source — no offsets to calibrate, no index to build —
+    and the most lossy: no P/A-site distinction and NO junction scoring, so
+    junction events come back INSUFFICIENT (unassessable, not unsupported).
     """
     setup_logging()
     from .io.matrix import discover_partitions
     from .model import ConsequentialityPolicy, OffsetParams
     from .workflows import pipeline_workflow
 
-    if bool(matrix_dir) == bool(bams):
+    if forward_bigwigs or reverse_bigwigs:
+        if len(forward_bigwigs) != len(reverse_bigwigs):
+            raise click.BadParameter(
+                f"--forward-bigwig and --reverse-bigwig must be given in pairs "
+                f"(got {len(forward_bigwigs)} forward, {len(reverse_bigwigs)} reverse)"
+            )
+        if bigwigs:
+            raise click.BadParameter(
+                "use either --bigwig (unstranded) or --forward-bigwig/--reverse-bigwig "
+                "(stranded), not both"
+            )
+    stranded = bool(forward_bigwigs)
+    bigwig_arg = (
+        [{"forward": f, "reverse": r} for f, r in zip(forward_bigwigs, reverse_bigwigs)]
+        if stranded
+        else list(bigwigs)
+    )
+    if sum(bool(x) for x in (matrix_dir, bams, bigwig_arg)) != 1:
         raise click.BadParameter(
-            "provide exactly one of --matrix-dir (matrix mode) or --bam (BAM mode)"
+            "provide exactly one coverage source: --matrix-dir (matrix mode), --bam "
+            "(BAM mode), or --bigwig / --forward-bigwig+--reverse-bigwig (bigwig mode)"
         )
     n_src = sum(bool(x) for x in (gtf_path, bed12_path, bigbed_path, fasta_path, sqlite_path))
     if n_src != 1:
@@ -2325,6 +2375,8 @@ def pipeline_cmd(
         out_dir,
         partition_dirs=partition_dirs,
         bams=list(bams) or None,
+        bigwigs=bigwig_arg or None,
+        stranded=stranded,
         data_version=data_version,
         chroms=list(chroms) or None,
         annotation_version=annotation_version,

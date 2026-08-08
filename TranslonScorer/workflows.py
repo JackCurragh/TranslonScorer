@@ -43,6 +43,7 @@ from TranslonScorer.model import (
 )
 from TranslonScorer.report import compose_report
 from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS, score_events
+from TranslonScorer.utils.logging import log_warning
 
 # ---------------------------------------------------------------------------
 # extract-events
@@ -497,6 +498,29 @@ def score_bams_workflow(
 # ---------------------------------------------------------------------------
 
 
+def _warn_bigwig_cannot_score_junctions(events: pl.DataFrame) -> int:
+    """Say out loud that junction events are unassessable from bigwig coverage.
+
+    A bigwig carries per-base depth and nothing else — there is no CIGAR, so no
+    way to count reads spanning a donor/acceptor pair.  Those events come back
+    INSUFFICIENT with a null call, which is correct (absent, not unsupported)
+    but is easy to mistake for "no junction support found" when it is really
+    "this coverage source cannot answer the question".  Returns the count.
+    """
+    if "type" not in events.columns:
+        return 0
+    n_junction = int(events.filter(pl.col("type") == "junction").height)
+    if n_junction:
+        log_warning(
+            f"bigwig coverage cannot score junctions: {n_junction} junction event(s) "
+            f"will be recorded INSUFFICIENT with call=null (unassessable, NOT "
+            f"unsupported). A bigwig is per-base depth with no read-level splice "
+            f"information, so reads spanning a donor/acceptor pair cannot be counted. "
+            f"Score junctions with --bam or matrix mode."
+        )
+    return n_junction
+
+
 def score_bigwigs_workflow(
     events_dir: str,
     bigwigs: Sequence[Union[str, Path, dict]],
@@ -532,6 +556,7 @@ def score_bigwigs_workflow(
     from TranslonScorer.coverage.bigwig import BigwigSetProvider
 
     events = read_events(events_dir)
+    _warn_bigwig_cannot_score_junctions(events)
     provider = BigwigSetProvider(
         list(bigwigs),
         sample_names=sample_names,
@@ -610,6 +635,8 @@ def pipeline_workflow(
     *,
     partition_dirs: Optional[Sequence[Union[str, Path]]] = None,
     bams: Optional[Sequence[Union[str, Path]]] = None,
+    bigwigs: Optional[Sequence[Union[str, Path, dict]]] = None,
+    stranded: bool = False,
     data_version: str = "run",
     chroms: Optional[List[str]] = None,
     annotation_version: str = "",
@@ -630,11 +657,19 @@ def pipeline_workflow(
 ) -> Dict[str, str]:
     """Run the whole event-scoring path in one call.
 
-    extract-events → score (matrix *or* BAMs) → report. Writes
+    extract-events → score (matrix, BAMs *or* bigwigs) → report. Writes
     ``out_dir/{events,scores}`` and ``out_dir/report.parquet``; returns the
-    paths produced. Exactly one of ``partition_dirs`` (matrix) or ``bams`` is the
-    coverage source; ``source_kwargs`` selects the feature source for
-    extract-events (sqlite_path | gtf_path | bed12_path | bigbed_path | fasta_path).
+    paths produced. Exactly one of ``partition_dirs`` (matrix), ``bams`` or
+    ``bigwigs`` is the coverage source; ``source_kwargs`` selects the feature
+    source for extract-events (sqlite_path | gtf_path | bed12_path |
+    bigbed_path | fasta_path).
+
+    bigwigs: the simplest coverage source — per-base depth, no offsets to
+    calibrate and no index to build. It is also the most lossy: no P/A-site
+    distinction and **no junction scoring at all** (see
+    ``score_bigwigs_workflow``), so junction events come back INSUFFICIENT.
+    Pass ``stranded=True`` with ``{'forward': path, 'reverse': path}`` entries
+    — Ribo-seq is stranded and an unstranded bigwig mixes +/- signal.
 
     psite_index_dir: directory from ``build-psite-index``; required in matrix
     mode, where it supplies the per-(sample, length) offset-corrected genomic
@@ -646,8 +681,10 @@ def pipeline_workflow(
     only reachable via the standalone extract-events command — pipeline had
     no way to supply it at all.
     """
-    if bool(partition_dirs) == bool(bams):
-        raise ValueError("provide exactly one of partition_dirs (matrix) or bams")
+    if sum(bool(x) for x in (partition_dirs, bams, bigwigs)) != 1:
+        raise ValueError(
+            "provide exactly one coverage source: partition_dirs (matrix), bams, or bigwigs"
+        )
 
     out = Path(out_dir)
     events_dir = str(out / "events")
@@ -679,6 +716,19 @@ def pipeline_workflow(
             context_gtf=context_gtf,
             mappability_bigwig=mappability_bigwig,
             psite_index_dir=psite_index_dir,
+        )
+    elif bigwigs:
+        score_bigwigs_workflow(
+            events_dir,
+            list(bigwigs),
+            store_dir,
+            data_version=data_version,
+            sample_names=sample_names,
+            stranded=stranded,
+            site=site,
+            annotation_version=annotation_version,
+            context_gtf=context_gtf,
+            mappability_bigwig=mappability_bigwig,
         )
     else:
         score_bams_workflow(

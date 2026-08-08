@@ -15,12 +15,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python dependencies first (better layer caching)
-COPY translonscorer/requirements.txt /app/requirements.txt
+# Paths are relative to the repo root, which IS this repo — not a translonscorer/
+# subdirectory. The earlier COPY translonscorer/... form was inherited from the
+# monorepo layout and fails on any case-sensitive filesystem.
+# Dependencies first, for layer caching.
+COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Install the package
-COPY translonscorer /app
+# Then the package. See .dockerignore — data/ is multi-GB and must stay out.
+COPY . /app
 RUN pip install --no-cache-dir /app
 
 ENTRYPOINT ["translonscorer"]

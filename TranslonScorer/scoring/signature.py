@@ -132,10 +132,23 @@ def signal_from_intervals(
     ``strict_r_compat=True`` instead *drops* uncovered positions, reproducing
     the reference's ``unlist(lapply(...))``: R returns ``numeric(0)`` for a
     position with no covering interval and ``unlist`` silently discards it, so
-    the vector comes back short and every downstream position shifts frame.
-    That is a bug, and it changes PIF and CIF on any sparse track — but it is
-    what produced the published numbers, so it is reproducible on demand for
-    comparison.  The returned length is the caller's signal that it fired.
+    the vector comes back short.  The returned length is the caller's signal
+    that it fired.
+
+    What that costs depends on the gap, and the distinction matters:
+
+    * **Gap length divisible by 3** — frame is preserved, so PIF is unaffected.
+      CIF still changes, because the dropped codons leave the denominator
+      instead of penalising the score (see ``cif``), which inflates it.
+    * **Gap length not divisible by 3** — every downstream position changes
+      frame, ``seq(1,n,3)`` no longer selects frame 0, and both PIF and CIF
+      become meaningless rather than merely biased.
+
+    So this is a bug, but not a uniformly catastrophic one, and on a fully
+    dense track it never fires at all — which is the likeliest reason it went
+    unnoticed.  Kept reproducible because it is what produced the published
+    numbers, so the gap between the two readings can be quantified per dataset
+    rather than argued about.
     """
     pos = np.asarray(positions, dtype=np.int64)
     out = np.zeros(len(pos), dtype=float)

@@ -237,3 +237,55 @@ def test_dropoff_matches_the_r_transliteration():
             assert mine is None
         else:
             assert mine == pytest.approx(ref)
+
+
+def test_a_dropped_whole_codon_preserves_frame_but_still_moves_cif():
+    """The divergence is not uniform: what it costs depends on the gap length.
+
+    A gap that is a multiple of 3 keeps seq(1,n,3) on frame 0, so PIF survives
+    -- but CIF still shifts, because the dropped codons leave the denominator
+    rather than penalising the score. Only a non-multiple-of-3 gap corrupts PIF.
+    """
+    # 30 nt, periodic (9,1,1 per codon), with codon 5 (positions 13-15) absent.
+    cov = {}
+    for c in range(10):
+        if c == 4:
+            continue
+        cov[1 + 3 * c] = 9.0
+        cov[2 + 3 * c] = 1.0
+        cov[3 + 3 * c] = 1.0
+    starts = np.array([p - 1 for p in cov])
+    ends = np.array(list(cov))
+    values = np.array(list(cov.values()), dtype=float)
+    positions = list(range(1, 31))
+
+    corrected = signal_from_intervals(positions, starts, ends, values)
+    strict = signal_from_intervals(positions, starts, ends, values, strict_r_compat=True)
+    assert len(strict) == 27, "a whole codon's worth of positions was dropped"
+
+    # Frame survives a multiple-of-3 gap, so PIF agrees.
+    assert pif(strict) == pytest.approx(pif(corrected))
+    # CIF does not: the empty codon stops counting against the score.
+    assert cif(corrected) == pytest.approx(0.9)
+    assert cif(strict) == pytest.approx(1.0)
+
+
+def test_a_dropped_partial_codon_shifts_frame_and_breaks_pif():
+    """One uncovered position is enough to put everything downstream out of frame."""
+    cov = {}
+    for c in range(10):
+        cov[1 + 3 * c] = 9.0
+        cov[2 + 3 * c] = 1.0
+        cov[3 + 3 * c] = 1.0
+    del cov[14]  # a single interior position
+    starts = np.array([p - 1 for p in cov])
+    ends = np.array(list(cov))
+    values = np.array(list(cov.values()), dtype=float)
+    positions = list(range(1, 31))
+
+    corrected = signal_from_intervals(positions, starts, ends, values)
+    strict = signal_from_intervals(positions, starts, ends, values, strict_r_compat=True)
+    assert len(strict) == 29
+    assert pif(corrected) != pytest.approx(pif(strict))
+    # 29 is not a whole number of codons, so CIF cannot be computed at all.
+    assert cif(strict) is None

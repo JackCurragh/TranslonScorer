@@ -22,11 +22,20 @@ publication via **Trusted Publishing** (OIDC, no stored token).
   ```
   Verify first with `bump2version --dry-run --verbose patch`.
 
+  The `make` targets call the `bump2version` **executable**, so they fail with
+  "command not found" unless it is on `PATH`. `pip install --user bump2version`
+  puts it in the user scripts dir, which often is not. Either add that dir to
+  `PATH` or call the module directly — equivalent, and PATH-independent:
+  ```bash
+  python3 -m bumpversion --dry-run --verbose minor   # check
+  python3 -m bumpversion minor                       # commit + tag
+  ```
+
 ## 2. CI (`.github/workflows/ci.yml`)
 
 Runs on push/PR to `main` and `dev` (matches RiboMetric):
 
-- **test** job — matrix Python 3.10 + 3.12; installs samtools + htslib system
+- **test** job — matrix Python 3.11 + 3.12; installs samtools + htslib system
   libs (for pysam / pyBigWig); `pip install -e '.[full]'`; `python -m build`;
   `pytest -n auto`; coverage + Codecov upload on 3.12.
 - **type-check** job — `mypy` (`mypy.ini`). Report-only while alpha; drop the
@@ -43,20 +52,38 @@ Triggered by pushing a `v*` tag (which `bump2version` creates):
 
 ## 4. One-time setup (before the first PyPI release)
 
-1. **Reserve the name / first upload via TestPyPI** to validate metadata:
-   `make release-test` (uploads to TestPyPI; needs a TestPyPI token locally).
-2. **PyPI Trusted Publisher (PENDING flow — first release).** The project is
-   NOT yet on PyPI, so its project page does not exist and you cannot add a
-   publisher there. Instead register a *pending* publisher at the account level:
-   https://pypi.org/manage/account/publishing/ → "Add a new pending publisher":
-   PyPI project name `TranslonScorer`, owner `JackCurragh`, repo `TranslonScorer`,
-   workflow `release.yml`, environment `pypi`. On the first successful publish
-   PyPI creates the project and binds it to this publisher. (After that, manage
-   it at https://pypi.org/manage/project/TranslonScorer/ as usual.)
-3. **GitHub:** create an Environment named `pypi` (Settings → Environments);
-   optionally require a reviewer for publish.
-4. **Codecov:** enable the repo (no token needed for public repos).
-5. Confirm the repo's default branches are `main`/`dev` (CI triggers).
+Status as of 2026-08-09: **steps 1 and 2 are done**; the first publish has not
+run yet.
+
+1. ✅ **PyPI Trusted Publisher (PENDING flow — first release).** Registered
+   2026-08-09. Until the first publish creates the project, there is no project
+   page to add a publisher on, so this is a *pending* publisher at the account
+   level: https://pypi.org/manage/account/publishing/ → "Add a new pending
+   publisher", with PyPI project name `TranslonScorer`, owner `JackCurragh`,
+   repo `TranslonScorer`, workflow `release.yml`, environment `pypi`. On the
+   first successful publish PyPI creates the project and converts this into a
+   normal publisher, managed at
+   https://pypi.org/manage/project/TranslonScorer/.
+
+   Two fields are easy to get wrong and both fail as an opaque "not authorised"
+   at publish time, long after a green build: **"Workflow name" wants the
+   filename** (`release.yml`, not the `name:` inside the YAML), and the
+   environment name must match `environment: pypi` in `release.yml` exactly.
+2. ✅ **GitHub Environment `pypi`** (Settings → Environments). Created. The
+   `publish` job declares `environment: pypi`; if it does not exist the job
+   fails before it ever contacts PyPI, with an error that does not mention PyPI.
+   Optionally add a required reviewer to make each publish pause for approval.
+3. **Codecov:** enable the repo (no token needed for public repos).
+4. Confirm the repo's default branches are `main`/`dev` (CI triggers).
+
+**TestPyPI rehearsal is *not* a useful pre-flight for this path.** `make
+release-test` uploads with a stored TestPyPI token, which exercises neither
+OIDC nor the pending-publisher binding — TestPyPI needs its own separate
+pending publisher. To catch metadata problems before tagging, run the build
+locally instead; that is exactly what the `build` job does:
+```bash
+python3 -m build && python3 -m twine check dist/*
+```
 
 ## 5. Release runbook
 
@@ -88,7 +115,7 @@ git push origin main --follow-tags
 | capability | RiboMetric | TranslonScorer (now) |
 |---|---|---|
 | Semantic version, single bump command | bump2version | ✅ `.bumpversion.cfg`, `make bump-*` |
-| CI tests (py3.10/3.12) + coverage | ci.yml + Codecov | ✅ ci.yml |
+| CI tests (py3.11/3.12) + coverage | ci.yml + Codecov | ✅ ci.yml |
 | Type checking | mypy (fail) | ✅ mypy (report-only → tighten to fail) |
 | Tag → PyPI Trusted Publishing | release.yml | ✅ release.yml |
 | Changelog / citation | CHANGELOG.md / CITATION.cff | ✅ added |
@@ -97,10 +124,14 @@ git push origin main --follow-tags
 
 ## 7. Remaining to wire up (not code — config/secrets)
 
-- Register the PyPI Trusted Publisher + `pypi` GitHub environment (§4).
-- Decide the public Git history: TranslonScorer currently lives as a subtree of
-  `all-RiboSeq`. The CI/release workflows assume it is its own repo at
-  `JackCurragh/TranslonScorer` (per `pyproject` URLs); confirm that repo exists
-  and these `.github/workflows/` live at its root.
+- ✅ PyPI Trusted Publisher + `pypi` GitHub environment registered 2026-08-09
+  (§4). Not yet exercised — the first tag push is the real test.
+- ✅ The workflows do live at the root of `JackCurragh/TranslonScorer` (`origin`
+  points there and `.github/workflows/` is at the repo root), so the subtree
+  concern is resolved for CI/release purposes.
+- **Decide which branch releases are cut from.** §5 below says `main`, but
+  `v0.3.0` was tagged on `dev` (which was 14 commits ahead of `main` at the
+  time). `release.yml` triggers on any `v*` tag regardless of branch, so both
+  work — but the runbook and practice should agree before this becomes a habit.
 - Before 1.0: make `mypy` fatal, ensure `pytest` is green in CI, and pin a
   `requires-python` upper bound if needed.

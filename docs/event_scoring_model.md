@@ -219,8 +219,8 @@ re-derive calls; never re-measure.
 | aspect | headline metric (v1) | range | meaning | continuous evidence | call logic |
 |---|---|---|---|---|---|
 | `init` | `init_rise` = log2((body+α)/(leader+α)) | ℝ | log2 fold-change of body vs leader (robust median codon levels, α=1), median over flanks 9/18/30/60 | `rise_by_flank`, `stability`, `flank_peakiness` (review flags, not gates) | SUPPORTED if rise≥1 (2×); UNSUPPORTED if ≤0; AMBIGUOUS if borderline |
-| `elongation` | `elong_in_frame` | 0…1 | in-frame fraction where **unconfounded**; paired with `breadth` | `clean_in_frame`, `breadth` (covered_nt/span), `identifiability`, `competitor_share`, `noise_share` | AMBIGUOUS if contended & identifiability<0.5; SUPPORTED if in-frame≥0.5 **and** breadth≥0.2; else UNSUPPORTED |
-| `term` | `term_drop` = log2((body+α)/(UTR+α)) | ℝ | log2 fold-change of body before vs UTR after the stop | same step machinery as init | SUPPORTED if drop≥1 (2×); UNSUPPORTED if ≤0; AMBIGUOUS if borderline |
+| `elongation` | `elong_in_frame` | 0…1 | in-frame fraction where **unconfounded**; paired with `breadth` | `clean_in_frame`, `overall_in_frame` (= Chothani PIF), `cif`, `breadth` (covered_nt/span), `identifiability`, `competitor_share`, `noise_share` | AMBIGUOUS if contended & identifiability<0.5; SUPPORTED if in-frame≥0.5 **and** breadth≥0.2; else UNSUPPORTED |
+| `term` | `term_drop` = log2((body+α)/(UTR+α)) | ℝ | log2 fold-change of body before vs UTR after the stop | same step machinery as init, plus `dropoff` (Chothani, bounded) | SUPPORTED if drop≥1 (2×); UNSUPPORTED if ≤0; AMBIGUOUS if borderline |
 | `junction` | `junc_spanning` | 0…∞ | reads whose CIGAR intron matches (donor,acceptor) | `spanning` | SUPPORTED if spanning≥20 |
 
 `metric` is the natural per-aspect quantity — **not** normalised across aspects
@@ -234,6 +234,31 @@ a `breadth` guard to kill single-spike false positives; peakiness/stability
 demoted to evidence. Still to iterate: junction normalisation (spanning/crossing
 + overhang-weight) & frame continuity; null-model anchoring; term stop-peak +
 readthrough; per-sample tier escalation.
+
+**v1.2 (2026-08-09) — translation signature scores as evidence:** the three
+components of the Chothani et al. (*Mol Cell* 2022) signature now ride in the
+evidence blob rather than as new headline metrics, because the record schema
+carries exactly one metric per row and the incumbents already own it.
+
+- **PIF was already there under another name.** `overall_in_frame` is exactly
+  `sum(psites[seq(1,n,3)]) / sum(psites)`. No field was added. The headline
+  `elong_in_frame` is *not* PIF — it is the same ratio restricted to
+  uncontended positions, so the two diverge precisely where events overlap in
+  different frames.
+- **`cif`** (elongation) reproduces two quirks of the published R on purpose:
+  the threshold is the literal `33.33`, not `100/3`, so an exactly-uniform codon
+  counts as frame-0 dominant; and the denominator is *every* codon, so
+  zero-coverage codons lower the score instead of being excluded.
+- **`dropoff`** (termination) is a bounded [0,1] ratio over a fixed 33-nt window
+  using frame-0 positions only — deliberately *not* the same statistic as
+  `term_drop`, which is an unbounded multi-flank log2 fold-change over all
+  positions. Neither supersedes the other. It assumes the translon span
+  includes its stop codon; if the upstream annotation excludes it, every value
+  is 3 nt out of register.
+
+Validated against the R *formulas* (fuzz-tested against a transliteration in
+`tests/reference_signature.py`), **not** yet against published values on real
+data.
 
 **v1.1 (2026-07-14) — splice-aware init/term flanks, junction wiring fixed:**
 `init_rise`/`term_drop` previously read the leader/UTR flank as raw flanking

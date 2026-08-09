@@ -102,11 +102,28 @@ def _elong_evidence(
     contended_nt: int,
     span_nt: int,
     thr: ScoreThresholds,
+    cif_value: Optional[float] = None,
 ) -> dict:
     """Turn per-event frame sums into evidence + eligibility/call.
 
     Shared by the scalar (score_elongation_event) and vectorised
     (score_elongation_batch) scorers so decision logic is identical.
+
+    Two of the Chothani et al. (2022) signature scores ride along here as
+    evidence rather than as headline metrics, because the record schema
+    carries exactly one metric per event and `elong_in_frame` already owns it:
+
+    * ``overall_in_frame`` IS their PIF — frame-0 signal over total signal,
+      across every position in the span. It is not a separate field because it
+      would be a duplicate one; see docs and the CHANGELOG.
+    * ``cif`` is their CIF, supplied by the caller (it needs the per-codon
+      vector, which neither the prefix-sum kernel nor this function has).
+      None when the span is not a whole number of codons or no vector was
+      built.
+
+    Note the headline ``metric`` stays ``clean_in_frame`` where available —
+    PIF's uncontended-only sibling. The two differ exactly where events
+    overlap in different frames, which is the case PIF cannot express.
     """
     cont_e = cont_by_frame[a_e]
     clean_in_frame = (clean_inf / clean_tot) if clean_tot else None
@@ -135,7 +152,8 @@ def _elong_evidence(
         "covered_nt": covered,
         "metric": effective_in_frame,
         "metric_name": "elong_in_frame",
-        "overall_in_frame": overall_in_frame,
+        "overall_in_frame": overall_in_frame,  # == Chothani PIF
+        "cif": cif_value,
         "breadth": breadth,
         "span_nt": span_nt,
         "clean_in_frame": clean_in_frame,

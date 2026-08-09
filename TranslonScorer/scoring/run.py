@@ -32,6 +32,7 @@ from TranslonScorer.scoring.evidence import (
     _elong_evidence,
     event_record,
 )
+from TranslonScorer.scoring.signature import cif, orf_signal_vector
 
 DEFAULT_THRESHOLDS = ScoreThresholds()
 
@@ -140,6 +141,10 @@ def score_elongation_batch(
     if elong.is_empty():
         return {}
     pos_sorted, cum_total, cum_by_frame = _prefix_sums(cov_pos, cov_cnt)
+    # cum_total is a prefix array (len n+1, [0] = 0), so this recovers the
+    # sorted counts without a second argsort. Needed because CIF is per-codon
+    # and cannot be derived from event-level frame sums.
+    cnt_sorted = _np.diff(cum_total)
     event_ids = elong["event_id"].to_numpy()
     starts = elong["start"].to_numpy().astype(_np.int64)
     ends = elong["end"].to_numpy().astype(_np.int64)
@@ -174,6 +179,14 @@ def score_elongation_batch(
         clean_in_frame = float(
             frame_reads[row][expected_frame[row]] - contended_frame[row][expected_frame[row]]
         )
+        vec = orf_signal_vector(
+            pos_sorted,
+            cnt_sorted,
+            int(starts[row]),
+            int(ends[row]),
+            int(expected_frame[row]),
+            int(strand[row]),
+        )
         out[int(event_id)] = _elong_evidence(
             float(total_reads[row]),
             int(covered_positions[row]),
@@ -186,6 +199,7 @@ def score_elongation_batch(
             int(contended_nt[row]),
             int(ends[row] - starts[row]),
             thr,
+            cif_value=cif(vec),
         )
     return out
 

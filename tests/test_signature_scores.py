@@ -289,3 +289,139 @@ def test_a_dropped_partial_codon_shifts_frame_and_breaks_pif():
     assert pif(corrected) != pytest.approx(pif(strict))
     # 29 is not a whole number of codons, so CIF cannot be computed at all.
     assert cif(strict) is None
+
+
+# ---------------------------------------------------------------------------
+# transcript-order vector construction (the strand trap)
+# ---------------------------------------------------------------------------
+
+
+def _sparse(d):
+    pos = np.array(sorted(d), dtype=np.int64)
+    return pos, np.array([float(d[p]) for p in pos])
+
+
+def test_plus_strand_vector_starts_on_a_codon_boundary():
+    from TranslonScorer.scoring.signature import orf_signal_vector
+
+    # Span [10,19), frame-0 residue 1 -> frame-0 genomic positions 10,13,16.
+    cov = {10: 9.0, 11: 1.0, 12: 1.0, 13: 9.0, 14: 1.0, 15: 1.0, 16: 9.0, 17: 1.0, 18: 1.0}
+    pos, cnt = _sparse(cov)
+    v = orf_signal_vector(pos, cnt, 10, 19, expected_frame=10 % 3, strand=1)
+    assert v.tolist() == [9, 1, 1, 9, 1, 1, 9, 1, 1]
+    assert pif(v) == pytest.approx(27 / 33)
+    assert cif(v) == 1.0
+
+
+def test_minus_strand_vector_is_reversed_so_codons_group_correctly():
+    """On the minus strand the codon's first base is the HIGHEST coordinate.
+
+    Same signal shape as the plus-strand case but laid out 3'->5' genomically:
+    the strong base of each codon sits at 18, 15, 12. Read in transcript order
+    the vector must come back 9,1,1 repeated -- if the reversal or the offset
+    were wrong, the 9s would land at index 1 or 2 and CIF would collapse.
+    """
+    from TranslonScorer.scoring.signature import orf_signal_vector
+
+    cov = {18: 9.0, 17: 1.0, 16: 1.0, 15: 9.0, 14: 1.0, 13: 1.0, 12: 9.0, 11: 1.0, 10: 1.0}
+    pos, cnt = _sparse(cov)
+    v = orf_signal_vector(pos, cnt, 10, 19, expected_frame=18 % 3, strand=-1)
+    assert v.tolist() == [9, 1, 1, 9, 1, 1, 9, 1, 1]
+    assert cif(v) == 1.0
+
+
+def test_vector_is_trimmed_to_whole_codons_at_both_ends():
+    from TranslonScorer.scoring.signature import orf_signal_vector
+
+    # Span starts one base before the first frame-0 position and ends two late.
+    cov = {p: 1.0 for p in range(10, 22)}
+    pos, cnt = _sparse(cov)
+    v = orf_signal_vector(pos, cnt, 10, 22, expected_frame=11 % 3, strand=1)
+    assert len(v) % 3 == 0
+    assert len(v) == 9, "one leading base trimmed, two trailing"
+
+
+def test_uncovered_positions_inside_the_orf_become_zero():
+    from TranslonScorer.scoring.signature import orf_signal_vector
+
+    pos, cnt = _sparse({10: 5.0, 16: 5.0})
+    v = orf_signal_vector(pos, cnt, 10, 19, expected_frame=10 % 3, strand=1)
+    assert v.tolist() == [5, 0, 0, 0, 0, 0, 5, 0, 0]
+    # The empty middle codon counts against CIF rather than vanishing.
+    assert cif(v) == pytest.approx(2 / 3)
+
+
+def test_empty_span_returns_empty_vector():
+    from TranslonScorer.scoring.signature import orf_signal_vector
+
+    pos, cnt = _sparse({10: 1.0})
+    assert orf_signal_vector(pos, cnt, 10, 10, expected_frame=1, strand=1).size == 0
+
+
+# ---------------------------------------------------------------------------
+# drop-off wired onto the termination aspect
+# ---------------------------------------------------------------------------
+
+
+def test_dropoff_window_is_frame_locked_to_term_pos_on_both_strands():
+    """window[17] must be term_pos itself, or every offset is out of register."""
+    from TranslonScorer.scoring.aspects import _dropoff_at
+
+    # All signal on the six in-frame positions up to and including the stop.
+    for strand in (1, -1):
+        term = 1000
+        cov = {}
+        for k in range(0, 18, 3):
+            cov[term - (17 - k) * strand] = 5.0
+        assert _dropoff_at(term, strand, cov) == 1.0, f"strand {strand}"
+
+    # All signal after the stop -> 0.0.
+    for strand in (1, -1):
+        term = 1000
+        cov = {term + (k - 17) * strand: 5.0 for k in range(18, 33, 3)}
+        assert _dropoff_at(term, strand, cov) == 0.0, f"strand {strand}"
+
+
+def test_dropoff_is_none_off_contig():
+    from TranslonScorer.scoring.aspects import _dropoff_at
+
+    # A stop 5 nt from position 0 cannot carry a 17 nt upstream flank.
+    assert _dropoff_at(5, 1, {5: 1.0}) is None
+
+
+def test_dropoff_is_none_without_signal_either_side():
+    from TranslonScorer.scoring.aspects import _dropoff_at
+
+    assert _dropoff_at(1000, 1, {}) is None
+
+
+def test_term_evidence_carries_dropoff():
+    from TranslonScorer.scoring.aspects import score_termination_event
+
+    cov = {1000 - (17 - k): 5.0 for k in range(0, 18, 3)}
+    s = score_termination_event(1000, 1, cov)
+    assert "dropoff" in s
+    assert s["dropoff"] == 1.0
+    # It must not have displaced the headline metric.
+    assert s["metric_name"] == "term_drop"
+
+
+def test_flank_fallback_and_splice_aware_agree_on_order():
+    """The fallback must be the splice-aware path's order, not its reverse.
+
+    They diverged on the minus strand: fallback ascending genomic, splice-aware
+    descending (transcript order). No score moved, because _codon_levels bins
+    in 3s and every flank length is a multiple of 3, so the bin set was
+    identical -- but any frame-locked consumer would have read the window
+    backwards.
+    """
+    from TranslonScorer.scoring.aspects import _project_flank
+
+    far_intron = {("chr1", "+"): [(50_000, 50_100)], ("chr1", "-"): [(50_000, 50_100)]}
+    for strand in (1, -1):
+        for body_side in (True, False):
+            fallback, _ = _project_flank(1000, strand, 9, body_side=body_side)
+            aware, _ = _project_flank(
+                1000, strand, 9, body_side=body_side, chrom="chr1", splice_context=far_intron
+            )
+            assert fallback == aware, f"strand={strand} body_side={body_side}"

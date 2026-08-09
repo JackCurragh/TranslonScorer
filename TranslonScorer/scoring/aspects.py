@@ -20,9 +20,19 @@ import math
 import statistics
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import numpy as _np
+
 from TranslonScorer.events import SpliceContext
 from TranslonScorer.model import ScoreThresholds
 from TranslonScorer.scoring.evidence import _decide_step, _elong_evidence
+from TranslonScorer.scoring.signature import (
+    DROPOFF_DOWNSTREAM_NT,
+    DROPOFF_UPSTREAM_NT,
+    DROPOFF_WINDOW_NT,
+    cif,
+    dropoff,
+    orf_signal_vector,
+)
 
 # ---------------------------------------------------------------------------
 # Frame utility
@@ -42,17 +52,29 @@ def abs_frame(phase: int, strand: int) -> int:
 # lengths; the consensus (median of log2FCs) is the headline metric.
 
 
-def _flank_positions(pos: int, strand: int, length: int, *, body_side: bool) -> range:
+def _flank_positions(pos: int, strand: int, length: int, *, body_side: bool) -> List[int]:
     """Genomic positions for a flank of `length` nt on the body or outer side of
     `pos`, in transcript orientation. body_side=True → into the ORF.
 
     Flat genomic window — wrong whenever an intron falls inside the flank
     (the leader/UTR side is spliced). Used directly only when no splice
     context is available; see _project_flank for the splice-aware version.
+
+    Minus-strand results are returned in DESCENDING genomic order, because
+    that is transcript order there. This used to return ascending genomic on
+    both strands, which made the fallback the exact reverse of the
+    splice-aware path for every minus-strand flank. Nothing noticed: the only
+    consumer was _codon_levels, which bins in 3s and takes median/max/total,
+    and every flank length in use is a multiple of 3 — so the bin set, and
+    hence every score, was identical either way. It became visible only with
+    the first order-sensitive consumer (_dropoff_at, whose window is
+    frame-locked to a specific index).
     """
     if strand > 0:
-        return range(pos, pos + length) if body_side else range(pos - length, pos)
-    return range(pos - length + 1, pos + 1) if body_side else range(pos + 1, pos + length + 1)
+        rng = range(pos, pos + length) if body_side else range(pos - length, pos)
+        return list(rng)
+    rng = range(pos - length + 1, pos + 1) if body_side else range(pos + 1, pos + length + 1)
+    return list(reversed(rng))
 
 
 def _project_flank(
@@ -292,7 +314,66 @@ def score_termination_event(
     s["metric"] = s["consensus_rise"]
     s["metric_name"] = "term_drop"
     s["eligibility"], s["call"] = _decide_step(s, rise_thr=thr.term_drop, thr=thr)
+    s["dropoff"] = _dropoff_at(
+        term_pos, strand, coverage, chrom=chrom, splice_context=splice_context
+    )
     return s
+
+
+def _dropoff_at(
+    term_pos: int,
+    strand: int,
+    coverage: Dict[int, float],
+    *,
+    chrom: Optional[str] = None,
+    splice_context: Optional[SpliceContext] = None,
+) -> Optional[float]:
+    """Chothani et al. (2022) ribosome drop-off across the stop, as evidence.
+
+    Rides on the termination aspect rather than elongation because it needs
+    positions PAST the ORF end, and this is where the splice-aware flank
+    machinery already lives — a flat genomic window would read straight
+    through an intron for any stop near a 3' exon boundary.
+
+    Distinct from the headline ``term_drop``, which is a multi-flank consensus
+    log2 fold-change over all positions with flanks out to 60 nt. This is a
+    bounded [0,1] ratio over a fixed 33-nt window using frame-0 positions only.
+    Both answer "does signal fall after the stop?"; they are not
+    interconvertible and neither supersedes the other.
+
+    ASSUMPTION, and it is load-bearing: ``term_pos`` is the translon's terminal
+    nucleotide in transcript orientation (events.py: ``bed_end - 1`` on +,
+    ``bed_start`` on -). The reference's window is frame-locked so that index
+    17 is the terminal STOP nucleotide, so the two coincide only if the
+    translon span includes its stop codon. If an upstream annotation excludes
+    it, every drop-off here is 3 nt out of register — so check it per source.
+    Verified on translon_db/translons.sqlite (8,852,481 rows): 99.9%
+    terminal_codon_class='stop', 100.0% length_mod3=0.
+
+    None when the window runs off the contig — the reference flags that case
+    rather than truncating, and a truncated window would silently change which
+    positions are in frame.
+    """
+    before, _ = _project_flank(
+        term_pos,
+        strand,
+        DROPOFF_UPSTREAM_NT,
+        body_side=False,
+        chrom=chrom,
+        splice_context=splice_context,
+    )
+    after, _ = _project_flank(
+        term_pos,
+        strand,
+        DROPOFF_DOWNSTREAM_NT + 1,  # includes term_pos itself at index 0
+        body_side=True,
+        chrom=chrom,
+        splice_context=splice_context,
+    )
+    window = before + after
+    if len(window) != DROPOFF_WINDOW_NT or min(window) < 0:
+        return None
+    return dropoff(_np.array([coverage.get(p, 0.0) for p in window], dtype=float))
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +426,12 @@ def score_elongation_event(
             if p % 3 == a_e:
                 clean_inf += c
 
+    # CIF needs the per-codon vector, which the frame sums above cannot give.
+    # Built from the same coverage map, in transcript order.
+    _cov_pos = _np.array([p for p in range(start, end) if coverage.get(p)], dtype=_np.int64)
+    _cov_cnt = _np.array([float(coverage[int(p)]) for p in _cov_pos], dtype=float)
+    _vec = orf_signal_vector(_cov_pos, _cov_cnt, start, end, a_e, strand)
+
     return _elong_evidence(
         n,
         covered,
@@ -357,6 +444,7 @@ def score_elongation_event(
         len(contended),
         end - start,
         thr,
+        cif_value=cif(_vec),
     )
 
 

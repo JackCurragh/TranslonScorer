@@ -767,3 +767,92 @@ if __name__ == "__main__":
             f"  event={r['event_id']} type={r['aspect']} "
             f"elig={r['eligibility']} call={r['call']} metric={r['metric']:.4f}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Evidence-blob agreement
+#
+# _assert_identical deliberately compares only metric/call/eligibility, so the
+# evidence JSON -- overall_in_frame (== Chothani PIF), cif, breadth,
+# identifiability, competitor_share -- was entirely unpinned. Anything in there
+# could drift between the batched and scalar paths, or silently change shape
+# between releases, without a single test noticing. It is part of the published
+# output, so it gets the same treatment as the headline columns.
+# ---------------------------------------------------------------------------
+
+
+def _assert_evidence_identical(a: pl.DataFrame, b: pl.DataFrame, label: str) -> None:
+    import json as _j
+
+    key = ["event_id", "aspect"]
+    a, b = a.sort(key), b.sort(key)
+
+    def _same(x, y, path):
+        if isinstance(x, dict):
+            assert isinstance(y, dict) and x.keys() == y.keys(), f"[{label}] {path} keys differ"
+            for k in x:
+                _same(x[k], y[k], f"{path}.{k}")
+        elif isinstance(x, (int, float)) and not isinstance(x, bool):
+            assert y == pytest.approx(x), f"[{label}] {path}: {x} vs {y}"
+        else:
+            assert x == y, f"[{label}] {path}: {x!r} vs {y!r}"
+
+    for ra, rb in zip(a.iter_rows(named=True), b.iter_rows(named=True)):
+        ea, eb = _j.loads(ra["evidence"]), _j.loads(rb["evidence"])
+        assert ea.keys() == eb.keys(), (
+            f"[{label}] evidence keys differ for event {ra['event_id']}: "
+            f"{sorted(set(ea) ^ set(eb))}"
+        )
+        for k in ea:
+            _same(ea[k], eb[k], f"event {ra['event_id']}.{k}")
+
+
+def test_evidence_matches_between_batched_and_scalar_gapdh():
+    events = _gapdh_events()
+    cov_dict = _gapdh_coverage()
+    scalar = score_events_scalar(events, cov_dict, group="gapdh", tier="aggregate", thr=_THR)
+    product = score_events(events, _cov_df(cov_dict), group="gapdh", tier="aggregate", thr=_THR)
+    _assert_evidence_identical(scalar, product, "evidence_gapdh")
+
+
+def test_evidence_matches_between_batched_and_scalar_contended():
+    """The contended case is where the two CIF vector builds could diverge:
+    the batch path reads sorted sparse arrays, the scalar path a dict."""
+    events = _contend_events()
+    cov_dict = _contend_coverage()
+    scalar = score_events_scalar(
+        events,
+        cov_dict,
+        overlaps=_contend_overlaps_dict(),
+        group="test",
+        tier="aggregate",
+        thr=_THR,
+    )
+    product = score_events(
+        events,
+        _cov_df(cov_dict),
+        overlaps_df=_contend_overlaps_df(),
+        group="test",
+        tier="aggregate",
+        thr=_THR,
+    )
+    _assert_evidence_identical(scalar, product, "evidence_contended")
+
+
+def test_elongation_evidence_carries_pif_and_cif():
+    """Both signature scores are present and in range on a real fixture."""
+    events = _gapdh_events()
+    product = score_events(
+        events, _cov_df(_gapdh_coverage()), group="gapdh", tier="aggregate", thr=_THR
+    )
+    import json as _j
+
+    elong = product.filter(pl.col("aspect") == "elongation")
+    assert elong.height > 0
+    for row in elong.iter_rows(named=True):
+        ev = _j.loads(row["evidence"])
+        assert "overall_in_frame" in ev, "PIF must be present under its existing name"
+        assert "cif" in ev
+        for field in ("overall_in_frame", "cif"):
+            if ev[field] is not None:
+                assert 0.0 <= ev[field] <= 1.0, f"{field} out of range: {ev[field]}"

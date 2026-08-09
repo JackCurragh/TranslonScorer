@@ -117,6 +117,55 @@ def dropoff_window_indices(stop_index: int, n_transcript_positions: int) -> Opti
     return range(start, end)
 
 
+def orf_signal_vector(
+    pos_sorted: np.ndarray,
+    cnt_sorted: np.ndarray,
+    start: int,
+    end: int,
+    expected_frame: int,
+    strand: int,
+) -> np.ndarray:
+    """Per-nucleotide signal over ``[start, end)`` in TRANSCRIPT order.
+
+    Trimmed at the 5' end so index 0 is a codon's first base, and at the 3' end
+    so the length is a whole number of codons.  That is what lets ``pif`` and
+    ``cif`` stay strand-agnostic: they can assume ``0, 3, 6, …`` is frame 0.
+
+    The strand handling is the part that is easy to get wrong.  A codon is
+    three consecutive *transcript* positions, so on the minus strand its first
+    base sits at the HIGHEST genomic coordinate of the three.  Grouping raw
+    genomic triples the same way on both strands would put the codon boundary
+    one or two bases off for every minus-strand ORF, and CIF would be measuring
+    the wrong position's share.  Reversing first sidesteps that entirely.
+
+    ``expected_frame`` is the genomic ``pos % 3`` residue of frame-0 bases —
+    i.e. ``aspects.abs_frame(phase, strand)``.
+
+    Coverage is looked up from the sorted sparse arrays the batch scorer
+    already holds; absent positions are 0.0.
+    """
+    n = end - start
+    if n <= 0:
+        return np.zeros(0, dtype=float)
+
+    lo = int(np.searchsorted(pos_sorted, start, side="left"))
+    hi = int(np.searchsorted(pos_sorted, end, side="left"))
+    v = np.zeros(n, dtype=float)
+    if hi > lo:
+        v[pos_sorted[lo:hi] - start] = cnt_sorted[lo:hi]
+
+    if strand < 0:
+        v = v[::-1]
+        # v[i] is genomic position end-1-i; frame 0 where (end-1-i) % 3 == e.
+        offset = (end - 1 - expected_frame) % 3
+    else:
+        # v[i] is genomic position start+i; frame 0 where (start+i) % 3 == e.
+        offset = (expected_frame - start) % 3
+
+    v = v[offset:]
+    return v[: len(v) - (len(v) % 3)]
+
+
 def signal_from_intervals(
     positions: Sequence[int],
     starts: np.ndarray,

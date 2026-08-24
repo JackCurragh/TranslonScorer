@@ -96,6 +96,33 @@ def test_compose_confidence_unknown_aspect_is_none():
     assert compose_confidence("junction", {}, _THR) is None
 
 
+def test_score_events_populates_confidence_column():
+    import polars as pl
+
+    from TranslonScorer.scoring.run import score_events
+
+    events = pl.DataFrame(
+        {
+            "event_id": [1, 2, 3],
+            "type": ["init", "elongation", "term"],
+            "start": [100, 100, 400],
+            "end": [100, 400, 400],
+            "strand": [1, 1, 1],
+            "phase": [0, 0, 0],
+        }
+    )
+    coverage = {p: (30.0 if p % 3 == 0 else 5.0) for p in range(0, 500)}
+    cov_df = pl.DataFrame(
+        {"pos": list(coverage.keys()), "count": list(coverage.values())}
+    )
+    scores = score_events(events, cov_df, thr=_THR)
+    assert "confidence" in scores.columns
+    by_aspect = dict(zip(scores["aspect"], scores["confidence"]))
+    assert by_aspect["init"] is not None
+    assert by_aspect["elongation"] is not None
+    assert by_aspect["term"] is not None
+
+
 # ---------------------------------------------------------------------------
 # classify_neighbor_outcome
 # ---------------------------------------------------------------------------

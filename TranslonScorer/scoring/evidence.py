@@ -53,6 +53,14 @@ _RECORD_SCHEMA = {
     # _compose_per_translon's elongation_cif_approx.
     "cif": pl.Float64,
     "n_codons": pl.Int64,
+    # docs/significance_testing_plan.md §6 -- fraction of this aspect's lens
+    # battery that agreed (scoring/attribution.py's compose_confidence), NOT
+    # a count of "how many tests of any kind passed". First-class (not
+    # evidence-JSON-only) for the same reason cif/n_codons are: composition
+    # needs to weight/aggregate by it (consequential.py's tier_confidence),
+    # not just display it. Null where no battery exists yet for that aspect
+    # (junction) or no lens could be evaluated for this event.
+    "confidence": pl.Float64,
 }
 
 
@@ -243,12 +251,14 @@ def event_record(
         "map_track_low",
         "cif",
         "n_codons",
+        "confidence",
     }
     evidence = {k: _jsonable(v) for k, v in raw.items() if k not in drop}
     m = raw.get("metric")
     mtm = raw.get("map_track_mean")
     cif_val = raw.get("cif")
     n_codons = raw.get("n_codons")
+    confidence = raw.get("confidence")
     return {
         "event_id": int(event_id),
         "aspect": aspect,
@@ -265,4 +275,5 @@ def event_record(
         "map_track_low": raw.get("map_track_low"),
         "cif": (None if cif_val is None else float(cif_val)),
         "n_codons": (None if n_codons is None else int(n_codons)),
+        "confidence": (None if confidence is None else float(confidence)),
     }

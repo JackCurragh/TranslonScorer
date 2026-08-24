@@ -62,8 +62,11 @@ def compose_report(
     Otherwise: one row per ``feature_id`` with, for **every** aspect present in
     ``scores``, the columns ``{aspect}_call``, ``{aspect}_metric``,
     ``{aspect}_n_reads`` and ``{aspect}_supported_frac`` (plus
-    ``{aspect}_map_track_*`` when a mappability track was used); plus
-    ``total_reads`` (sum across the translon's events) and ``n_events``.
+    ``{aspect}_map_track_*`` when a mappability track was used, and
+    ``{aspect}_confidence`` -- read-weighted mean of the per-event
+    ``confidence`` column, docs/significance_testing_plan.md §6 -- when the
+    scores carry one); plus ``total_reads`` (sum across the translon's
+    events) and ``n_events``.
     """
     df = scores
     if group:
@@ -94,6 +97,7 @@ def _compose_per_translon(
         "map_track_low",
         "cif",
         "n_codons",
+        "confidence",
     ]
     have = [c for c in score_cols if c in scores.columns]
     joined = feature_event.select(["feature_id", "event_id"]).join(
@@ -138,9 +142,24 @@ def _compose_per_translon(
         else []
     )
 
+    has_confidence = "confidence" in joined.columns
+    confidence_aggs = (
+        [
+            # Read-weighted, same convention as `metric` -- §6: a translon's
+            # confidence in an aspect should reflect the events that carry
+            # most of its reads, not be diluted equally by a low-read event.
+            pl.when(pl.col("n_reads").sum() > 0)
+            .then((pl.col("confidence").fill_null(0.0) * pl.col("n_reads")).sum() / pl.col("n_reads").sum())
+            .otherwise(None)
+            .alias("confidence"),
+        ]
+        if has_confidence
+        else []
+    )
+
     # Per (feature, aspect) aggregates: read-weighted metric, summed reads,
     # supported fraction, event count, unweighted mappability-track mean,
-    # codon-weighted CIF approximation.
+    # codon-weighted CIF approximation, read-weighted confidence.
     per_aspect = joined.group_by(["feature_id", "aspect"]).agg(
         pl.col("n_reads").sum().alias("n_reads"),
         (
@@ -151,6 +170,7 @@ def _compose_per_translon(
         pl.len().alias("n_events"),
         *map_track_aggs,
         *cif_aggs,
+        *confidence_aggs,
     )
 
     # Totals across the whole translon (every event, any aspect).
@@ -176,6 +196,8 @@ def _compose_per_translon(
                 pl.col("map_track_mean").alias(f"{aspect}_map_track_mean"),
                 pl.col("map_track_low").alias(f"{aspect}_map_track_low"),
             ]
+        if has_confidence:
+            select_cols.append(pl.col("confidence").alias(f"{aspect}_confidence"))
         # CIF only means anything for elongation blocks — other aspects carry
         # null cif/n_codons throughout, which would just emit an all-null
         # column; skip it there rather than clutter the report.

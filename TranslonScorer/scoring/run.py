@@ -29,6 +29,7 @@ from TranslonScorer.scoring.aspects import (
     score_junction_event,
     score_termination_event,
 )
+from TranslonScorer.scoring.attribution import compose_confidence
 from TranslonScorer.scoring.evidence import (
     _RECORD_SCHEMA,
     _elong_evidence,
@@ -299,6 +300,7 @@ def score_events(
             continue
         if eid in map_track:
             raw = {**raw, **map_track[eid]}
+        raw = {**raw, "confidence": compose_confidence(t, raw, thr)}
         rows.append(event_record(eid, t, group, tier, raw, thr.version))
     return (
         pl.from_dicts(rows, schema=_RECORD_SCHEMA) if rows else pl.DataFrame(schema=_RECORD_SCHEMA)

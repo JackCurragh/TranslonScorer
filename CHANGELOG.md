@@ -45,6 +45,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   has no known value anywhere now gets `map_track_mean=None`/
   `map_track_low=None` instead of being scored as low-mappability by default.
   Still diagnostic-only — never affects eligibility/call.
+- `BamSetProvider.junction_support()` no longer crashes on real cohorts.
+  Junction IDs are a deterministic hash and roughly half exceed signed
+  Int64; `pl.DataFrame(rows)` infers a column's dtype from only its first
+  ~100 rows, so a small early sample followed by one later large ID raised
+  a `ComputeError` instead of just mis-typing. Fixed by building each
+  column as a plain Python list and passing the target schema explicitly
+  (`_junction_rows_to_df`), bypassing that row-sampling inference.
+- `build_locus_profiles_zarr`'s A-site placement was strand-naive
+  (`start + offset` for both strands). Minus-strand reads' 5' end is
+  genomically `stop - 1`, not `start` — the old formula anchored a
+  reverse-strand read at its 3' end and walked the offset the wrong
+  direction, destroying its frame assignment. Fixed via `_a_site_positions`.
 
 ## [0.3.0] - 2026-08-09
 

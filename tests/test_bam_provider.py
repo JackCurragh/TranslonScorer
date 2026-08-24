@@ -168,6 +168,52 @@ def test_bam_set_provider_junction_support_empty():
     assert result.is_empty()
 
 
+def test_naive_dataframe_construction_actually_crashes_on_large_junction_ids():
+    """Ground the regression: reproduce the exact pre-fix crash, so the fix
+    below isn't defending against a hypothetical. Junction IDs are a
+    deterministic hash and roughly half will exceed signed Int64; letting
+    polars infer a column's dtype from only its first ~100 rows means a
+    small early sample plus one later large value doesn't just get
+    mis-typed, it raises."""
+    import polars as pl
+
+    big = 2**63 + 12345  # fits UInt64, not signed Int64
+    rows = [{"junction_id": i, "kind": "span_conf", "count": 1.0} for i in range(1, 150)]
+    rows.append({"junction_id": big, "kind": "span_conf", "count": 1.0})
+    with pytest.raises(pl.exceptions.ComputeError):
+        pl.DataFrame(rows)
+
+
+def test_junction_rows_to_df_handles_ids_beyond_signed_int64():
+    """The actual fix: explicit schema + plain-Python-list columns survive
+    exactly the row pattern that crashes naive `pl.DataFrame(rows)` above."""
+    from TranslonScorer.coverage.bam import _junction_rows_to_df
+
+    big = 2**63 + 12345
+    out_schema = {"junction_id": pl.UInt64, "kind": pl.Utf8, "count": pl.Float64}
+    rows = [{"junction_id": i, "kind": "span_conf", "count": 1.0} for i in range(1, 150)]
+    rows.append({"junction_id": big, "kind": "span_conf", "count": 1.0})
+
+    df = _junction_rows_to_df(rows, out_schema, by_sample=False)
+
+    assert df.schema["junction_id"] == pl.UInt64
+    assert df["junction_id"].to_list()[-1] == big
+
+
+def test_junction_rows_to_df_by_sample():
+    from TranslonScorer.coverage.bam import _junction_rows_to_df
+
+    out_schema = {
+        "junction_id": pl.UInt64,
+        "kind": pl.Utf8,
+        "count": pl.Float64,
+        "sample_id": pl.Utf8,
+    }
+    rows = [{"junction_id": 1, "kind": "span_conf", "count": 1.0, "sample_id": "s1"}]
+    df = _junction_rows_to_df(rows, out_schema, by_sample=True)
+    assert df["sample_id"].to_list() == ["s1"]
+
+
 def test_bam_set_provider_mappability_ledger_empty():
     """BamSetProvider.mappability_ledger() returns the correct schema."""
     from TranslonScorer.coverage.bam import BamSetProvider

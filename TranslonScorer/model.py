@@ -64,6 +64,12 @@ class ScoreThresholds:
     # "battery passed" in attribution (2 of 3 default; junction uses all-of-2, see
     # ATTRIBUTION_MIN_AGREE_FRAC overrides in scoring/attribution.py)
     elong_uniformity_min_codons: int = 5  # per-half codon floor, elongation body-split test
+    init_uniformity_gini_max: float = 0.6  # gini_body_inframe below this counts as "uniform"
+    cif_level_min_frac: float = 0.5  # cif_significance.frac_significant floor for CIF "Level" lens
+    cif_contiguity_max_run_frac: float = 0.7  # cif_contiguity.max_run_frac below this
+    # counts as "scattered" (not clustered) for CIF's Uniformity lens
+    mappability_confidence_penalty: float = 0.7  # elongation confidence multiplier when
+    # map_track_low is set -- downweight, never gate (significance_testing_plan.md §2/item 8)
 
 
 # ---------------------------------------------------------------------------

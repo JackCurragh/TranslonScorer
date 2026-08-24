@@ -784,21 +784,19 @@ def _elong_body_uniformity(vec: _np.ndarray, *, min_codons: int = 5) -> Optional
     throughout (large p). None when either half has fewer than `min_codons`
     codons after dropping zero-signal ones, or on an odd number of trailing
     nt (dropped, matching `_codon_bins`).
+
+    Thin wrapper over `_split_half_consistency` (the same split+test
+    initiation's `body_share_consistency_p` uses) after binning `vec` into
+    per-codon total/frame0 arrays -- the two were computing the same thing
+    from different starting representations (raw per-nt vector here, an
+    already-binned array there).
     """
     n = len(vec) - (len(vec) % 3)
     if n <= 0:
         return None
     codons = vec[:n].reshape(-1, 3)
-    n_codons = codons.shape[0]
-    mid = n_codons // 2
-    if mid < min_codons or (n_codons - mid) < min_codons:
-        return None
-    first, second = codons[:mid], codons[mid:]
-    first_total, first_frame0 = first.sum(axis=1), first[:, 0]
-    second_total, second_frame0 = second.sum(axis=1), second[:, 0]
-    return _share_consistency(
-        first_total, first_frame0, second_total, second_frame0, min_codons=min_codons
-    )
+    total, frame0 = codons.sum(axis=1), codons[:, 0]
+    return _split_half_consistency(total, frame0, min_codons=min_codons)
 
 
 def score_elongation_event(

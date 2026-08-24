@@ -656,6 +656,37 @@ def _dropoff_continuity(
 # ---------------------------------------------------------------------------
 
 
+def _elong_frame_chisq(full_by_frame: Sequence[float]) -> Optional[float]:
+    """Chi-square goodness-of-fit of the 3-way frame tally against uniform
+    1/3 (docs/significance_testing_plan.md §2, "Level" lens).
+
+    `full_by_frame` is every covered position's read count binned by
+    genomic ``p % 3`` across the whole span (contended and clean together --
+    unlike `cont_by_frame`, which is contended-only). Preferred over a plain
+    frame-0-vs-rest binomial test because it also catches signal split
+    unevenly between the two non-frame-0 positions, which a binomial test
+    against frame-0 alone cannot distinguish from a real uniform null.
+
+    None when there is no signal, when any expected cell would be zero
+    (chisquare's degenerate case), or when scipy is unavailable -- same
+    honesty convention as `_periodicity_significance`.
+    """
+    total = float(sum(full_by_frame))
+    if total <= 0:
+        return None
+    try:
+        from scipy.stats import chisquare
+    except ImportError:
+        return None
+    try:
+        _, p = chisquare(list(full_by_frame))
+    except ValueError:
+        return None
+    if not math.isfinite(p):
+        return None
+    return float(p)
+
+
 def score_elongation_event(
     start: int,
     end: int,
@@ -686,6 +717,7 @@ def score_elongation_event(
 
     n = clean_tot = clean_inf = cont_tot = 0.0
     cont_by_frame = [0.0, 0.0, 0.0]
+    full_by_frame = [0.0, 0.0, 0.0]
     covered = 0
     for p in range(start, end):
         c = coverage.get(p, 0.0)
@@ -693,6 +725,7 @@ def score_elongation_event(
             continue
         covered += 1
         n += c
+        full_by_frame[p % 3] += c
         if p in contended:
             cont_tot += c
             cont_by_frame[p % 3] += c
@@ -721,6 +754,7 @@ def score_elongation_event(
         thr,
         cif_value=cif(_vec),
         n_codons=(len(_vec) // 3) if len(_vec) else None,
+        frame_chisq_p=_elong_frame_chisq(full_by_frame),
     )
 
 

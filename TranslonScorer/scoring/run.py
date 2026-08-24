@@ -23,6 +23,7 @@ import polars as pl
 from TranslonScorer.events import SpliceContext
 from TranslonScorer.model import ScoreThresholds
 from TranslonScorer.scoring.aspects import (
+    _elong_frame_chisq,
     score_initiation_event,
     score_junction_event,
     score_termination_event,
@@ -201,6 +202,7 @@ def score_elongation_batch(
             thr,
             cif_value=cif(vec),
             n_codons=(len(vec) // 3) if len(vec) else None,
+            frame_chisq_p=_elong_frame_chisq(frame_reads[row].tolist()),
         )
     return out
 

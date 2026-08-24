@@ -132,6 +132,7 @@ def _elong_evidence(
     thr: ScoreThresholds,
     cif_value: Optional[float] = None,
     n_codons: Optional[int] = None,
+    frame_chisq_p: Optional[float] = None,
 ) -> dict:
     """Turn per-event frame sums into evidence + eligibility/call.
 
@@ -188,6 +189,11 @@ def _elong_evidence(
         "overall_in_frame": overall_in_frame,  # == Chothani PIF
         "cif": cif_value,
         "n_codons": n_codons,
+        # docs/significance_testing_plan.md §2 "Level" lens -- chi-square
+        # goodness-of-fit of the whole-span 3-way frame tally against
+        # uniform 1/3. Evidence-only (does not gate eligibility/call here),
+        # same precedent as periodicity_p on the boundary axes.
+        "frame_chisq_p": frame_chisq_p,
         "breadth": breadth,
         "span_nt": span_nt,
         "clean_in_frame": clean_in_frame,

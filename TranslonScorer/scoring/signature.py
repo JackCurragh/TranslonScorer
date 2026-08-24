@@ -83,6 +83,29 @@ def cif(signal: np.ndarray) -> Optional[float]:
     return float(np.count_nonzero(dominant > CIF_FRAME_DOMINANCE_PCT) / codons.shape[0])
 
 
+def gini(signal: np.ndarray) -> Optional[float]:
+    """Gini coefficient of inequality over a per-bin signal vector.
+
+    0 = perfectly uniform across bins, 1 = all signal in one bin. Unlike
+    peakiness (max/median, reacts only to the single tallest bin), this
+    reflects the whole distribution — two vectors with the same max/median
+    ratio can have very different Gini values depending on how the rest of
+    the mass is spread. Bins are typically per-codon sums here, not
+    per-nucleotide, but the function itself is bin-agnostic.
+
+    ``None`` when there is no signal at all (undefined, not 0 — same
+    None-not-zero convention as ``pif``/``cif``).
+    """
+    x = np.sort(np.asarray(signal, dtype=float))
+    x = x[~np.isnan(x)]
+    n = len(x)
+    total = float(x.sum())
+    if n == 0 or total <= 0:
+        return None
+    cum = np.cumsum(x)
+    return float((n + 1 - 2 * np.sum(cum) / cum[-1]) / n)
+
+
 def dropoff(window: np.ndarray) -> Optional[float]:
     """Ribosome drop-off across the stop codon, from a 33-nt window.
 

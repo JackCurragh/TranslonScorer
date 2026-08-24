@@ -31,6 +31,7 @@ from TranslonScorer.scoring.signature import (
     DROPOFF_WINDOW_NT,
     cif,
     dropoff,
+    gini,
     orf_signal_vector,
 )
 
@@ -174,6 +175,142 @@ def _codon_levels(
     return statistics.median(bins), max(bins), total
 
 
+def _codon_bins(
+    coverage: Dict[int, float],
+    positions: Sequence[int],
+) -> Tuple[_np.ndarray, _np.ndarray]:
+    """(per-codon-bin total, per-codon-bin frame-0-only) over a
+    transcript-ordered position list whose index 0 is a codon's first base.
+
+    Every flank list this is called on is built by ``_project_flank``/
+    ``_flank_positions`` anchored at ``pos`` — the start codon's first base
+    for initiation, the terminal nucleotide for termination — both of which
+    are codon boundaries by construction, and every flank length in use
+    (9/18/30/60) is a multiple of 3. So index 0, 3, 6, ... is always the
+    frame-0 position of its bin on BOTH sides: the body flank because it
+    starts at ``pos`` itself, and the outer flank because it is contiguous
+    ascending-transcript-order nucleotides immediately adjacent to ``pos``
+    with a length divisible by 3 — no separate frame bookkeeping needed, and
+    no genomic ``pos % 3`` math, matching how ``orf_signal_vector`` reindexes
+    to transcript order before treating index % 3 as frame.
+
+    Trailing 1-2 positions that don't complete a codon are dropped, matching
+    ``_codon_levels``. Returns arrays of length ``len(positions) // 3``.
+    """
+    pos = list(positions)
+    n_bins = len(pos) // 3
+    total_bins = _np.zeros(n_bins, dtype=float)
+    frame0_bins = _np.zeros(n_bins, dtype=float)
+    for i in range(n_bins):
+        triple = pos[i * 3 : i * 3 + 3]
+        total_bins[i] = sum(coverage.get(p, 0.0) for p in triple)
+        frame0_bins[i] = coverage.get(triple[0], 0.0)
+    return total_bins, frame0_bins
+
+
+def _peakiness(total_bins: _np.ndarray) -> float:
+    """max/median codon-bin ratio -- the existing flank_peakiness formula,
+    generalised to any bin array instead of one fixed reference flank."""
+    if len(total_bins) == 0:
+        return 0.0
+    med = float(_np.median(total_bins))
+    mx = float(_np.max(total_bins))
+    return (mx / med) if med > 0 else (float("inf") if mx > 0 else 0.0)
+
+
+def _breadth(total_bins: _np.ndarray) -> float:
+    """Fraction of codon bins with any signal at all."""
+    if len(total_bins) == 0:
+        return 0.0
+    return float(_np.count_nonzero(total_bins > 0) / len(total_bins))
+
+
+def _periodicity(total_bins: _np.ndarray, frame0_bins: _np.ndarray) -> Optional[float]:
+    """Frame-0 share of this window's total signal -- PIF's definition,
+    applied to a boundary flank instead of a whole ORF span. None when the
+    window has no signal at all (undefined, not 0)."""
+    total = float(_np.sum(total_bins))
+    if total <= 0:
+        return None
+    return float(_np.sum(frame0_bins) / total)
+
+
+def _periodicity_significance(
+    body_total: _np.ndarray,
+    body_frame0: _np.ndarray,
+    out_total: _np.ndarray,
+    out_frame0: _np.ndarray,
+    *,
+    min_codons: int = 5,
+) -> Optional[float]:
+    """One-sided Mann-Whitney U p-value: is per-codon frame-0 share higher
+    in the body flank's codons than the outer flank's?
+
+    Inspired by RiboCode's use of a nonparametric periodicity test, not a
+    reproduction of its method -- this compares per-codon frame-0 SHARE
+    (frame0/total) between the two flanks directly, rather than testing one
+    side against a fixed null, which is what "is there a change at the
+    boundary" actually asks.
+
+    Codons with zero total signal have an undefined share and are dropped
+    from both samples. None (not a p-value, and not 0/1) when either side
+    has fewer than `min_codons` codons left after dropping, or when scipy
+    is unavailable -- a persuasive p-value needs enough codons to rank, and
+    fabricating one from a handful of points, or from a hard scipy
+    dependency this codebase otherwise keeps optional, is worse than an
+    honest "don't know."
+    """
+    with _np.errstate(divide="ignore", invalid="ignore"):
+        body_share = body_frame0 / body_total
+        out_share = out_frame0 / out_total
+    body_share = body_share[_np.isfinite(body_share)]
+    out_share = out_share[_np.isfinite(out_share)]
+    if len(body_share) < min_codons or len(out_share) < min_codons:
+        return None
+    try:
+        from scipy.stats import mannwhitneyu
+    except ImportError:
+        return None
+    try:
+        _, p = mannwhitneyu(body_share, out_share, alternative="greater")
+    except ValueError:
+        return None
+    if not math.isfinite(p):
+        return None
+    return float(p)
+
+
+def _boundary_axes_for_flank(
+    coverage: Dict[int, float],
+    body_pos: Sequence[int],
+    out_pos: Sequence[int],
+    *,
+    min_codons: int,
+) -> dict:
+    """All new (periodicity/uniformity/breadth/significance) axes for one
+    flank length, both sides. Evidence only -- see _step_score."""
+    body_total, body_frame0 = _codon_bins(coverage, body_pos)
+    out_total, out_frame0 = _codon_bins(coverage, out_pos)
+    peri_body = _periodicity(body_total, body_frame0)
+    peri_outer = _periodicity(out_total, out_frame0)
+    return {
+        "periodicity_body": peri_body,
+        "periodicity_outer": peri_outer,
+        "periodicity_delta": (
+            (peri_body - peri_outer) if peri_body is not None and peri_outer is not None else None
+        ),
+        "peakiness_body": _peakiness(body_total),
+        "peakiness_outer": _peakiness(out_total),
+        "gini_body": gini(body_total),
+        "gini_outer": gini(out_total),
+        "breadth_body": _breadth(body_total),
+        "breadth_outer": _breadth(out_total),
+        "periodicity_p": _periodicity_significance(
+            body_total, body_frame0, out_total, out_frame0, min_codons=min_codons
+        ),
+    }
+
+
 def _step_score(
     pos: int,
     strand: int,
@@ -185,6 +322,7 @@ def _step_score(
     forward_is_body: bool = True,
     chrom: Optional[str] = None,
     splice_context: Optional[SpliceContext] = None,
+    min_codons: int = 5,
 ) -> dict:
     """Robust step (body_level - outer_level) across `pos`, over several flank
     lengths. Metric = log2 fold-change (body vs outer) with pseudocount α.
@@ -197,9 +335,18 @@ def _step_score(
     _project_flank so a nearby intron is jumped rather than read straight
     through (see _project_flank docstring); otherwise this is unchanged flat
     genomic windowing.
+
+    Alongside the depth-only rise (unchanged from before), each flank length
+    also gets the frame-resolved axes from `_boundary_axes_for_flank` —
+    periodicity, uniformity (peakiness + Gini), breadth, and a periodicity
+    significance test, each computed both sides of `pos`. These are
+    evidence, exactly like `stability`/`flank_peakiness` already are — they
+    do not feed `consensus_rise` and do not gate eligibility/call here (see
+    `_decide_step`).
     """
     rises: Dict[int, float] = {}
     flank_spliced = False
+    axes_by_flank: Dict[int, dict] = {}
     for L in flanks:
         body_pos, sp1 = _project_flank(
             pos, strand, L, body_side=forward_is_body, chrom=chrom, splice_context=splice_context
@@ -216,6 +363,9 @@ def _step_score(
         body_med, _, _ = _codon_levels(coverage, body_pos)
         out_med, _, _ = _codon_levels(coverage, out_pos)
         rises[L] = math.log2((body_med + alpha) / (out_med + alpha))
+        axes_by_flank[L] = _boundary_axes_for_flank(
+            coverage, body_pos, out_pos, min_codons=min_codons
+        )
     vals = list(rises.values())
     consensus = statistics.median(vals)
     stability = (max(vals) - min(vals)) if len(vals) > 1 else 0.0
@@ -241,6 +391,7 @@ def _step_score(
         "flank_peakiness": flank_peakiness,
         "n_reads": n_reads,
         "flank_spliced": flank_spliced,
+        "boundary_axes_by_flank": axes_by_flank,
     }
 
 
@@ -275,6 +426,7 @@ def score_initiation_event(
         forward_is_body=True,
         chrom=chrom,
         splice_context=splice_context,
+        min_codons=thr.periodicity_min_codons,
     )
     s["metric"] = s["consensus_rise"]
     s["metric_name"] = "init_rise"
@@ -310,6 +462,7 @@ def score_termination_event(
         forward_is_body=False,
         chrom=chrom,
         splice_context=splice_context,
+        min_codons=thr.periodicity_min_codons,
     )
     s["metric"] = s["consensus_rise"]
     s["metric_name"] = "term_drop"
@@ -445,6 +598,7 @@ def score_elongation_event(
         end - start,
         thr,
         cif_value=cif(_vec),
+        n_codons=(len(_vec) // 3) if len(_vec) else None,
     )
 
 

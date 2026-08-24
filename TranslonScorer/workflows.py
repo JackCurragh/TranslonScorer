@@ -208,16 +208,21 @@ def _map_track_for_chrom(
     "review flag, not a gate" precedent as flank_peakiness/stability).
 
     map_provider is a BigwigSetProvider (or anything with a matching
-    .coverage() method) reading the mappability bigwig; None disables this
-    entirely (the common case).
+    .coverage(regions, include_zero=True) method) reading the mappability
+    bigwig; None disables this entirely (the common case).
 
-    NB: positions absent from the mappability bigwig collapse to the same
-    "0 count" as a genuine low-mappability position in BigwigSetProvider's
-    output (see coverage/bigwig.py) — a data gap (wrong chrom name,
-    off-contig) reads identically to "confirmed unmappable". Acceptable for
-    a diagnostic-only annotation; not resolved here.
+    A position with no interval in the mappability bigwig (wrong chrom name,
+    off-contig, an assembly gap) is unknown, not confirmed-unmappable — those
+    are different claims, and folding the first into the second silently
+    turns a data gap into evidence against a call. `include_zero=True` is
+    what lets an explicit 0.0 (genuinely unmappable) survive alongside a true
+    gap (absent from the result either way) so this function can tell them
+    apart: a position's mean only pools over known values, and an event with
+    NO known value in its window gets `map_track_mean=None` /
+    `map_track_low=None` rather than being scored as low mappability.
 
-    Returns {event_id: {"map_track_mean": float, "map_track_low": bool}}.
+    Returns {event_id: {"map_track_mean": Optional[float], "map_track_low":
+    Optional[bool]}}.
     """
     if map_provider is None or ev_chrom.is_empty():
         return {}
@@ -227,12 +232,11 @@ def _map_track_for_chrom(
         ev_chrom["start"].to_list(),
         ev_chrom["end"].to_list(),
     )
-    map_cov = map_provider.coverage(regions)
+    map_cov = map_provider.coverage(regions, include_zero=True)
     if map_cov.is_empty():
         vals: Dict[int, float] = {}
     else:
-        pos_val = dict(zip(map_cov["pos"].to_list(), map_cov["count"].to_list()))
-        vals = pos_val
+        vals = dict(zip(map_cov["pos"].to_list(), map_cov["count"].to_list()))
 
     out: Dict[int, dict] = {}
     for eid, start, end in zip(
@@ -243,11 +247,16 @@ def _map_track_for_chrom(
         # so init/term (single-nt events) get the flank actually read by the
         # step scorers, not just the start/stop codon's own position.
         span = range(max(0, start - _EVENT_FLANK_PAD), end + _EVENT_FLANK_PAD)
-        levels = [vals.get(p, 0.0) for p in span]
-        mean_val = sum(levels) / len(levels) if levels else 0.0
+        known = [vals[p] for p in span if p in vals]
+        if known:
+            mean_val = sum(known) / len(known)
+            low: Optional[bool] = mean_val < thr.mappability_low
+        else:
+            mean_val = None
+            low = None
         out[int(eid)] = {
             "map_track_mean": mean_val,
-            "map_track_low": mean_val < thr.mappability_low,
+            "map_track_low": low,
         }
     return out
 

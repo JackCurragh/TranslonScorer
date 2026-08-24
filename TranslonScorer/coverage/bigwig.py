@@ -20,6 +20,7 @@ Requires pyBigWig (pip install pyBigWig).
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -77,6 +78,7 @@ class BigwigSetProvider:
         *,
         site: str = "A",
         by_sample: bool = False,
+        include_zero: bool = False,
     ) -> pl.DataFrame:
         """Return per-position coverage summed across bigwig files.
 
@@ -85,9 +87,22 @@ class BigwigSetProvider:
 
         Parameters
         ----------
-        regions   : Region(chrom, start, end) list.
-        site      : ignored (bigwigs have no read-length information).
-        by_sample : False → sum-merge across files; True → per-file rows.
+        regions      : Region(chrom, start, end) list.
+        site         : ignored (bigwigs have no read-length information).
+        by_sample    : False → sum-merge across files; True → per-file rows.
+        include_zero : False (default) → only positions with value > 0 are
+                       returned, exactly as before; a position absent from the
+                       result may mean "confirmed zero" or "no interval here
+                       at all" and the caller cannot tell which. This is the
+                       right default for read-density coverage, where the two
+                       cases are the same thing (no reads).
+                       True → positions with an explicit value of 0.0 are
+                       also returned (distinguishable from a true gap, which
+                       pyBigWig reports as NaN and which is never returned
+                       either way). Needed by any caller — e.g. a mappability
+                       track — where "confirmed 0" and "no data" are different
+                       claims and must not collapse to the same default when
+                       a position is absent from the result.
 
         Returns
         -------
@@ -157,13 +172,17 @@ class BigwigSetProvider:
                         if vals is None:
                             continue
                         for i, v in enumerate(vals):
-                            if v and v > 0:
-                                row: dict = {"pos": rstart + i, "count": float(v)}
-                                if self._stranded:
-                                    row["strand"] = strand_val
-                                if by_sample:
-                                    row["sample_id"] = sample_id
-                                all_rows.append(row)
+                            is_missing = v is None or (isinstance(v, float) and math.isnan(v))
+                            if is_missing:
+                                continue
+                            if not include_zero and not v > 0:
+                                continue
+                            row: dict = {"pos": rstart + i, "count": float(v)}
+                            if self._stranded:
+                                row["strand"] = strand_val
+                            if by_sample:
+                                row["sample_id"] = sample_id
+                            all_rows.append(row)
                     bw.close()
                 except Exception:
                     continue

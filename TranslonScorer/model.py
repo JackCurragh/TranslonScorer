@@ -52,6 +52,10 @@ class ScoreThresholds:
     elong_identifiability: float = 0.50  # contended attribution below this → AMBIGUOUS
     junc_min_spanning: float = 20.0  # spanning reads for SUPPORTED junction
     mappability_low: float = 0.50  # map_track_mean below this -> map_track_low=True (evidence-only)
+    periodicity_min_codons: int = 5  # per-side codon floor for the boundary significance test
+    periodicity_significance_alpha: float = 0.05  # periodicity_p below this counts as "significant"
+    periodicity_min_agree_frac: float = 0.5  # fraction of flank lengths that must agree to
+    # resolve an AMBIGUOUS init/term call to SUPPORTED via periodicity (see _decide_step)
 
 
 # ---------------------------------------------------------------------------

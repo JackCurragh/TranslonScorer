@@ -6,6 +6,46 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- init/term boundary events now carry frame-resolved evidence alongside the
+  unchanged depth-only `init_rise`/`term_drop` headline: per flank length
+  (9/18/30/60), both sides of the boundary — periodicity (frame-0 share),
+  uniformity (peakiness and a new Gini coefficient, `signature.gini`),
+  breadth (fraction of codons with any signal), and a one-sided Mann-Whitney
+  significance test on the periodicity change (`aspects._periodicity_significance`,
+  scipy optional/lazy-imported, inspired by RiboCode's use of a nonparametric
+  periodicity test but not a reproduction of it). All evidence-only (`evidence`
+  JSON, `boundary_axes_by_flank`), except one narrow case: in the existing
+  borderline band (`0 < consensus_rise < threshold`), a periodicity
+  significance test passing at enough flank lengths now resolves the call
+  from AMBIGUOUS to SUPPORTED (`ScoreThresholds.periodicity_significance_alpha`/
+  `periodicity_min_agree_frac`), recorded via
+  `evidence["periodicity_resolved_ambiguous"]` so the upgrade is auditable.
+  Cannot flip an event that was already SUPPORTED/UNSUPPORTED by depth alone.
+- `cif` and `n_codons` (the codon count CIF was actually computed over) are
+  now first-class columns on the score record, not evidence-JSON-only —
+  needed so translon-level composition can weight by codon count.
+- `report.compose_block_detail`: per-block CIF, preserved exactly, one row
+  per (feature_id, event_id) elongation block — the un-collapsed data behind
+  the new `elongation_cif_approx` composite below.
+- `compose_report`'s per-translon output gains `elongation_cif_approx`, a
+  codon-count-weighted (not read-weighted) mean of per-block CIF. Labelled
+  "approx" deliberately: the real translon-level CIF needs codons
+  concatenated across blocks in transcript order (crossing the intron),
+  which is the deferred isoform/transcript-projection work.
+
+### Fixed
+
+- Mappability-track annotation (`map_track_mean`/`map_track_low`) no longer
+  treats a position absent from the mappability bigwig (wrong chrom name,
+  off-contig, an assembly gap) the same as a confirmed 0.0. `_map_track_for_chrom`
+  now reads via `BigwigSetProvider.coverage(..., include_zero=True)`, which
+  keeps explicit zeros distinguishable from true gaps; an event whose window
+  has no known value anywhere now gets `map_track_mean=None`/
+  `map_track_low=None` instead of being scored as low-mappability by default.
+  Still diagnostic-only — never affects eligibility/call.
+
 ## [0.3.0] - 2026-08-09
 
 **Contains breaking changes.** `score-matrix --ref-offset` and the FrameRollup

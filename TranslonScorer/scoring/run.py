@@ -200,6 +200,7 @@ def score_elongation_batch(
             int(ends[row] - starts[row]),
             thr,
             cif_value=cif(vec),
+            n_codons=(len(vec) // 3) if len(vec) else None,
         )
     return out
 

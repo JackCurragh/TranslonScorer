@@ -11,7 +11,8 @@ CDS exon get the *same* elongation score, never two contradictory ones.
 
 Public API
 ----------
-compose_report  — scored events [+ feature_event] → per-translon summary
+compose_report        — scored events [+ feature_event] → per-translon summary
+compose_block_detail  — per-block CIF, preserved exactly (no aggregation)
 """
 
 from __future__ import annotations
@@ -91,6 +92,8 @@ def _compose_per_translon(
         "metric",
         "map_track_mean",
         "map_track_low",
+        "cif",
+        "n_codons",
     ]
     have = [c for c in score_cols if c in scores.columns]
     joined = feature_event.select(["feature_id", "event_id"]).join(
@@ -114,8 +117,30 @@ def _compose_per_translon(
         else []
     )
 
+    has_cif = "cif" in joined.columns
+    cif_aggs = (
+        [
+            # Codon-count-weighted, NOT read-weighted like `metric` — CIF's
+            # denominator is codons, not reads, so weighting by reads would
+            # let a short/deep block outvote a long/modest-coverage one even
+            # though CIF's whole unit is per-codon. Still an approximation:
+            # the exact translon-level CIF needs codons concatenated across
+            # blocks in transcript order (crossing the intron), which is the
+            # deferred isoform/transcript-projection work — see
+            # compose_block_detail for the un-collapsed per-block values this
+            # approximates, and scoring_model.md / open_questions.md.
+            pl.when(pl.col("n_codons").sum() > 0)
+            .then((pl.col("cif") * pl.col("n_codons")).sum() / pl.col("n_codons").sum())
+            .otherwise(None)
+            .alias("cif_approx"),
+        ]
+        if has_cif
+        else []
+    )
+
     # Per (feature, aspect) aggregates: read-weighted metric, summed reads,
-    # supported fraction, event count, unweighted mappability-track mean.
+    # supported fraction, event count, unweighted mappability-track mean,
+    # codon-weighted CIF approximation.
     per_aspect = joined.group_by(["feature_id", "aspect"]).agg(
         pl.col("n_reads").sum().alias("n_reads"),
         (
@@ -125,6 +150,7 @@ def _compose_per_translon(
         (pl.col("call") == _SUPPORTED).mean().alias("supported_frac"),
         pl.len().alias("n_events"),
         *map_track_aggs,
+        *cif_aggs,
     )
 
     # Totals across the whole translon (every event, any aspect).
@@ -150,7 +176,44 @@ def _compose_per_translon(
                 pl.col("map_track_mean").alias(f"{aspect}_map_track_mean"),
                 pl.col("map_track_low").alias(f"{aspect}_map_track_low"),
             ]
+        # CIF only means anything for elongation blocks — other aspects carry
+        # null cif/n_codons throughout, which would just emit an all-null
+        # column; skip it there rather than clutter the report.
+        if has_cif and aspect == "elongation":
+            select_cols.append(pl.col("cif_approx").alias(f"{aspect}_cif_approx"))
         a = per_aspect.filter(pl.col("aspect") == aspect).select(*select_cols)
         out = out.join(a, on="feature_id", how="left")
 
     return out.sort("feature_id")
+
+
+def compose_block_detail(
+    scores: pl.DataFrame,
+    feature_event: pl.DataFrame,
+) -> pl.DataFrame:
+    """Per-block CIF, preserved exactly — one row per (feature_id, event_id)
+    elongation block, no aggregation.
+
+    The companion to `_compose_per_translon`'s codon-weighted
+    `elongation_cif_approx`: this is the un-collapsed data that approximation
+    is built from, kept around because "belief in a translon is an
+    assessment over the set of blocks it claims" (scoring_model.md) and a
+    single weighted number can't carry that — a translon with one clean
+    block and one scrambled block looks identical, in the composite, to one
+    with two mediocre blocks.
+
+    `feature_event`'s `rank` column (`translation_block_rank`, from
+    `events.extract_events`) gives block order for free when present.
+
+    Returns columns `feature_id, event_id[, rank], n_codons, cif`, one row
+    per elongation event a translon claims, sorted by feature then block
+    order.
+    """
+    elong = scores.filter(pl.col("aspect") == "elongation").select(
+        [c for c in ("event_id", "cif", "n_codons") if c in scores.columns]
+    )
+    has_rank = "rank" in feature_event.columns
+    fe_cols = ["feature_id", "event_id"] + (["rank"] if has_rank else [])
+    joined = feature_event.select(fe_cols).join(elong, on="event_id", how="inner")
+    sort_cols = ["feature_id"] + (["rank"] if has_rank else []) + ["event_id"]
+    return joined.sort(sort_cols)

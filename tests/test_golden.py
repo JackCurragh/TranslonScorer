@@ -293,6 +293,71 @@ def test_product_equals_scalar_reference_contended():
     _assert_identical(scalar, product, "scalar_vs_product_contended")
 
 
+def test_scalar_equals_vectorised_on_cif_and_n_codons():
+    """`_assert_identical` only checks metric/call/eligibility — cif and
+    n_codons are first-class columns computed independently in both the
+    scalar (`score_elongation_event`) and vectorised (`score_elongation_batch`)
+    paths, and nothing else cross-checks that they actually agree. Three
+    blocks, deliberately varied in size/phase/strand/depth so a divergence
+    couldn't hide behind a degenerate case."""
+    events = pl.DataFrame(
+        [
+            {
+                "event_id": 1,
+                "type": "elongation",
+                "chrom": "chr1",
+                "start": 100,
+                "end": 190,
+                "strand": 1,
+                "phase": 0,
+            },
+            {
+                "event_id": 2,
+                "type": "elongation",
+                "chrom": "chr1",
+                "start": 300,
+                "end": 345,
+                "strand": 1,
+                "phase": 1,
+            },
+            {
+                "event_id": 3,
+                "type": "elongation",
+                "chrom": "chr1",
+                "start": 500,
+                "end": 700,
+                "strand": -1,
+                "phase": 2,
+            },
+        ],
+        schema={
+            "event_id": pl.UInt64,
+            "type": pl.Utf8,
+            "chrom": pl.Utf8,
+            "start": pl.Int64,
+            "end": pl.Int64,
+            "strand": pl.Int64,
+            "phase": pl.Int64,
+        },
+    )
+    cov = {}
+    cov.update({p: (25.0 if p % 3 == 0 else 4.0) for p in range(90, 200)})
+    cov.update({p: (12.0 if (p - 1) % 3 == 0 else 3.0) for p in range(290, 355)})
+    cov.update({p: (18.0 if p % 3 == 2 else 6.0) for p in range(490, 710)})
+    cov_df = pl.DataFrame(
+        {"pos": list(cov.keys()), "count": list(cov.values())},
+        schema={"pos": pl.Int64, "count": pl.Float64},
+    )
+
+    scalar = score_events_scalar(events, cov, group="g", tier="t", thr=_THR).sort("event_id")
+    vec = score_events(events, cov_df, group="g", tier="t", thr=_THR).sort("event_id")
+
+    assert scalar["cif"].to_list() == vec["cif"].to_list()
+    assert scalar["n_codons"].to_list() == vec["n_codons"].to_list()
+    # Sanity: the fixture actually exercises non-degenerate values, not all-None.
+    assert any(v is not None for v in scalar["cif"].to_list())
+
+
 # ---------------------------------------------------------------------------
 # T6 — chr22 event-count reproduction (synthetic)
 # ---------------------------------------------------------------------------
@@ -840,7 +905,13 @@ def test_evidence_matches_between_batched_and_scalar_contended():
 
 
 def test_elongation_evidence_carries_pif_and_cif():
-    """Both signature scores are present and in range on a real fixture."""
+    """Both signature scores are present and in range on a real fixture.
+
+    PIF (``overall_in_frame``) stays in the evidence JSON blob; CIF is a
+    first-class column (promoted alongside `n_codons` so translon-level
+    composition can weight by codon count -- see report.py) and must
+    therefore NOT also be duplicated into the evidence blob.
+    """
     events = _gapdh_events()
     product = score_events(
         events, _cov_df(_gapdh_coverage()), group="gapdh", tier="aggregate", thr=_THR
@@ -852,7 +923,10 @@ def test_elongation_evidence_carries_pif_and_cif():
     for row in elong.iter_rows(named=True):
         ev = _j.loads(row["evidence"])
         assert "overall_in_frame" in ev, "PIF must be present under its existing name"
-        assert "cif" in ev
-        for field in ("overall_in_frame", "cif"):
-            if ev[field] is not None:
-                assert 0.0 <= ev[field] <= 1.0, f"{field} out of range: {ev[field]}"
+        assert "cif" not in ev, "cif is a first-class column now, not duplicated in evidence JSON"
+        if ev["overall_in_frame"] is not None:
+            assert 0.0 <= ev["overall_in_frame"] <= 1.0
+        if row["cif"] is not None:
+            assert 0.0 <= row["cif"] <= 1.0
+        if row["n_codons"] is not None:
+            assert row["n_codons"] > 0

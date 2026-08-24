@@ -88,3 +88,17 @@ def read_events(events_dir: str) -> pl.DataFrame:
 def read_feature_event(feature_event_dir: str) -> pl.DataFrame:
     """Read feature_event Parquet (feature_event/, one file per chrom)."""
     return _read_event_subdir(feature_event_dir, "feature_event")
+
+
+def read_event_overlap(event_overlap_dir: str) -> pl.DataFrame:
+    """Read event_overlap Parquet (event_overlap/, one file per chrom).
+
+    Columns: event_id, other_event_id, overlap_start, overlap_end -- NOT
+    including comp_phase (see events._contention): the overlap table is
+    frame-agnostic on disk, so a caller building ``overlaps_df`` for
+    ``scoring.run.score_events`` must join ``other_event_id`` back onto
+    ``events``'s own ``phase`` column themselves (see
+    ``workflows.py``'s ``_overlaps_df_for_scoring``). Empty (not missing)
+    when a run produced no elongation overlaps at all.
+    """
+    return _read_event_subdir(event_overlap_dir, "event_overlap")

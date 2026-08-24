@@ -31,6 +31,7 @@ from TranslonScorer.consequential import apply_policy
 from TranslonScorer.events import SpliceContext, build_splice_context, run_extract
 from TranslonScorer.io.store import (
     persist_scores,
+    read_event_overlap,
     read_events,
     read_feature_event,
     read_scores,
@@ -261,6 +262,30 @@ def _map_track_for_chrom(
     return out
 
 
+def _overlaps_df_for_scoring(events_dir: str, events: pl.DataFrame) -> Optional[pl.DataFrame]:
+    """Load ``event_overlap`` and join ``comp_phase`` back onto it from
+    ``events``, in the shape ``scoring.run.score_events`` expects
+    (event_id, other_event_id, overlap_start, overlap_end, comp_phase).
+
+    Closes the gap flagged in docs/significance_testing_plan.md's addendum
+    and docs/significance_testing_results.md: ``extract_events_workflow``
+    writes ``event_overlap`` (via ``events._contention``) but no
+    ``score_*_workflow`` read it back in, so every elongation event scored
+    via the standard CLI path had ``competitor_share={}`` regardless of real
+    overlaps on disk — this is the same manual join the validation scripts
+    for that work built by hand, promoted into the production path.
+
+    Returns None (not an empty DataFrame) when there is no overlap table at
+    all, so callers can pass it straight through as ``score_events``'s
+    ``overlaps_df=None`` default with no special-casing.
+    """
+    overlap = read_event_overlap(events_dir)
+    if overlap.is_empty():
+        return None
+    phase_map = events.select(["event_id", "phase"]).rename({"phase": "comp_phase"})
+    return overlap.join(phase_map, left_on="other_event_id", right_on="event_id", how="inner")
+
+
 def _score_events_over_provider(
     events: pl.DataFrame,
     provider,
@@ -271,6 +296,7 @@ def _score_events_over_provider(
     thr: ScoreThresholds,
     splice_context: Optional[SpliceContext] = None,
     map_provider=None,
+    overlaps_df: Optional[pl.DataFrame] = None,
 ) -> pl.DataFrame:
     """Score every event by querying ``provider`` per chromosome.
 
@@ -287,6 +313,13 @@ def _score_events_over_provider(
     chromosome via _map_track_for_chrom for a diagnostic map_track_mean/
     map_track_low annotation — see that function's docstring. Never affects
     eligibility/call.
+
+    ``overlaps_df``, if given (see ``_overlaps_df_for_scoring``), is
+    forwarded to ``score_events`` so elongation contention/competitor_share
+    and this session's attribution machinery run by default rather than
+    only when a caller builds it manually. ``score_events`` already filters
+    it down to the current event batch internally, so the whole table is
+    safe to pass through unfiltered on every chromosome/strand slice.
     """
     if events.is_empty():
         from TranslonScorer.scoring.evidence import _RECORD_SCHEMA
@@ -323,6 +356,7 @@ def _score_events_over_provider(
             scored = score_events(
                 ev_s,
                 cov_s,
+                overlaps_df=overlaps_df,
                 group=group,
                 tier=tier,
                 thr=thr,
@@ -364,6 +398,12 @@ def score_matrix_workflow(
 ) -> str:
     """Score events against the sparse annotation-scale matrix; persist results.
 
+    Elongation contention (``competitor_share``/attribution) runs
+    automatically when ``events_dir`` has an ``event_overlap`` table on disk
+    (written by ``extract_events_workflow``) — see
+    ``_overlaps_df_for_scoring``. No opt-in needed; a run with no
+    overlapping candidates on disk behaves exactly as before.
+
     ``psite_index_dir`` (a directory produced by ``build-psite-index``) is
     required: coverage is read as per-(sample, length) offset-corrected genomic
     positions. A single flat offset across all read lengths smears the P-site
@@ -387,6 +427,7 @@ def score_matrix_workflow(
     from TranslonScorer.matrix.provider import MatrixProvider
 
     events = read_events(events_dir)
+    overlaps_df = _overlaps_df_for_scoring(events_dir, events)
     provider = MatrixProvider(
         partition_dirs,
         psite_index_dir=psite_index_dir,
@@ -404,6 +445,7 @@ def score_matrix_workflow(
         thr=thr,
         splice_context=splice_context,
         map_provider=map_provider,
+        overlaps_df=overlaps_df,
     )
     return persist_scores(
         scored,
@@ -439,6 +481,10 @@ def score_bams_workflow(
 ) -> str:
     """Score events against a set of genome- (or transcriptome-) aligned BAMs.
 
+    Elongation contention (``competitor_share``/attribution) runs
+    automatically when ``events_dir`` has an ``event_overlap`` table on disk
+    — see ``_overlaps_df_for_scoring``. No opt-in needed.
+
     Offsets are calibrated once per BAM/read-length before any locus query
     (handled inside BamSetProvider). When ``transcriptome=True`` reads are
     projected to genome coordinates via ``exon_df`` (required). ``context_gtf``
@@ -462,6 +508,7 @@ def score_bams_workflow(
     from TranslonScorer.coverage.bigwig import BigwigSetProvider
 
     events = read_events(events_dir)
+    overlaps_df = _overlaps_df_for_scoring(events_dir, events)
     start_codons = None
     if offsets.method == "metagene" and not transcriptome:
         init_ev = events.filter(pl.col("type") == "init")
@@ -493,6 +540,7 @@ def score_bams_workflow(
         thr=thr,
         splice_context=splice_context,
         map_provider=map_provider,
+        overlaps_df=overlaps_df,
     )
     return persist_scores(
         scored,
@@ -548,6 +596,10 @@ def score_bigwigs_workflow(
 ) -> str:
     """Score events against 1-N genomic bigwig coverage tracks.
 
+    Elongation contention (``competitor_share``/attribution) runs
+    automatically when ``events_dir`` has an ``event_overlap`` table on disk
+    — see ``_overlaps_df_for_scoring``. No opt-in needed.
+
     Bigwig is a LOSSY coverage source (see coverage/bigwig.py): no P/A-site
     distinction (``site`` is accepted but ignored), no junction spanning, no
     multimapper resolution — init/term/elongation only, junction events fall
@@ -565,6 +617,7 @@ def score_bigwigs_workflow(
     from TranslonScorer.coverage.bigwig import BigwigSetProvider
 
     events = read_events(events_dir)
+    overlaps_df = _overlaps_df_for_scoring(events_dir, events)
     _warn_bigwig_cannot_score_junctions(events)
     provider = BigwigSetProvider(
         list(bigwigs),
@@ -582,6 +635,7 @@ def score_bigwigs_workflow(
         thr=thr,
         splice_context=splice_context,
         map_provider=map_provider,
+        overlaps_df=overlaps_df,
     )
     return persist_scores(
         scored,

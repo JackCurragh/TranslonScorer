@@ -267,6 +267,205 @@ def test_score_events_over_provider_empty():
 
 
 # ---------------------------------------------------------------------------
+# event_overlap wired into production scoring (previously extract-events wrote
+# it to disk but no score-*-workflow ever read it back in, so competitor_share
+# was always {} via the standard CLI path -- see
+# docs/significance_testing_results.md and the plan doc addendum)
+# ---------------------------------------------------------------------------
+
+
+def test_score_events_over_provider_forwards_overlaps_df():
+    """Passing overlaps_df through _score_events_over_provider reproduces the
+    same contention-aware scores as calling score_events directly."""
+    from tests.test_golden import _contend_coverage, _contend_events, _contend_overlaps_df
+    from TranslonScorer.scoring.run import DEFAULT_THRESHOLDS, score_events
+    from TranslonScorer.workflows import _score_events_over_provider
+
+    events = _contend_events().with_columns(pl.lit("chr1").alias("chrom"))
+    cov = _contend_coverage()
+    cov_df = pl.DataFrame({"pos": list(cov.keys()), "count": [float(v) for v in cov.values()]})
+    overlaps_df = _contend_overlaps_df()
+
+    class _Provider:
+        def coverage(self, regions, *, site="A"):
+            return cov_df
+
+    via_helper = _score_events_over_provider(
+        events,
+        _Provider(),
+        site="A",
+        group="g",
+        tier="aggregate",
+        thr=DEFAULT_THRESHOLDS,
+        overlaps_df=overlaps_df,
+    )
+    direct = score_events(
+        events, cov_df, overlaps_df=overlaps_df, group="g", tier="aggregate", thr=DEFAULT_THRESHOLDS
+    )
+    assert via_helper.sort("event_id").equals(direct.sort("event_id"))
+
+    # And, the actual point of this change: competitor_share is non-empty --
+    # without overlaps_df this would be "{}" for every elongation row.
+    import json
+
+    elong = via_helper.filter(pl.col("aspect") == "elongation")
+    for row in elong.iter_rows(named=True):
+        ev = json.loads(row["evidence"])
+        assert ev["competitor_share"], f"event {row['event_id']} has no competitor_share"
+
+
+def test_overlaps_df_for_scoring_joins_comp_phase(monkeypatch):
+    """_overlaps_df_for_scoring reproduces the manual join the validation
+    scripts built by hand: other_event_id's own phase becomes comp_phase."""
+    import TranslonScorer.workflows as workflows_mod
+
+    events = pl.DataFrame(
+        {
+            "event_id": pl.Series([10, 11], dtype=pl.UInt64),
+            "type": ["elongation", "elongation"],
+            "chrom": ["chr1", "chr1"],
+            "strand": [1, 1],
+            "start": [200, 250],
+            "end": [290, 330],
+            "phase": [0, 1],
+        }
+    )
+    # On-disk event_overlap has NO comp_phase column -- that's the whole point.
+    on_disk_overlap = pl.DataFrame(
+        {
+            "event_id": pl.Series([10, 11], dtype=pl.UInt64),
+            "other_event_id": pl.Series([11, 10], dtype=pl.UInt64),
+            "overlap_start": [250, 250],
+            "overlap_end": [290, 290],
+        }
+    )
+    monkeypatch.setattr(workflows_mod, "read_event_overlap", lambda d: on_disk_overlap)
+
+    out = workflows_mod._overlaps_df_for_scoring("unused_events_dir", events)
+    assert out is not None
+    assert set(out.columns) >= {"event_id", "other_event_id", "overlap_start", "overlap_end", "comp_phase"}
+    by_event = dict(zip(out["event_id"].to_list(), out["comp_phase"].to_list()))
+    assert by_event[10] == 1  # event 10's competitor is 11, whose own phase is 1
+    assert by_event[11] == 0  # event 11's competitor is 10, whose own phase is 0
+
+
+def test_read_event_overlap_roundtrip(tmp_path: Path):
+    from TranslonScorer.io.store import read_event_overlap
+
+    d = tmp_path / "events" / "event_overlap"
+    d.mkdir(parents=True)
+    df = pl.DataFrame(
+        {
+            "event_id": pl.Series([10, 11], dtype=pl.UInt64),
+            "other_event_id": pl.Series([11, 10], dtype=pl.UInt64),
+            "overlap_start": [250, 250],
+            "overlap_end": [290, 290],
+        }
+    )
+    df.write_parquet(d / "chr1.parquet")
+
+    got = read_event_overlap(str(tmp_path / "events"))
+    assert got.sort("event_id").equals(df.sort("event_id"))
+
+
+def test_read_event_overlap_missing_dir_is_empty(tmp_path: Path):
+    from TranslonScorer.io.store import read_event_overlap
+
+    assert read_event_overlap(str(tmp_path / "nonexistent")).is_empty()
+
+
+def test_overlaps_df_for_scoring_none_when_no_overlap_table(monkeypatch):
+    import TranslonScorer.workflows as workflows_mod
+
+    monkeypatch.setattr(workflows_mod, "read_event_overlap", lambda d: pl.DataFrame())
+    events = pl.DataFrame(schema={"event_id": pl.UInt64, "phase": pl.Int64})
+    assert workflows_mod._overlaps_df_for_scoring("unused_events_dir", events) is None
+
+
+@pytest.mark.parametrize(
+    "workflow_name,extra_kwargs,provider_module,provider_name",
+    [
+        ("score_bams_workflow", {"bams": ["fake.bam"]}, "TranslonScorer.coverage.bam", "BamSetProvider"),
+        (
+            "score_bigwigs_workflow",
+            {"bigwigs": ["fake.bw"]},
+            "TranslonScorer.coverage.bigwig",
+            "BigwigSetProvider",
+        ),
+    ],
+)
+def test_score_workflow_wires_overlaps_df_through(
+    monkeypatch, tmp_path: Path, workflow_name, extra_kwargs, provider_module, provider_name
+):
+    """score_bams_workflow / score_bigwigs_workflow now load event_overlap
+    and forward it into score_events by default -- no caller opt-in."""
+    import importlib
+
+    import TranslonScorer.workflows as workflows_mod
+
+    events = pl.DataFrame(
+        {
+            "event_id": pl.Series([10, 11], dtype=pl.UInt64),
+            "type": ["elongation", "elongation"],
+            "chrom": ["chr1", "chr1"],
+            "strand": [1, 1],
+            "start": [200, 250],
+            "end": [290, 330],
+            "phase": [0, 1],
+        }
+    )
+    on_disk_overlap = pl.DataFrame(
+        {
+            "event_id": pl.Series([10, 11], dtype=pl.UInt64),
+            "other_event_id": pl.Series([11, 10], dtype=pl.UInt64),
+            "overlap_start": [250, 250],
+            "overlap_end": [290, 290],
+        }
+    )
+    monkeypatch.setattr(workflows_mod, "read_events", lambda events_dir: events)
+    monkeypatch.setattr(workflows_mod, "read_event_overlap", lambda events_dir: on_disk_overlap)
+
+    from tests.test_golden import _contend_coverage
+
+    cov = _contend_coverage()
+    cov_df = pl.DataFrame({"pos": list(cov.keys()), "count": [float(v) for v in cov.values()]})
+
+    provider_mod = importlib.import_module(provider_module)
+
+    class _FakeProvider:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def coverage(self, regions, *, site="A"):
+            return cov_df
+
+    monkeypatch.setattr(provider_mod, provider_name, _FakeProvider)
+
+    captured: dict = {}
+    real_score_events = workflows_mod.score_events
+
+    def _spy_score_events(*args, **kwargs):
+        captured["overlaps_df"] = kwargs.get("overlaps_df")
+        return real_score_events(*args, **kwargs)
+
+    monkeypatch.setattr(workflows_mod, "score_events", _spy_score_events)
+
+    workflow_fn = getattr(workflows_mod, workflow_name)
+    workflow_fn(
+        "unused_events_dir",
+        list(extra_kwargs.values())[0],
+        str(tmp_path / "scores"),
+        data_version="d1",
+    )
+    assert "overlaps_df" in captured, "score_events was never called -- fixture coverage didn't reach it"
+    got = captured["overlaps_df"]
+    assert got is not None
+    by_event = dict(zip(got["event_id"].to_list(), got["comp_phase"].to_list()))
+    assert by_event[10] == 1
+    assert by_event[11] == 0
+
+
+# ---------------------------------------------------------------------------
 # consequential end-to-end via CliRunner
 # ---------------------------------------------------------------------------
 

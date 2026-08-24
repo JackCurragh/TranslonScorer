@@ -17,6 +17,8 @@ from TranslonScorer.scoring.aspects import (
     _boundary_axes_for_flank,
     _breadth,
     _codon_bins,
+    _dropoff_continuity,
+    _dropoff_significance,
     _peakiness,
     _periodicity,
     _periodicity_significance,
@@ -151,3 +153,71 @@ def test_score_termination_event_minus_strand_spliced_does_not_crash():
     )
     assert s["flank_spliced"] is True
     assert set(s["boundary_axes_by_flank"]) == {9, 18, 30, 60}
+
+
+# ---------------------------------------------------------------------------
+# Termination dropoff significance / continuity (significance_testing_plan §4)
+# ---------------------------------------------------------------------------
+
+
+def test_dropoff_significance_detects_a_real_drop():
+    # term_pos=99: before window (anchored at term_pos-17=82) is frame-0
+    # dominant, after window is flat.
+    term_pos = 99
+    anchor = term_pos - 17
+    coverage = {p: (30.0 if (p - anchor) % 3 == 0 else 5.0) for p in range(anchor, term_pos + 1)}
+    coverage.update({p: 8.0 for p in range(term_pos + 1, term_pos + 16)})
+    p = _dropoff_significance(term_pos, 1, coverage, min_codons=5)
+    assert p is not None
+    assert p < 0.05
+
+
+def test_dropoff_significance_none_when_shares_identical():
+    term_pos = 99
+    coverage = {p: 9.0 for p in range(82, 116)}
+    p = _dropoff_significance(term_pos, 1, coverage, min_codons=5)
+    assert p is None or p > 0.05
+
+
+def test_dropoff_significance_none_below_codon_floor():
+    term_pos = 99
+    anchor = term_pos - 17
+    coverage = {p: (30.0 if (p - anchor) % 3 == 0 else 5.0) for p in range(82, 116)}
+    p = _dropoff_significance(term_pos, 1, coverage, min_codons=100)
+    assert p is None
+
+
+def test_dropoff_continuity_flags_isolated_pileup():
+    # Only the near (before-stop) window is frame-0-dominant; further
+    # upstream (the extended window) is flat -- an isolated pileup, not a
+    # continuation of ordinary elongation.
+    term_pos = 99
+    anchor = term_pos - 17
+    coverage = {p: 6.0 for p in range(anchor - 18, anchor)}  # far upstream: flat
+    coverage.update(
+        {p: (30.0 if (p - anchor) % 3 == 0 else 5.0) for p in range(anchor, term_pos + 1)}
+    )
+    p = _dropoff_continuity(term_pos, 1, coverage, min_codons=5, extend_nt=18)
+    assert p is not None
+    assert p < 0.05
+
+
+def test_dropoff_continuity_passes_for_genuine_upstream_elongation():
+    # Frame-0-dominant periodicity holds all the way through both windows --
+    # genuine continuation, not an isolated pileup.
+    term_pos = 99
+    anchor = term_pos - 17
+    coverage = {
+        p: (30.0 if (p - anchor) % 3 == 0 else 5.0) for p in range(anchor - 18, term_pos + 1)
+    }
+    p = _dropoff_continuity(term_pos, 1, coverage, min_codons=5, extend_nt=18)
+    assert p is None or p > 0.05
+
+
+def test_score_termination_event_carries_dropoff_significance_fields():
+    term_pos = 199
+    coverage = {p: (30.0 if (term_pos - p) % 3 == 0 else 5.0) for p in range(100, 200)}
+    coverage.update({p: 8.0 for p in range(200, 260)})
+    s = score_termination_event(term_pos, 1, coverage, thr=_THR)
+    assert "dropoff_significance_p" in s
+    assert "dropoff_continuity_p" in s

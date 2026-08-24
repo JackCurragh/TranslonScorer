@@ -470,6 +470,22 @@ def score_termination_event(
     s["dropoff"] = _dropoff_at(
         term_pos, strand, coverage, chrom=chrom, splice_context=splice_context
     )
+    s["dropoff_significance_p"] = _dropoff_significance(
+        term_pos,
+        strand,
+        coverage,
+        chrom=chrom,
+        splice_context=splice_context,
+        min_codons=thr.periodicity_min_codons,
+    )
+    s["dropoff_continuity_p"] = _dropoff_continuity(
+        term_pos,
+        strand,
+        coverage,
+        chrom=chrom,
+        splice_context=splice_context,
+        min_codons=thr.periodicity_min_codons,
+    )
     return s
 
 
@@ -527,6 +543,112 @@ def _dropoff_at(
     if len(window) != DROPOFF_WINDOW_NT or min(window) < 0:
         return None
     return dropoff(_np.array([coverage.get(p, 0.0) for p in window], dtype=float))
+
+
+def _dropoff_window_positions(
+    term_pos: int,
+    strand: int,
+    *,
+    chrom: Optional[str] = None,
+    splice_context: Optional[SpliceContext] = None,
+) -> Optional[List[int]]:
+    """The same 33-position, frame-locked window `_dropoff_at` builds, as
+    positions rather than a coverage-sampled array -- shared by
+    `_dropoff_significance`/`_dropoff_continuity` so both stay pinned to the
+    reference's exact frame alignment (index 17 == the terminal stop
+    nucleotide) instead of re-deriving it from a truncated flank, which is
+    not itself codon-boundary-aligned (17 is not a multiple of 3)."""
+    before, _ = _project_flank(
+        term_pos,
+        strand,
+        DROPOFF_UPSTREAM_NT,
+        body_side=False,
+        chrom=chrom,
+        splice_context=splice_context,
+    )
+    after, _ = _project_flank(
+        term_pos,
+        strand,
+        DROPOFF_DOWNSTREAM_NT + 1,
+        body_side=True,
+        chrom=chrom,
+        splice_context=splice_context,
+    )
+    window = before + after
+    if len(window) != DROPOFF_WINDOW_NT or min(window) < 0:
+        return None
+    return window
+
+
+def _dropoff_significance(
+    term_pos: int,
+    strand: int,
+    coverage: Dict[int, float],
+    *,
+    chrom: Optional[str] = None,
+    splice_context: Optional[SpliceContext] = None,
+    min_codons: int = 5,
+) -> Optional[float]:
+    """One-sided significance mirror of `dropoff()`: is per-codon frame-0 share
+    higher in the before-stop window than the after-stop window?
+
+    Reuses `_periodicity_significance` itself (docs/significance_testing_plan.md
+    §4, "Level" lens) rather than reimplementing the comparison, over the same
+    frame-locked window `dropoff()` uses: 6 codons up to and including the
+    stop vs. the 5 codons after it. `min_codons` applies per side, so with the
+    default of 5 this is already close to running at the floor -- expect
+    `None` more often than the boundary-flank version of this test, which has
+    more codons to work with at larger flank lengths.
+    """
+    window = _dropoff_window_positions(term_pos, strand, chrom=chrom, splice_context=splice_context)
+    if window is None:
+        return None
+    before_pos, after_pos = window[:18], window[18:]
+    before_total, before_frame0 = _codon_bins(coverage, before_pos)
+    after_total, after_frame0 = _codon_bins(coverage, after_pos)
+    return _periodicity_significance(
+        before_total, before_frame0, after_total, after_frame0, min_codons=min_codons
+    )
+
+
+def _dropoff_continuity(
+    term_pos: int,
+    strand: int,
+    coverage: Dict[int, float],
+    *,
+    chrom: Optional[str] = None,
+    splice_context: Optional[SpliceContext] = None,
+    min_codons: int = 5,
+    extend_nt: int = 18,
+) -> Optional[float]:
+    """Does the before-stop window look like ordinary upstream elongation, or
+    an isolated pileup right at the stop (docs/significance_testing_plan.md
+    §4, "Continuity" lens)?
+
+    Builds a window immediately upstream of the drop-off's 6-codon before-stop
+    window (`extend_nt` nt, default 18 == 6 codons, so it is itself a whole
+    number of codons away and stays frame-aligned) and compares per-codon
+    frame-0 share between the two with `_periodicity_significance`, "near"
+    (closer to the stop) vs "far" (further upstream). A small p-value means
+    the near window is significantly MORE frame-0-dominant than ordinary
+    upstream elongation looks -- consistent with a stop-proximal pileup
+    rather than a genuine continuation of the ORF's own signature. A large
+    p-value is the "looks like normal elongation" outcome.
+    """
+    window = _dropoff_window_positions(term_pos, strand, chrom=chrom, splice_context=splice_context)
+    if window is None:
+        return None
+    near_pos = window[:18]
+    far_pos, _ = _project_flank(
+        near_pos[0], strand, extend_nt, body_side=False, chrom=chrom, splice_context=splice_context
+    )
+    if len(far_pos) != extend_nt:
+        return None
+    near_total, near_frame0 = _codon_bins(coverage, near_pos)
+    far_total, far_frame0 = _codon_bins(coverage, far_pos)
+    return _periodicity_significance(
+        near_total, near_frame0, far_total, far_frame0, min_codons=min_codons
+    )
 
 
 # ---------------------------------------------------------------------------

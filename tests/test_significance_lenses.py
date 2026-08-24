@@ -10,7 +10,11 @@ import numpy as np
 import pytest
 
 from TranslonScorer.model import ScoreThresholds
-from TranslonScorer.scoring.aspects import _elong_frame_chisq, score_elongation_event
+from TranslonScorer.scoring.aspects import (
+    _elong_body_uniformity,
+    _elong_frame_chisq,
+    score_elongation_event,
+)
 from TranslonScorer.scoring.signature import cif_codon_contiguity, cif_codon_significance
 
 _THR = ScoreThresholds()
@@ -100,3 +104,35 @@ def test_cif_codon_contiguity_clustered_vs_scattered():
     assert clustered["n_runs"] == 1
     assert scattered["max_run_frac"] == pytest.approx(0.25)
     assert scattered["n_runs"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Elongation body-uniformity (significance_testing_plan §2, "Uniformity")
+# ---------------------------------------------------------------------------
+
+
+def test_elong_body_uniformity_none_below_codon_floor():
+    vec = np.tile([9.0, 1.0, 1.0], 6)  # 6 codons total, 3 per half -- below floor
+    assert _elong_body_uniformity(vec, min_codons=5) is None
+
+
+def test_elong_body_uniformity_large_p_for_consistent_body():
+    vec = np.tile([9.0, 1.0, 1.0], 40)  # same periodicity throughout
+    p = _elong_body_uniformity(vec, min_codons=5)
+    assert p is None or p > 0.05
+
+
+def test_elong_body_uniformity_small_p_for_a_local_patch():
+    # First half: strong frame-0 periodicity. Second half: flat/uniform.
+    first = np.tile([27.0, 1.0, 1.0], 20)
+    second = np.tile([9.0, 9.0, 9.0], 20)
+    vec = np.concatenate([first, second])
+    p = _elong_body_uniformity(vec, min_codons=5)
+    assert p is not None
+    assert p < 0.05
+
+
+def test_score_elongation_event_carries_body_uniformity_p():
+    coverage = {p: (10.0 if p % 3 == 0 else 1.0) for p in range(0, 300)}
+    s = score_elongation_event(0, 300, 0, 1, coverage, thr=_THR)
+    assert "body_uniformity_p" in s

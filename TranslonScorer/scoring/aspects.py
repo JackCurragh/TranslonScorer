@@ -282,6 +282,48 @@ def _periodicity_significance(
     return float(p)
 
 
+def _share_consistency(
+    a_total: _np.ndarray,
+    a_frame0: _np.ndarray,
+    b_total: _np.ndarray,
+    b_frame0: _np.ndarray,
+    *,
+    min_codons: int = 5,
+) -> Optional[float]:
+    """Two-sided sibling of `_periodicity_significance`: are two per-codon
+    frame-0-share samples statistically indistinguishable?
+
+    Same share computation and codon-floor/scipy-availability honesty
+    convention as `_periodicity_significance` -- deliberately NOT
+    implemented by calling it, because the alternative hypothesis differs
+    (two-sided "are these different" vs one-sided "is A greater than B") and
+    scipy's `mannwhitneyu` needs that as an argument, not a post-hoc
+    reinterpretation of a one-sided p-value.
+
+    A LARGE p-value is the "consistent" outcome here (fail to reject equal
+    distributions) -- used where the question is uniformity/continuity, not
+    a directional step (docs/significance_testing_plan.md §2, §4).
+    """
+    with _np.errstate(divide="ignore", invalid="ignore"):
+        a_share = a_frame0 / a_total
+        b_share = b_frame0 / b_total
+    a_share = a_share[_np.isfinite(a_share)]
+    b_share = b_share[_np.isfinite(b_share)]
+    if len(a_share) < min_codons or len(b_share) < min_codons:
+        return None
+    try:
+        from scipy.stats import mannwhitneyu
+    except ImportError:
+        return None
+    try:
+        _, p = mannwhitneyu(a_share, b_share, alternative="two-sided")
+    except ValueError:
+        return None
+    if not math.isfinite(p):
+        return None
+    return float(p)
+
+
 def _boundary_axes_for_flank(
     coverage: Dict[int, float],
     body_pos: Sequence[int],
@@ -697,6 +739,35 @@ def _elong_frame_chisq(full_by_frame: Sequence[float]) -> Optional[float]:
     return float(p)
 
 
+def _elong_body_uniformity(vec: _np.ndarray, *, min_codons: int = 5) -> Optional[float]:
+    """Split the ORF body into two halves and test whether frame-0
+    dominance is consistent along its length (docs/significance_testing_plan.md
+    §2, "Uniformity" lens).
+
+    `vec` is the same per-nucleotide, frame-0-at-index-0 signal vector CIF is
+    computed from (`orf_signal_vector`) -- reused rather than re-summed. A
+    confound that only overlaps part of the ORF shows up as a local patch
+    (small p, halves differ); genuine elongation should look similar
+    throughout (large p). None when either half has fewer than `min_codons`
+    codons after dropping zero-signal ones, or on an odd number of trailing
+    nt (dropped, matching `_codon_bins`).
+    """
+    n = len(vec) - (len(vec) % 3)
+    if n <= 0:
+        return None
+    codons = vec[:n].reshape(-1, 3)
+    n_codons = codons.shape[0]
+    mid = n_codons // 2
+    if mid < min_codons or (n_codons - mid) < min_codons:
+        return None
+    first, second = codons[:mid], codons[mid:]
+    first_total, first_frame0 = first.sum(axis=1), first[:, 0]
+    second_total, second_frame0 = second.sum(axis=1), second[:, 0]
+    return _share_consistency(
+        first_total, first_frame0, second_total, second_frame0, min_codons=min_codons
+    )
+
+
 def score_elongation_event(
     start: int,
     end: int,
@@ -771,6 +842,7 @@ def score_elongation_event(
         frame_chisq_p=_elong_frame_chisq(full_by_frame),
         cif_significance=_cif_sig,
         cif_contiguity=_cif_contig,
+        body_uniformity_p=_elong_body_uniformity(_vec, min_codons=thr.elong_uniformity_min_codons),
     )
 
 

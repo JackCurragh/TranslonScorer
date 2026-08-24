@@ -23,6 +23,7 @@ import polars as pl
 from TranslonScorer.events import SpliceContext
 from TranslonScorer.model import ScoreThresholds
 from TranslonScorer.scoring.aspects import (
+    _elong_body_uniformity,
     _elong_frame_chisq,
     score_initiation_event,
     score_junction_event,
@@ -214,6 +215,7 @@ def score_elongation_batch(
             frame_chisq_p=_elong_frame_chisq(frame_reads[row].tolist()),
             cif_significance=cif_sig,
             cif_contiguity=cif_contig,
+            body_uniformity_p=_elong_body_uniformity(vec, min_codons=thr.elong_uniformity_min_codons),
         )
     return out
 

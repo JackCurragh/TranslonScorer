@@ -135,6 +135,7 @@ def _elong_evidence(
     frame_chisq_p: Optional[float] = None,
     cif_significance: Optional[dict] = None,
     cif_contiguity: Optional[dict] = None,
+    body_uniformity_p: Optional[float] = None,
 ) -> dict:
     """Turn per-event frame sums into evidence + eligibility/call.
 
@@ -202,6 +203,10 @@ def _elong_evidence(
         # exploratory, not yet something composition weights by.
         "cif_significance": cif_significance,
         "cif_contiguity": cif_contiguity,
+        # docs/significance_testing_plan.md §2 "Uniformity" lens -- large p
+        # means frame-0 dominance is consistent across the body's two
+        # halves, small p flags a local patch. Evidence-only.
+        "body_uniformity_p": body_uniformity_p,
         "breadth": breadth,
         "span_nt": span_nt,
         "clean_in_frame": clean_in_frame,

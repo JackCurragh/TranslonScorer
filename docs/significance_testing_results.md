@@ -190,6 +190,219 @@ prevalence.
   the entries near the top of the file), not a GAPDH CDS call set, so
   there was nothing to compare against here. Not forced.
 
+## Follow-up: pancreas cohort bigwig validation
+
+Same locus as the GAPDH validation (chr12, GAPDH ± flanking genes), but a
+different question: was the GAPDH BAM's termination-floor-never-fires
+finding a thin-calibration artifact of that fixture, or something more
+fundamental? Real pancreas-cohort data
+(`/Users/jackt/projects/all-RiboSeq/hpc_pancreas_local/`, outside this
+repo) makes that testable directly, since the bigwig path has **no**
+offset-calibration step at all — coverage is whatever depth the bigwig
+already encodes.
+
+### Setup
+
+- **Chrom naming / genome build**: verified, not assumed. The pancreas
+  bigwigs (`merged_bigwigs/*.bw`) use `chr1`…`chr22`,`chrX`,`chrY`,`chrM`
+  (`chr`-prefixed), matching the bed12 annotations directly — no rename
+  needed this time (unlike the GAPDH GTF, which needed `12`→`chr12`). Gene
+  coordinates (e.g. `ENSG00000111640.15` / GAPDH at
+  chr12:6,534,832–6,538,170) line up with GRCh38, consistent with
+  `inputs/gencode.v47.annotation.gtf` in the same tree and with the GRCh38
+  coordinates used in the GAPDH validation — same build throughout.
+- **bed12 needs no GTF conversion.** `TranslonScorer/io/feature_sources.py`
+  already has `from_bed12()`, wired up via
+  `extract_events_workflow(..., bed12_path=...)` — it reads columns 0/1/3/5/
+  10/11 (chrom/start/name/strand/blockSizes/blockStarts) directly and
+  ignores the rest, so the `itemRgb="0"` (vs a real RGB triplet) in these
+  files doesn't matter. No new conversion code was needed or written.
+- **Pairing chosen**: `merged_bigwigs/merged_good_unique_with_junction.{forward,reverse}.bw`
+  paired with `iRibo.Pancreas_pooled.bed12`. Reasoning: "unique" (not
+  multi-mapped) avoids exactly the manufactured-periodicity-via-multimapping
+  concern the mappability cross-check (item 8) exists for; "good" (the
+  broader of the two quality tiers, "good"/"great") maximizes depth for a
+  floor-firing test, which is the whole point of this follow-up; "with
+  junction" keeps the fullest depth picture even though bigwig can't use
+  spanning reads for splice detection either way. `iRibo` was chosen over
+  the other four orthogonal callers because `translonscorer_merged_bigwig/
+  iRibo.good.unique.with_junction/` already existed as a partially-run
+  pairing on disk (events extracted genome-wide, scoring aborted before
+  completion — evidently the combo someone already considered primary) and
+  its calls include GAPDH itself, preserving direct continuity with the
+  GAPDH BAM validation. Region-restricted to chr12:6,400,000–6,700,000 (13
+  real genes + 25 short "candidate_orfN" calls) rather than genome-wide,
+  since a full genome-wide bigwig score run is exactly what the prior
+  partial run had aborted out of.
+- **Is the bigwig pre-P-site-shifted?** Checked directly, not assumed:
+  raw per-position bigwig depth over GAPDH's biggest exon block
+  (chr12:6,537,583–6,537,996) concentrates 86% of signal into a single
+  genomic-residue-mod-3 bin. Un-shifted footprint coverage (raw 5′ ends or
+  whole-footprint pileups) does not produce that kind of crisp single-frame
+  concentration — so yes, this bigwig is pre-shifted at generation time.
+  `ribometric_pancreas_offsets.csv` (28/29/30nt → offset 15) is reference/
+  provenance for how, not something to feed into `score_bigwigs_workflow`
+  (which has no offset-calibration parameter on the bigwig path at all —
+  `site` is accepted but ignored, per its own docstring). **But** — see the
+  frame-registration finding below: pre-shifted does not mean shifted to
+  the SAME register this codebase expects.
+
+### Finding 1: the depth/floor-firing question is answered cleanly — yes
+
+| | GAPDH BAM (thin) | Pancreas bigwig (real depth) |
+|---|---|---|
+| Termination events with any dropoff lens value | 0 / 62 | 8 / 38 (21%) |
+| Elongation events with ≥1 CIF-testable codon | 7 / 336 | 159 / 180 (88%) |
+| Total CIF-testable codons (all elongation events) | not computed (too few events) | 5,153 |
+| Elongation events with n_reads > 0 | 11 / 336 | 176 / 180 (98%) |
+
+Termination's dropoff lenses (`dropoff_significance_p`/`dropoff_continuity_p`)
+now fire on real data — the floor genuinely was sitting idle for lack of
+depth, not because of anything wrong with the lens or its floor value. The
+GAPDH BAM's specific finding (P-site coverage collapsing to ~0 right at the
+stop under that fixture's thin metagene calibration) is confirmed to be a
+calibration/depth artifact of that fixture: it doesn't reproduce here,
+where there's no calibration step to go wrong and depth is orders of
+magnitude higher. (The 8 values that did fire aren't individually
+significant at α=0.05 — 0.54, 0.70, 0.94 — which just says these
+particular stop codons don't show a dramatic drop in this narrow window;
+plausible real biology, not evidence against the lens. Dropoff's window is
+anchored directly at the true stop-codon position from raw exon
+coordinates, not derived from `phase`/`abs_frame`, which turns out to
+matter — see Finding 2.)
+
+### Finding 2 (the headline result): a systematic, strand-dependent frame-registration mismatch — not a calibration artifact, something more fundamental, and NOT a bug in this session's lenses
+
+Checked every elongation event with ≥500 reads in the region (117 events)
+by comparing the SCORER's target frame (`abs_frame(phase, strand)`, `a_e`)
+against the ACTUALLY dominant genomic-residue-mod-3 bin in the raw bigwig
+coverage over that event's span:
+
+**0 of 117 events had their dominant frame match `a_e`.** Every one of
+them was strongly periodic (72–98% of signal in one frame — this is
+excellent P-site precision, not noise) but the dominant frame was
+systematically offset from `a_e` by exactly one nucleotide, and the
+*direction* of the offset depends cleanly on strand:
+
+- strand `-1` events: true dominant frame = `(a_e + 1) % 3` in 78 of 79
+  checked events; the one exception (892 reads, the lowest-depth event
+  checked, only 44% concentration in its own dominant frame vs 72–98%
+  everywhere else) is also the one elongation event this validation's
+  attribution pass flagged `both_independent` — plausibly genuine
+  cross-frame contention rather than a clean single-frame signal to
+  register-check in the first place.
+- strand `+1` events: true dominant frame = `(a_e + 2) % 3` (i.e. `a_e −
+  1`), 38 of 38 checked events, no exceptions.
+
+Concretely, GAPDH's own biggest exon block (event `14065136805926077183`,
+same coordinates and same hashed `event_id` as in the GAPDH BAM
+validation — the bed12-derived phase and the GENCODE-CDS-derived phase
+from the GTF agree exactly, phase 2, `a_e=1`): the pancreas bigwig gives
+frame 0 as dominant (86% of 337,292 reads) — frame 1 (`a_e`) carries only
+5.3%. Re-querying the **same exact locus from the GAPDH BAM** (built via
+this codebase's own offset placement, not an externally pre-shifted
+track) gives frame 1 (`a_e`) as dominant (44.1% of 3,834 reads, noisier
+because depth there is ~90× lower, but the right register).
+
+This pins the mismatch down cleanly: **TranslonScorer's own phase
+computation and its own P-site placement (via `coverage/bam.py`) are
+internally self-consistent** — verified independently, not assumed, by
+recomputing the identical locus through the BAM path and finding it lands
+on `a_e` correctly. The discrepancy is specific to this externally
+pre-generated pancreas bigwig's P-site placement convention disagreeing
+with this codebase's convention by one nucleotide, in a strand-dependent
+way (the signature of, e.g., a coordinate off-by-one that isn't itself
+strand-symmetric — a 0-based/1-based slip, or an offset computed from the
+wrong read end for one strand during bigwig generation). Isolating the
+exact external cause (something in the pipeline that produced
+`merged_bigwigs/`, not in `BigwigSetProvider` or `abs_frame`, given the
+BAM-path self-consistency check above) is out of scope for this
+validation and was not attempted — flagging it plainly rather than
+guessing further or patching around it, per the brief.
+
+**What this does and doesn't invalidate:**
+
+- `frame_chisq_p` (the elongation Level lens) tests "is the 3-way tally
+  non-uniform at all", not "does `a_e` specifically dominate" — so its
+  extremely small p-values on this data (essentially every high-depth
+  event) remain a valid statement ("real periodicity exists here") even
+  though the register is off. This is exactly the distinction that lens
+  was designed around (see its docstring, "preferred over a frame-0-vs-
+  rest binomial test") — a useful, unplanned confirmation that it measures
+  something meaningfully different from the frame-0-specific metrics.
+- Everything that specifically tests "is `a_e` dominant" — the elongation
+  `metric` (`effective_in_frame`), `cif_codon_significance`'s one-sided
+  binomial test, `body_uniformity_p` (which does still run correctly as a
+  *within*-body-in-the-wrong-frame consistency check, just not meaningful
+  for "is this really translated") — is measuring the wrong register on
+  this specific bigwig+bed12 pairing and should not be read as "GAPDH and
+  its neighbors aren't translated here" (they clearly are, per the raw
+  periodicity). This shows up starkly in the call distribution: 1 of 180
+  elongation events came back SUPPORTED despite 176/180 having real reads
+  and the region being unambiguously, strongly periodic.
+- Init/term boundary lenses (`periodicity_p`, `gini_body_inframe`,
+  `body_share_consistency_p`) and both dropoff lenses are anchored
+  directly at the true start/stop genomic position from raw exon
+  coordinates, not derived from `phase`/`abs_frame` — so they are NOT
+  subject to this mismatch. This lines up with the data: init calls went
+  from 1/40 SUPPORTED (GAPDH BAM) to 14/38 SUPPORTED (pancreas bigwig),
+  and termination went from 0/62 to 13/38 SUPPORTED + 1 AMBIGUOUS — real
+  improvement from real depth, on lenses immune to Finding 2.
+
+**STOP AND FLAG**: this is a real, structural mismatch between an
+externally-generated coverage track and this codebase's frame convention,
+discovered by this validation, not a bug introduced by this session's
+lens work (every affected lens is computing exactly what it says it
+computes; the input register was ambiguous). No code changes were made in
+response to this — the cause is genuinely upstream/external and unclear
+without dedicated investigation (which BAM/bigwig-generation pipeline
+produced `merged_bigwigs/`, and what P-site convention it used, are
+questions for whoever owns `hpc_pancreas_local/`, not something to guess
+at and patch here). Anyone using `merged_bigwigs/` with TranslonScorer
+should re-derive or verify P-site registration before trusting any
+frame-0-specific metric (elongation `metric`, CIF) from it; chi-square-
+style "any periodicity" and boundary-anchored lenses remain trustworthy.
+
+### Finding 3: 3+-way overlap prevalence does not reproduce here — but likely reflects annotation density, not a contradicted result
+
+`event_overlap` for this bed12-derived region has only 4 rows (vs 478 for
+the GAPDH BAM run's GTF+ORF-finder-derived event set covering the same
+genomic window). With `overlaps_df` wired in the same manual way as the
+GAPDH validation: 2 `both_independent`, 1 `neither_supported`, 1
+`only_this_frame`, 176 `no_neighbor` — **zero `multi_way_overlap`**,
+unlike the GAPDH BAM run's 150/336 (45%).
+
+Read this as a difference in annotation SOURCE density, not a reversal of
+the GAPDH finding: `iRibo.Pancreas_pooled.bed12` is a curated, filtered
+set of final ORF calls (13 real genes + a modest number of short
+`candidate_orfN` entries in this window), while the GAPDH BAM validation's
+events came from a GTF plus this codebase's own de-novo ORF-finder
+candidate generation — inherently far more redundant/overlapping by
+construction. The 3+-way overlap design gap (flagged in the plan doc
+addendum) stands; this follow-up doesn't resolve or contradict it, it
+just shows the prevalence is annotation-source-dependent, which is worth
+knowing when interpreting either number.
+
+### Finding 4: junction bigwig ceiling confirmed as expected, not a bug
+
+All 142 junction events in this region came back `eligibility=
+INSUFFICIENT, call=null` — exactly the documented, pre-existing bigwig
+ceiling (no CIGAR, no way to count spanning reads from per-base depth
+alone; see `_warn_bigwig_cannot_score_junctions` in `workflows.py` and the
+project's own bigwig-mappability-gap history). Expected, not investigated
+further, per the brief.
+
+### Termination downstream classification, revisited
+
+`classify_termination_downstream` returned `clean_drop` for all 62 events
+in the GAPDH BAM run (nothing to classify — no after-window signal at
+all). With real depth: 32 `clean_drop`, 6 `readthrough`. Since
+`dropoff_after_share` is anchored at the true stop position (immune to
+Finding 2), these 6 are a genuine first observation of the readthrough
+branch actually firing on data, though verifying whether they represent
+real stop-codon readthrough biology versus some other after-window signal
+source would need follow-up beyond this validation's scope.
+
 ## Open decisions: defaults picked and why
 
 All added to `ScoreThresholds` (`model.py`), each commented

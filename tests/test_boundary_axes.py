@@ -22,6 +22,7 @@ from TranslonScorer.scoring.aspects import (
     _peakiness,
     _periodicity,
     _periodicity_significance,
+    _split_half_consistency,
     score_initiation_event,
     score_termination_event,
 )
@@ -111,6 +112,7 @@ def test_boundary_axes_for_flank_shape():
         "breadth_body",
         "breadth_outer",
         "periodicity_p",
+        "body_share_consistency_p",
     }
     assert set(axes) == expected_keys
     assert axes["periodicity_delta"] == pytest.approx(axes["periodicity_body"] - axes["periodicity_outer"])
@@ -132,6 +134,42 @@ def test_gini_body_inframe_high_for_a_single_pileup():
     coverage[0] = 100.0
     axes = _boundary_axes_for_flank(coverage, list(range(0, 60)), list(range(-60, 0)), min_codons=5)
     assert axes["gini_body_inframe"] > 0.8
+
+
+# ---------------------------------------------------------------------------
+# body_share_consistency_p: spatial frame-0-share consistency, distinct from
+# gini_body_inframe's magnitude concentration (see _split_half_consistency).
+# ---------------------------------------------------------------------------
+
+
+def test_split_half_consistency_none_below_codon_floor():
+    total = np.array([9.0] * 6)
+    frame0 = np.array([3.0] * 6)
+    assert _split_half_consistency(total, frame0, min_codons=5) is None
+
+
+def test_split_half_consistency_large_p_for_uniform_share():
+    total = np.array([9.0] * 20)
+    frame0 = np.array([3.0] * 20)  # exactly 1/3 throughout -- no spatial change
+    p = _split_half_consistency(total, frame0, min_codons=5)
+    assert p is None or p > 0.05
+
+
+def test_split_half_consistency_small_p_when_near_half_more_in_frame():
+    near = np.tile([27.0, 2.0, 1.0], 10)  # strongly in-frame near half
+    far = np.tile([9.0, 9.0, 9.0], 10)  # flat far half
+    total = np.concatenate([near, far]).reshape(-1, 3).sum(axis=1)
+    frame0 = np.concatenate([near, far]).reshape(-1, 3)[:, 0]
+    p = _split_half_consistency(total, frame0, min_codons=5)
+    assert p is not None
+    assert p < 0.05
+
+
+def test_boundary_axes_carries_body_share_consistency_p():
+    coverage = {p: (30.0 if p % 3 == 0 else 5.0) for p in range(0, 60)}
+    coverage.update({p: 8.0 for p in range(-60, 0)})
+    axes = _boundary_axes_for_flank(coverage, list(range(0, 60)), list(range(-60, 0)), min_codons=5)
+    assert "body_share_consistency_p" in axes
 
 
 def test_periodicity_resolves_ambiguous_on_minus_strand_too():

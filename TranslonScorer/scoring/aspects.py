@@ -324,6 +324,34 @@ def _share_consistency(
     return float(p)
 
 
+def _split_half_consistency(
+    total: _np.ndarray, frame0: _np.ndarray, *, min_codons: int
+) -> Optional[float]:
+    """Split a codon-bin array in half and test frame-0-SHARE consistency
+    between the two halves with `_share_consistency` -- the same spatial
+    "does this hold up across the window, not just in aggregate" question
+    `_elong_body_uniformity` asks of the elongation body and
+    `_dropoff_continuity` asks of the termination before-window, applied
+    here to a boundary flank's body side (docs/significance_testing_plan.md
+    §1).
+
+    Distinct from `gini_body_inframe` on the same flank: Gini measures
+    magnitude concentration (is the mass piled into one bin), this measures
+    spatial consistency (does the SHARE look the same in the near half vs
+    the far half). A flank can score well on one and poorly on the other --
+    e.g. broadly spread signal that is nonetheless much more in-frame near
+    the boundary than further out would have unremarkable Gini but a small
+    `_share_consistency` p-value.
+    """
+    n = len(total)
+    if n < min_codons * 2:
+        return None
+    mid = n // 2
+    return _share_consistency(
+        total[:mid], frame0[:mid], total[mid:], frame0[mid:], min_codons=min_codons
+    )
+
+
 def _boundary_axes_for_flank(
     coverage: Dict[int, float],
     body_pos: Sequence[int],
@@ -359,6 +387,11 @@ def _boundary_axes_for_flank(
         "breadth_outer": _breadth(out_total),
         "periodicity_p": _periodicity_significance(
             body_total, body_frame0, out_total, out_frame0, min_codons=min_codons
+        ),
+        # Second, distinct "uniformity" reading -- see _split_half_consistency
+        # docstring for why this is not redundant with gini_body_inframe.
+        "body_share_consistency_p": _split_half_consistency(
+            body_total, body_frame0, min_codons=min_codons
         ),
     }
 

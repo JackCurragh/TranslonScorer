@@ -71,6 +71,25 @@ than invented fresh:
   peaky/patchy. Reusing `gini` on the downstream in-frame codon series adds
   this as a third leg at no new-metric cost.
 
+  **Implementation note (added after landing, see
+  docs/significance_testing_results.md):** "uniformity" turned out to bundle
+  two genuinely different questions, not one. Gini measures MAGNITUDE
+  CONCENTRATION — is the mass piled into one bin, regardless of where. It
+  says nothing about whether the in-frame SHARE itself holds steady across
+  the window: broadly-spread signal that is nonetheless much more in-frame
+  near the boundary than further out has unremarkable Gini but is not
+  spatially uniform in the sense this lens is meant to catch. So the
+  initiation battery carries both: `gini_body_inframe` (magnitude) and
+  `body_share_consistency_p` (spatial frame-0-SHARE consistency between the
+  near and far halves of the body flank, via the same `_share_consistency`
+  two-sided test elongation and termination use — see below). Elongation's
+  §2 "Uniformity" (`body_uniformity_p`) and termination's §4 "Continuity"
+  (`dropoff_continuity_p`) were ALREADY the share-consistency kind, not the
+  Gini kind — they were built first and reused for initiation once the
+  distinction became visible by comparing the three lenses side by side.
+  A future aspect's "uniformity" lens should pick deliberately between the
+  two rather than assuming they're interchangeable.
+
 These aren't three independent confound checks — they're three
 measurements of one claim ("density increased and stabilized here"), which
 is why they're expected to move together for a real start.
@@ -106,7 +125,9 @@ stay elevated and consistent across the whole body?
   test whether frame-0 dominance is consistent along its length. A
   confound that only overlaps part of the ORF shows up as a local patch,
   not a body-wide signature; genuine elongation should look similar
-  throughout.
+  throughout. (This is the SPATIAL SHARE-CONSISTENCY kind of "uniformity",
+  not the Gini/magnitude-concentration kind — see the implementation note
+  under §1 Initiation.)
 - **Cross-check against existing region flags** — the codebase already
   tracks a low-mappability flag per locus (`map_track_low`,
   `coverage/base.py`). Wire it into the elongation confidence explicitly:
@@ -169,7 +190,8 @@ before — the mirror image of initiation's question.
   it an isolated pileup right at the stop with no elongation signature
   behind it? A real termination event should have the elongation
   signature (§2) holding just upstream; a stop-proximal queuing/stalling
-  artifact often doesn't.
+  artifact often doesn't. (Also the share-consistency kind, not Gini — see
+  §1's implementation note.)
 - **Downstream attribution** — does the "after" window overlap a separate
   annotated/candidate ORF (a dORF)?
 

@@ -403,6 +403,103 @@ branch actually firing on data, though verifying whether they represent
 real stop-codon readthrough biology versus some other after-window signal
 source would need follow-up beyond this validation's scope.
 
+## Follow-up: bigwig correction, event_overlap in production, and CLI-level validation
+
+Three connected pieces, closing out the open threads from the pancreas
+follow-up above.
+
+### The frame-registration mismatch: already fixed, found not built
+
+Before building a corrected bigwig from Finding 2's shift signature (strand
+`-1`: true frame = `a_e+1`; strand `+1`: true frame = `a_e+2`), searched for
+an existing one first. Checked, beyond what the original pancreas follow-up
+looked at: `hpc_pancreas_local/analysis/` (tsv/csv/parquet score summaries,
+no bigwigs), `inputs/` (GENCODE v47 GTF + a translon sqlite, no bigwigs),
+`sonia/`/`sonia_a15/` (per-caller Sonia signature-score TSVs, no bigwigs),
+every `.bw` file under `hpc_pancreas_local/` (27 total), the RiboMetric
+project tree, and a filesystem-wide search for
+"corrected"/"shifted"/"registration"/"realign"/"psite" naming — nothing
+named as a correction turned up.
+
+But `merged_bigwigs_a15/` (present, previously unexplored — same combos as
+`merged_bigwigs/`, an `_a15` suffix) tested clean: re-running Finding 2's
+exact check (dominant genomic-residue-mod-3 bin vs `a_e`) against
+`merged_bigwigs_a15/merged_good_unique_with_junction` over the same 117
+high-depth elongation events gives **115/116 matching `a_e` exactly**
+(one event below the codon-floor threshold this time; the single mismatch
+is, again, the lowest-depth event in the set — 892 reads, the same one
+flagged as a noisy exception in Finding 2 and independently flagged
+`both_independent` by attribution). Mean in-frame share among matches:
+82.6% (min 65.6%) — comparable to, and cleaner than, the GAPDH BAM's own
+internal-consistency check. Spot-checked a second combo
+(`good_unique_no_junction`) in the same directory to confirm this isn't a
+one-file coincidence: same result (86.0% share, correct frame). **No
+bigwig was built this session** — `merged_bigwigs_a15/` already is the
+frame-corrected version, and using it is a matter of pointing at a
+different existing directory, not new construction.
+
+Not chased further, noted for whoever owns `hpc_pancreas_local/`: what
+"_a15" stands for and how it was generated is still unknown (plausibly "A-
+site, offset 15" given `ribometric_pancreas_offsets.csv`'s 28–30nt→15
+values, but that's a guess, not confirmed provenance). Also noted in
+passing: `translonscorer_merged_bigwig_v2/` and `translonscorer_merged_bigwig_a15/`
+(both previously unexplored) turn out to be **already-completed**
+genome-wide per-caller scoring runs (`.COMPLETE` sentinels,
+populated `scores/` and `report.parquet` for all five callers) — likely
+"_v2" against the uncorrected `merged_bigwigs/` and "_a15" against the
+corrected one, given the naming parallel, but not verified; a
+genuinely large, not-yet-mined resource for future validation work,
+out of scope to dig into further here.
+
+### `event_overlap` wired into production scoring
+
+Implemented (not just searched for) — see the dedicated commit. `io.store.
+read_event_overlap` plus a new `workflows._overlaps_df_for_scoring` (loads
+the on-disk `event_overlap` table and joins `comp_phase` back from
+`events`' own `phase` column — the exact join the validation scripts for
+the GAPDH/pancreas work built by hand) are now wired into all three of
+`score_matrix_workflow`, `score_bams_workflow`, and `score_bigwigs_workflow`
+via the shared `_score_events_over_provider` helper's new `overlaps_df`
+parameter. No opt-in: a run with no `event_overlap` table on disk (or an
+empty one) behaves exactly as before.
+
+Verified two ways: a unit-level join test, and — the one that actually
+matters — a real `translonscorer score-bams` CLI run against the GAPDH
+fixture (see the CLI validation section below) showing 184 of 336
+elongation events with a populated `competitor_share` where before this
+fix every single one was `{}` regardless of real overlaps on disk.
+
+### CLI-level example tests: the go-forward validation method
+
+From this point on, validation of this scoring system runs through the
+actual shipped `translonscorer` CLI, not internal Python calls or one-off
+scripts — codified as `scripts/cli_smoke_tests.sh` (documented in detail in
+`docs/cli_validation_examples.md`, which has the exact commands, expected
+output shapes, and how to read a failure — not duplicated here).
+
+Two examples:
+
+1. **GAPDH BAM + GTF** (fully self-contained, repo-committed fixtures):
+   `extract-events` → `score-bams` → `report` → `consequential`, checking
+   that `competitor_share` is populated (event_overlap wiring) and
+   `confidence`/`tier_confidence` reach the final report. Last run: 8/8
+   checks pass, 184/336 elongation events with real competitor data, 50/636
+   scored events with a confidence value, 116 translon rows in the final
+   report.
+2. **Corrected pancreas bigwig + iRibo calls** (needs the external pancreas
+   data; skips cleanly, doesn't fail the script, when that data isn't
+   present on the machine running it): `extract-events` → `score-bigwig`
+   against `merged_bigwigs_a15`, checking that high-depth elongation events'
+   mean `metric` sits well above the 1/3 random floor. Last run: 125
+   high-depth events, mean metric 0.822 (99% above 0.5) — a direct,
+   CLI-driven confirmation that the correction found above actually fixes
+   what Finding 2 broke, not just in the ad hoc diagnostic script that
+   discovered it.
+
+Both examples ran clean on this machine as of this commit (`bash
+scripts/cli_smoke_tests.sh`, exit 0, 8 passed / 0 failed / 0 skipped with
+the pancreas data present; 5 passed / 0 failed / 1 skipped without it).
+
 ## Open decisions: defaults picked and why
 
 All added to `ScoreThresholds` (`model.py`), each commented

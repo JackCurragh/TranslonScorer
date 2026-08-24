@@ -571,6 +571,9 @@ def score_termination_event(
         splice_context=splice_context,
         min_codons=thr.periodicity_min_codons,
     )
+    s["dropoff_after_share"] = _dropoff_after_share(
+        term_pos, strand, coverage, chrom=chrom, splice_context=splice_context
+    )
     return s
 
 
@@ -734,6 +737,30 @@ def _dropoff_continuity(
     return _periodicity_significance(
         near_total, near_frame0, far_total, far_frame0, min_codons=min_codons
     )
+
+
+def _dropoff_after_share(
+    term_pos: int,
+    strand: int,
+    coverage: Dict[int, float],
+    *,
+    chrom: Optional[str] = None,
+    splice_context: Optional[SpliceContext] = None,
+) -> Optional[float]:
+    """In-frame share of the 5-codon after-stop window (docs/
+    significance_testing_plan.md §4 "Downstream attribution"). Feeds
+    `attribution.classify_termination_downstream`'s clean-drop /
+    readthrough / distinct-downstream call: unlike `dropoff_significance_p`
+    (which only says whether before beats after), this is a magnitude
+    reading of the after side alone, needed because "no signal after the
+    stop" and "clear signal after the stop that just isn't statistically
+    beaten by before" are different situations for that classification.
+    """
+    window = _dropoff_window_positions(term_pos, strand, chrom=chrom, splice_context=splice_context)
+    if window is None:
+        return None
+    after_total, after_frame0 = _codon_bins(coverage, window[18:])
+    return _periodicity(after_total, after_frame0)
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ from TranslonScorer.scoring.aspects import (
     _boundary_axes_for_flank,
     _breadth,
     _codon_bins,
+    _dropoff_after_share,
     _dropoff_continuity,
     _dropoff_significance,
     _peakiness,
@@ -272,6 +273,30 @@ def test_dropoff_continuity_passes_for_genuine_upstream_elongation():
     assert p is None or p > 0.05
 
 
+def test_dropoff_after_share_none_off_contig():
+    assert _dropoff_after_share(2, 1, {}) is None
+
+
+def test_dropoff_after_share_high_for_sustained_signal():
+    term_pos = 99
+    anchor = term_pos - 17
+    coverage = {
+        p: (30.0 if (p - anchor) % 3 == 0 else 5.0) for p in range(anchor, term_pos + 16)
+    }
+    share = _dropoff_after_share(term_pos, 1, coverage)
+    assert share is not None
+    assert share > 0.5
+
+
+def test_dropoff_after_share_low_for_a_clean_drop():
+    term_pos = 99
+    anchor = term_pos - 17
+    coverage = {p: (30.0 if (p - anchor) % 3 == 0 else 5.0) for p in range(anchor, term_pos + 1)}
+    coverage.update({p: 0.0 for p in range(term_pos + 1, term_pos + 16)})
+    share = _dropoff_after_share(term_pos, 1, coverage)
+    assert share is None or share < 0.2
+
+
 def test_score_termination_event_carries_dropoff_significance_fields():
     term_pos = 199
     coverage = {p: (30.0 if (term_pos - p) % 3 == 0 else 5.0) for p in range(100, 200)}
@@ -279,3 +304,4 @@ def test_score_termination_event_carries_dropoff_significance_fields():
     s = score_termination_event(term_pos, 1, coverage, thr=_THR)
     assert "dropoff_significance_p" in s
     assert "dropoff_continuity_p" in s
+    assert "dropoff_after_share" in s

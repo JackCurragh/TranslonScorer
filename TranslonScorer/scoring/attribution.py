@@ -239,6 +239,33 @@ def classify_neighbor_outcome(
     return "neither_supported"
 
 
+def classify_termination_downstream(
+    evidence: dict,
+    thr: ScoreThresholds,
+    *,
+    neighbor_passed: Optional[bool] = None,
+) -> str:
+    """The three outcomes from §4 "Downstream attribution": clean drop,
+    genuine readthrough, or a distinct nearby event, using
+    `dropoff_after_share` (magnitude of in-frame signal past the stop).
+
+    `neighbor_passed`: the battery result (any aspect -- typically a
+    downstream init event's own battery) of a distinct candidate event
+    found overlapping the after-window, if the caller has one to offer
+    (e.g. via `pair_boundary_neighbors` scoped to the downstream side).
+    Without one, elevated after-signal is reported as "readthrough" rather
+    than silently downgraded to "clean_drop" -- sustained in-frame signal
+    past a stop is real, documented biology (§4), not noise to explain away
+    by default.
+    """
+    share = evidence.get("dropoff_after_share")
+    if share is None or share < thr.elong_in_frame:
+        return "clean_drop"
+    if neighbor_passed:
+        return "distinct_downstream"
+    return "readthrough"
+
+
 def pair_elongation_neighbors(
     scored: Dict[int, dict],
     thr: ScoreThresholds,

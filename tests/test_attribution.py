@@ -8,6 +8,7 @@ from TranslonScorer.model import ScoreThresholds
 from TranslonScorer.scoring.attribution import (
     cif_battery,
     classify_neighbor_outcome,
+    classify_termination_downstream,
     compose_confidence,
     elong_battery,
     init_battery,
@@ -124,6 +125,28 @@ def test_classify_leakage_requires_the_leakage_signal():
 
 def test_classify_neither_supported_when_both_fail():
     assert classify_neighbor_outcome(False, False) == "neither_supported"
+
+
+# ---------------------------------------------------------------------------
+# classify_termination_downstream
+# ---------------------------------------------------------------------------
+
+
+def test_classify_termination_downstream_clean_drop_no_signal():
+    assert classify_termination_downstream({"dropoff_after_share": None}, _THR) == "clean_drop"
+    assert classify_termination_downstream({"dropoff_after_share": 0.05}, _THR) == "clean_drop"
+
+
+def test_classify_termination_downstream_readthrough_without_a_known_neighbor():
+    ev = {"dropoff_after_share": 0.9}
+    assert classify_termination_downstream(ev, _THR) == "readthrough"
+
+
+def test_classify_termination_downstream_distinct_when_neighbor_passes():
+    ev = {"dropoff_after_share": 0.9}
+    assert (
+        classify_termination_downstream(ev, _THR, neighbor_passed=True) == "distinct_downstream"
+    )
 
 
 # ---------------------------------------------------------------------------

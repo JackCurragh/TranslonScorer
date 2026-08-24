@@ -303,6 +303,14 @@ def _boundary_axes_for_flank(
         "peakiness_outer": _peakiness(out_total),
         "gini_body": gini(body_total),
         "gini_outer": gini(out_total),
+        # docs/significance_testing_plan.md §1 "Uniformity" lens -- Gini of
+        # the FRAME-0-ONLY codon series, not the total-signal series above.
+        # A genuine start settles into steady, roughly uniform in-frame
+        # elongation downstream (low gini_body_inframe); a stray pileup
+        # tends to stay peaky/patchy even if its total-signal Gini looks
+        # unremarkable, because gini_body mixes in off-frame noise.
+        "gini_body_inframe": gini(body_frame0),
+        "gini_outer_inframe": gini(out_frame0),
         "breadth_body": _breadth(body_total),
         "breadth_outer": _breadth(out_total),
         "periodicity_p": _periodicity_significance(

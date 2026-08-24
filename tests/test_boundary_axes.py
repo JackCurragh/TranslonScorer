@@ -106,12 +106,32 @@ def test_boundary_axes_for_flank_shape():
         "peakiness_outer",
         "gini_body",
         "gini_outer",
+        "gini_body_inframe",
+        "gini_outer_inframe",
         "breadth_body",
         "breadth_outer",
         "periodicity_p",
     }
     assert set(axes) == expected_keys
     assert axes["periodicity_delta"] == pytest.approx(axes["periodicity_body"] - axes["periodicity_outer"])
+
+
+def test_gini_body_inframe_low_for_steady_downstream_elongation():
+    # Steady in-frame signal every codon downstream -> low inequality across
+    # the frame-0-only series, even though the total-signal series (which
+    # mixes in off-frame noise) can look less uniform.
+    coverage = {p: (30.0 if p % 3 == 0 else 5.0) for p in range(0, 60)}
+    coverage.update({p: 8.0 for p in range(-60, 0)})
+    axes = _boundary_axes_for_flank(coverage, list(range(0, 60)), list(range(-60, 0)), min_codons=5)
+    assert axes["gini_body_inframe"] < 0.1
+
+
+def test_gini_body_inframe_high_for_a_single_pileup():
+    # All the frame-0 signal concentrated in one codon -> high inequality.
+    coverage = {p: 0.0 for p in range(0, 60)}
+    coverage[0] = 100.0
+    axes = _boundary_axes_for_flank(coverage, list(range(0, 60)), list(range(-60, 0)), min_codons=5)
+    assert axes["gini_body_inframe"] > 0.8
 
 
 def test_periodicity_resolves_ambiguous_on_minus_strand_too():

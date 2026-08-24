@@ -297,3 +297,46 @@ work, and doesn't need to wait on it.
 - How many lenses need to agree, per aspect, before a battery counts as
   "passed" for attribution purposes (e.g. 2 of 3, all of them) — not fixed
   here, needs a value per aspect once real data exists to tune against.
+
+## Addendum: what §1–§7 landing and real-data validation changed
+
+Everything above is the original plan, left as written. This section
+records what building it and running it against the real GAPDH cohort BAM
+(see docs/significance_testing_results.md for full numbers) actually
+surfaced — three things the plan didn't anticipate.
+
+1. **Initiation's "uniformity" bundled two different questions** (see the
+   implementation note under §1) — Gini (magnitude concentration) and
+   spatial frame-0-share consistency are not the same test, and elongation/
+   termination's "uniformity"/"continuity" lenses were already the
+   share-consistency kind. Fixed by giving initiation both.
+
+2. **3+-way overlapping candidate frames are not a rare edge case in real
+   annotation.** On the GAPDH region fixture, 150 of 336 elongation events
+   (45%) had two or more competing candidate frames once `event_overlap`
+   was wired in (2 to 8 competitors, most commonly 2–3) — a gene-dense
+   region, but not a contrived one. §0/§6's "attribution not exclusion"
+   principle was written with the two-frame case foremost in mind; at this
+   prevalence, the N>2 case needs its own real design pass at some point,
+   not indefinite deferral. This implementation deliberately does not
+   attempt one (per its own brief) — `pair_elongation_neighbors`/
+   `pair_cif_neighbors`/`pair_boundary_neighbors` flag `multi_way_overlap`
+   and report each frame's own battery result independently, nothing more.
+
+3. **`event_overlap` (the table `_contention` already builds) is not wired
+   into the production `score-bams` path.** `score_bams_workflow` /
+   `_score_events_over_provider` (workflows.py) never read it and never
+   pass an `overlaps_df` into `scoring.run.score_events`, so every
+   elongation event scored via the standard CLI path today has
+   `competitor_share={}` regardless of real overlaps on disk — contention
+   scoring and this session's neighbor attribution only actually run when a
+   caller builds `overlaps_df` by hand (as this session's validation script
+   and `tests/test_golden.py`'s contended-pair tests do). This predates this
+   session's work — the elongation contention machinery itself was already
+   in place — but it means the two are silently disconnected in the shipped
+   CLI, and finding #2 above (which needed `overlaps_df` to fire at all)
+   would otherwise have been invisible. Wiring `event_overlap` (plus a
+   `comp_phase` join back onto `events`, since the on-disk table doesn't
+   carry it either -- see `run_gapdh_validation.py`'s manual join for
+   the shape needed) into `score_bams_workflow`/`score_matrix_workflow` is
+   flagged as follow-up, not attempted here.

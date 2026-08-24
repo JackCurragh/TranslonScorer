@@ -30,6 +30,8 @@ from TranslonScorer.scoring.signature import (
     DROPOFF_UPSTREAM_NT,
     DROPOFF_WINDOW_NT,
     cif,
+    cif_codon_contiguity,
+    cif_codon_significance,
     dropoff,
     gini,
     orf_signal_vector,
@@ -747,6 +749,10 @@ def score_elongation_event(
     _cov_pos = _np.array([p for p in range(start, end) if coverage.get(p)], dtype=_np.int64)
     _cov_cnt = _np.array([float(coverage[int(p)]) for p in _cov_pos], dtype=float)
     _vec = orf_signal_vector(_cov_pos, _cov_cnt, start, end, a_e, strand)
+    _cif_sig = cif_codon_significance(
+        _vec, min_reads=thr.cif_codon_min_reads, alpha=thr.periodicity_significance_alpha
+    )
+    _cif_contig = cif_codon_contiguity(_cif_sig["sig_mask"]) if _cif_sig else None
 
     return _elong_evidence(
         n,
@@ -763,6 +769,8 @@ def score_elongation_event(
         cif_value=cif(_vec),
         n_codons=(len(_vec) // 3) if len(_vec) else None,
         frame_chisq_p=_elong_frame_chisq(full_by_frame),
+        cif_significance=_cif_sig,
+        cif_contiguity=_cif_contig,
     )
 
 

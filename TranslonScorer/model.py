@@ -57,6 +57,14 @@ class ScoreThresholds:
     periodicity_min_agree_frac: float = 0.5  # fraction of flank lengths that must agree to
     # resolve an AMBIGUOUS init/term call to SUPPORTED via periodicity (see _decide_step)
 
+    # --- significance_testing_plan.md: per-aspect lens batteries (first-pass,
+    # unvalidated against a real cohort -- see docs/significance_testing_results.md) ---
+    cif_codon_min_reads: int = 10  # per-codon reads floor for cif_codon_significance
+    lens_agree_frac: float = 0.5  # fraction of an aspect's lenses that must agree for
+    # "battery passed" in attribution (2 of 3 default; junction uses all-of-2, see
+    # ATTRIBUTION_MIN_AGREE_FRAC overrides in scoring/attribution.py)
+    elong_uniformity_min_codons: int = 5  # per-half codon floor, elongation body-split test
+
 
 # ---------------------------------------------------------------------------
 # Frame support config

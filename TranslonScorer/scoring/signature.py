@@ -83,6 +83,121 @@ def cif(signal: np.ndarray) -> Optional[float]:
     return float(np.count_nonzero(dominant > CIF_FRAME_DOMINANCE_PCT) / codons.shape[0])
 
 
+def cif_codon_significance(
+    signal: np.ndarray,
+    *,
+    min_reads: int = 10,
+    alpha: float = 0.05,
+) -> Optional[dict]:
+    """Per-codon frame-0 significance, alongside `cif()` (never inside it --
+    see the module docstring; `cif()` stays reference-faithful).
+
+    docs/significance_testing_plan.md §3, "Level" lens: how much of the
+    ORF's codon-by-codon signal is individually frame-0-dominant beyond
+    what depth alone would produce by chance? For each codon whose total
+    read count clears `min_reads`, a one-sided binomial test (frame-0 count
+    vs total, p=1/3, `scipy.stats.binomtest`) asks whether that codon's own
+    frame-0 share exceeds chance. The headline number is the fraction of
+    *testable* codons found significant at `alpha` -- `cif()`'s fixed 33.33%
+    cutoff has no notion of "testable," so a 2-read codon that happens to
+    clear it counts identically to a 200-read one; this is the low-depth-
+    aware companion that doesn't.
+
+    Counts are rounded to the nearest integer before the binomial test --
+    P-site weights are occasionally fractional (multi-mapper apportionment),
+    and `binomtest` needs integers. Rounding is a deliberate approximation,
+    not exact.
+
+    Returns None only when the signal's length isn't a whole number of
+    codons (mirrors `cif()`) or scipy is unavailable. Otherwise a dict:
+      frac_significant  fraction of testable codons significant, or None if
+                        no codon cleared `min_reads` (undefined, not 0 --
+                        same convention as pif/cif/gini).
+      n_testable        codon count that cleared `min_reads`.
+      n_codons          total codon count (same denominator as cif()).
+      sig_mask          list[bool], one per codon; codons below the floor
+                        are False (not tested, not "not significant").
+    """
+    n = len(signal)
+    if n == 0 or n % 3:
+        return None
+    codons = np.asarray(signal, dtype=float).reshape(-1, 3)
+    codon_total = codons.sum(axis=1)
+    frame0 = codons[:, 0]
+    testable = codon_total >= min_reads
+    n_codons = int(codons.shape[0])
+    n_testable = int(np.count_nonzero(testable))
+    sig_mask = [False] * n_codons
+    if n_testable == 0:
+        return {
+            "frac_significant": None,
+            "n_testable": 0,
+            "n_codons": n_codons,
+            "sig_mask": sig_mask,
+        }
+    try:
+        from scipy.stats import binomtest
+    except ImportError:
+        return None
+    n_sig = 0
+    for i in np.nonzero(testable)[0]:
+        n_i = int(round(codon_total[i]))
+        if n_i <= 0:
+            continue
+        k = min(int(round(frame0[i])), n_i)
+        is_sig = binomtest(k, n_i, 1 / 3, alternative="greater").pvalue < alpha
+        sig_mask[i] = bool(is_sig)
+        n_sig += int(is_sig)
+    return {
+        "frac_significant": n_sig / n_testable,
+        "n_testable": n_testable,
+        "n_codons": n_codons,
+        "sig_mask": sig_mask,
+    }
+
+
+def cif_codon_contiguity(sig_mask: Sequence[bool]) -> Optional[dict]:
+    """Are significant codons (from `cif_codon_significance`) spread across
+    the ORF, or clustered in one stretch?
+
+    docs/significance_testing_plan.md §3, "Uniformity" lens: genuine
+    elongation should give broad, scattered significance; a local confound
+    (e.g. a short overlapping element) clusters it into one run. A simple
+    run-length statistic over the boolean mask -- no new dependency, no new
+    null distribution needed, since this only describes the shape of a
+    sequence already computed.
+
+    None when there are no significant codons at all (undefined "how
+    clustered", not 0 -- same convention as elsewhere in this module).
+    Otherwise a dict:
+      longest_run        length of the longest consecutive run of True.
+      n_runs              number of separate runs of True.
+      max_run_frac        longest_run / (total True codons) -- 1.0 = every
+                          significant codon sits in one contiguous block,
+                          low = scattered across many short runs.
+    """
+    mask = list(sig_mask)
+    n_true = sum(mask)
+    if n_true == 0:
+        return None
+    longest = 0
+    current = 0
+    n_runs = 0
+    for v in mask:
+        if v:
+            current += 1
+            if current == 1:
+                n_runs += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return {
+        "longest_run": longest,
+        "n_runs": n_runs,
+        "max_run_frac": longest / n_true,
+    }
+
+
 def gini(signal: np.ndarray) -> Optional[float]:
     """Gini coefficient of inequality over a per-bin signal vector.
 

@@ -133,6 +133,8 @@ def _elong_evidence(
     cif_value: Optional[float] = None,
     n_codons: Optional[int] = None,
     frame_chisq_p: Optional[float] = None,
+    cif_significance: Optional[dict] = None,
+    cif_contiguity: Optional[dict] = None,
 ) -> dict:
     """Turn per-event frame sums into evidence + eligibility/call.
 
@@ -194,6 +196,12 @@ def _elong_evidence(
         # uniform 1/3. Evidence-only (does not gate eligibility/call here),
         # same precedent as periodicity_p on the boundary axes.
         "frame_chisq_p": frame_chisq_p,
+        # docs/significance_testing_plan.md §3 -- per-codon significance
+        # (low-depth-aware companion to `cif`) and its contiguity/run-length
+        # summary. Both evidence-only dicts, JSON-only (not schema columns):
+        # exploratory, not yet something composition weights by.
+        "cif_significance": cif_significance,
+        "cif_contiguity": cif_contiguity,
         "breadth": breadth,
         "span_nt": span_nt,
         "clean_in_frame": clean_in_frame,

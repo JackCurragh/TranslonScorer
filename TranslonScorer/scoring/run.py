@@ -33,7 +33,12 @@ from TranslonScorer.scoring.evidence import (
     _elong_evidence,
     event_record,
 )
-from TranslonScorer.scoring.signature import cif, orf_signal_vector
+from TranslonScorer.scoring.signature import (
+    cif,
+    cif_codon_contiguity,
+    cif_codon_significance,
+    orf_signal_vector,
+)
 
 DEFAULT_THRESHOLDS = ScoreThresholds()
 
@@ -188,6 +193,10 @@ def score_elongation_batch(
             int(expected_frame[row]),
             int(strand[row]),
         )
+        cif_sig = cif_codon_significance(
+            vec, min_reads=thr.cif_codon_min_reads, alpha=thr.periodicity_significance_alpha
+        )
+        cif_contig = cif_codon_contiguity(cif_sig["sig_mask"]) if cif_sig else None
         out[int(event_id)] = _elong_evidence(
             float(total_reads[row]),
             int(covered_positions[row]),
@@ -203,6 +212,8 @@ def score_elongation_batch(
             cif_value=cif(vec),
             n_codons=(len(vec) // 3) if len(vec) else None,
             frame_chisq_p=_elong_frame_chisq(frame_reads[row].tolist()),
+            cif_significance=cif_sig,
+            cif_contiguity=cif_contig,
         )
     return out
 

@@ -17,7 +17,12 @@ from TranslonScorer.scoring.attribution import (
     pair_elongation_neighbors,
     term_battery,
 )
-from TranslonScorer.scoring.aspects import score_elongation_event, score_initiation_event
+from TranslonScorer.scoring.aspects import (
+    junction_internal_consistency,
+    score_elongation_event,
+    score_initiation_event,
+    score_junction_event,
+)
 
 _THR = ScoreThresholds()
 
@@ -280,6 +285,62 @@ def test_pair_boundary_neighbors_skips_events_missing_chrom_or_phase():
     scored = {1: _init_stub(True)}
     out = pair_boundary_neighbors(events, scored, init_battery, _THR, window_nt=60)
     assert out == {}
+
+
+# ---------------------------------------------------------------------------
+# Junction internal consistency (significance_testing_plan §5)
+# ---------------------------------------------------------------------------
+
+
+def test_junction_internal_consistency_matches_when_frame_carries_through():
+    # Donor exon: frame-0 (genomic residue 0) dominant right up to the donor.
+    # Acceptor exon: same residue-0 dominance right from the acceptor --
+    # consistent with one continuous ORF through the splice.
+    coverage = {p: (30.0 if p % 3 == 0 else 5.0) for p in range(81, 99)}
+    coverage.update({p: (30.0 if p % 3 == 0 else 5.0) for p in range(500, 518)})
+    result = junction_internal_consistency(99, 500, 1, 0, 0, coverage, near_nt=18)
+    assert result["donor_frame_share"] > 0.5
+    assert result["acceptor_frame_share"] > 0.5
+    assert result["frame_match_p"] is None or result["frame_match_p"] > 0.05
+
+
+def test_junction_internal_consistency_flags_a_mismatch():
+    # Donor exon: strongly frame-0. Acceptor exon: flat/uniform -- the
+    # annotated acceptor_phase's target frame carries no special signal.
+    coverage = {p: (30.0 if p % 3 == 0 else 5.0) for p in range(81, 99)}
+    coverage.update({p: 10.0 for p in range(500, 518)})
+    result = junction_internal_consistency(99, 500, 1, 0, 0, coverage, near_nt=18)
+    assert result["frame_match_p"] is not None
+    assert result["frame_match_p"] < 0.05
+
+
+def test_junction_internal_consistency_none_with_no_signal():
+    result = junction_internal_consistency(99, 500, 1, 0, 0, {}, near_nt=18)
+    assert result["frame_match_p"] is None
+    assert result["spanning_sensitivity_p"] is None
+    assert result["donor_frame_share"] is None
+
+
+def test_score_junction_event_without_frame_kwargs_is_unchanged():
+    s = score_junction_event({"span_conf": 25.0, "span_short": 2.0, "unspliced": 1.0})
+    assert "frame_match_p" not in s
+    assert s["call"] == "SUPPORTED"
+
+
+def test_score_junction_event_with_frame_kwargs_adds_consistency_fields():
+    coverage = {p: (30.0 if p % 3 == 0 else 5.0) for p in range(81, 99)}
+    coverage.update({p: (30.0 if p % 3 == 0 else 5.0) for p in range(500, 518)})
+    s = score_junction_event(
+        {"span_conf": 25.0, "span_short": 2.0, "unspliced": 1.0},
+        donor_pos=99,
+        acceptor_pos=500,
+        strand=1,
+        donor_phase=0,
+        acceptor_phase=0,
+        coverage=coverage,
+    )
+    assert "frame_match_p" in s
+    assert "spanning_sensitivity_p" in s
 
 
 def test_pair_boundary_neighbors_multi_way_flagged():

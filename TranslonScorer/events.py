@@ -293,7 +293,14 @@ def extract_events(
             "event_id",
             pl.lit("junction").alias("role"),
             pl.col("translation_block_rank").alias("rank"),
-            pl.lit(None, dtype=pl.Int64).alias("phase"),
+            # Upstream (donor-side) block's own phase for THIS translon --
+            # unlike the junction event's own row (deduped across translons
+            # that may reach the same donor/acceptor at different phases, so
+            # it can't carry a single value there), this row is already
+            # translon-scoped, so the block's phase is well-defined. Used by
+            # scoring/attribution.py's junction frame-match lens
+            # (significance_testing_plan.md §5); previously always null.
+            "phase",
         )
     else:
         junc_events = elong_events.clear()

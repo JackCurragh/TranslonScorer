@@ -909,10 +909,130 @@ def score_elongation_event(
 # ---------------------------------------------------------------------------
 
 
+def _frame_total_and_hits(
+    coverage: Dict[int, float], positions: Sequence[int], target_frame: int
+) -> Tuple[float, float]:
+    """(total signal, signal at genomic positions with p % 3 == target_frame)
+    over an arbitrary position list -- no codon-boundary alignment required,
+    unlike `_codon_bins`. Used where the target frame is already known from
+    annotation (a block's own `phase`) rather than inferred from where a
+    window happens to start."""
+    total = hits = 0.0
+    for p in positions:
+        c = coverage.get(p, 0.0)
+        total += c
+        if p % 3 == target_frame:
+            hits += c
+    return total, hits
+
+
+def _two_proportion_p(a_hits: float, a_total: float, b_hits: float, b_total: float) -> Optional[float]:
+    """Two-sided chi-square test of two proportions (2x2 contingency:
+    in-frame vs off-frame, side A vs side B). None when either side has no
+    signal or scipy is unavailable -- same honesty convention used
+    throughout this module."""
+    if a_total <= 0 or b_total <= 0:
+        return None
+    try:
+        from scipy.stats import chi2_contingency
+    except ImportError:
+        return None
+    table = [[a_hits, a_total - a_hits], [b_hits, b_total - b_hits]]
+    try:
+        _, p, _, _ = chi2_contingency(table)
+    except ValueError:
+        return None
+    if not math.isfinite(p):
+        return None
+    return float(p)
+
+
+def junction_internal_consistency(
+    donor_pos: int,
+    acceptor_pos: int,
+    strand: int,
+    donor_phase: int,
+    acceptor_phase: int,
+    coverage: Dict[int, float],
+    *,
+    near_nt: int = 18,
+    sensitivity_exclude_nt: int = 6,
+    chrom: Optional[str] = None,
+    splice_context: Optional[SpliceContext] = None,
+) -> dict:
+    """Junction internal-consistency checks (docs/significance_testing_plan.md
+    §5) -- no reference distribution needed (that approach stays blocked on
+    open_questions.md §7), just whether the two sides of the splice agree
+    with each other.
+
+    `donor_phase`/`acceptor_phase` are the upstream/downstream blocks' own
+    CDS-relative phase for the translon using this junction (events.py's
+    per-block `phase`, carried through `feature_event` -- see the comment
+    there). A junction event can in principle be shared by translons that
+    reach it at different phases; the caller picks one (see run.py), same
+    "follows exactly one path" precedent as `_project_flank`'s own splice
+    handling for an ambiguous/shared route.
+
+    Two lenses:
+      frame_match_p        two-sided test of whether the donor-side and
+                            acceptor-side in-frame shares are comparable
+                            (`near_nt` nt immediately either side of the
+                            splice). Large p = comparable = consistent with
+                            one continuous ORF through the junction.
+      spanning_sensitivity_p  the same comparison, but recomputed using only
+                            positions `sensitivity_exclude_nt` nt or further
+                            from the splice site on each side. Proxy for
+                            "does the call hold up without the junction-
+                            spanning reads" -- true read-level exclusion
+                            needs per-read alignment data this layer
+                            doesn't have (coverage here is already
+                            position-aggregated); positions immediately at
+                            the splice site are the ones most likely to
+                            carry spanning-read-specific coverage, so
+                            excluding them is a proxy, not an exact
+                            reproduction of "reads that don't span".
+    Either p is None when a side has no signal at all.
+    """
+    d_frame = abs_frame(donor_phase, strand)
+    a_frame = abs_frame(acceptor_phase, strand)
+
+    donor_near, _ = _project_flank(
+        donor_pos, strand, near_nt, body_side=False, chrom=chrom, splice_context=splice_context
+    )
+    acceptor_near, _ = _project_flank(
+        acceptor_pos, strand, near_nt, body_side=True, chrom=chrom, splice_context=splice_context
+    )
+    d_total, d_hits = _frame_total_and_hits(coverage, donor_near, d_frame)
+    a_total, a_hits = _frame_total_and_hits(coverage, acceptor_near, a_frame)
+    frame_match_p = _two_proportion_p(d_hits, d_total, a_hits, a_total)
+
+    ex = min(sensitivity_exclude_nt, near_nt)
+    d_far = donor_near[: near_nt - ex]
+    a_far = acceptor_near[ex:]
+    d_total2, d_hits2 = _frame_total_and_hits(coverage, d_far, d_frame)
+    a_total2, a_hits2 = _frame_total_and_hits(coverage, a_far, a_frame)
+    spanning_sensitivity_p = _two_proportion_p(d_hits2, d_total2, a_hits2, a_total2)
+
+    return {
+        "donor_frame_share": (d_hits / d_total) if d_total > 0 else None,
+        "acceptor_frame_share": (a_hits / a_total) if a_total > 0 else None,
+        "frame_match_p": frame_match_p,
+        "spanning_sensitivity_p": spanning_sensitivity_p,
+    }
+
+
 def score_junction_event(
     support: dict,
     *,
     thr: ScoreThresholds = _DEFAULT_THR,
+    donor_pos: Optional[int] = None,
+    acceptor_pos: Optional[int] = None,
+    strand: Optional[int] = None,
+    donor_phase: Optional[int] = None,
+    acceptor_phase: Optional[int] = None,
+    coverage: Optional[Dict[int, float]] = None,
+    chrom: Optional[str] = None,
+    splice_context: Optional[SpliceContext] = None,
 ) -> dict:
     """Splice support with an overhang-confidence (identifiability) layer.
 
@@ -922,6 +1042,15 @@ def score_junction_event(
       unspliced  — aligned straight through the donor (intron retention)
 
     Headline metric: confident spanning count. psi = spliced-in ratio.
+
+    The `donor_pos`/`acceptor_pos`/.../`coverage` kwargs are all optional and
+    all-or-nothing: when every one of `donor_pos, acceptor_pos, strand,
+    donor_phase, acceptor_phase, coverage` is given, this also runs
+    `junction_internal_consistency` (§5) and folds its fields into evidence.
+    Omit them (the default) for the pre-existing spanning-count-only
+    behaviour -- e.g. a junction with no phase available for any translon
+    (a pure context junction, see events.py) has nothing to anchor a frame
+    to, so the internal-consistency check cannot run for it.
     """
     conf = float(support.get("span_conf", 0.0))
     short = float(support.get("span_short", 0.0))
@@ -934,7 +1063,7 @@ def score_junction_event(
         elig, call = "ELIGIBLE", "AMBIGUOUS"
     else:
         elig, call = "INSUFFICIENT", None
-    return {
+    out = {
         "n_reads": spanning,
         "metric": conf,
         "metric_name": "junc_confident_spanning",
@@ -945,3 +1074,18 @@ def score_junction_event(
         "eligibility": elig,
         "call": call,
     }
+    have_all = None not in (donor_pos, acceptor_pos, strand, donor_phase, acceptor_phase, coverage)
+    if have_all:
+        out.update(
+            junction_internal_consistency(
+                donor_pos,
+                acceptor_pos,
+                strand,
+                donor_phase,
+                acceptor_phase,
+                coverage,
+                chrom=chrom,
+                splice_context=splice_context,
+            )
+        )
+    return out

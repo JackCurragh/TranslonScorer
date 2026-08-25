@@ -47,6 +47,20 @@ _RECORD_SCHEMA = {
     # (same "review flag, not a gate" precedent as flank_peakiness/stability).
     "map_track_mean": pl.Float64,
     "map_track_low": pl.Boolean,
+    # Elongation only; null on init/term/junction rows. First-class (not
+    # evidence-JSON-only) so translon-level composition can weight by codon
+    # count instead of read count — see report.compose_block_detail and
+    # _compose_per_translon's elongation_cif_approx.
+    "cif": pl.Float64,
+    "n_codons": pl.Int64,
+    # docs/significance_testing_plan.md §6 -- fraction of this aspect's lens
+    # battery that agreed (scoring/attribution.py's compose_confidence), NOT
+    # a count of "how many tests of any kind passed". First-class (not
+    # evidence-JSON-only) for the same reason cif/n_codons are: composition
+    # needs to weight/aggregate by it (consequential.py's tier_confidence),
+    # not just display it. Null where no battery exists yet for that aspect
+    # (junction) or no lens could be evaluated for this event.
+    "confidence": pl.Float64,
 }
 
 
@@ -79,6 +93,16 @@ def _decide_step(
 
     Peakiness and stability remain in evidence as review flags but do NOT
     hard-gate the call — that wrongly overrode strong, clean starts/stops.
+
+    The borderline band (0 < rise < rise_thr) gets one more chance: if the
+    frame-resolved periodicity significance test (`_periodicity_significance`
+    in aspects.py) is significant at enough flank lengths, the call is
+    upgraded to SUPPORTED — distinguishing "genuinely marginal" from
+    "borderline depth but statistically real periodicity." This can only
+    move AMBIGUOUS -> SUPPORTED: an event already SUPPORTED or UNSUPPORTED
+    by depth alone is untouched, so no existing call can flip. Sets
+    `ev["periodicity_resolved_ambiguous"]` (only reached, hence only present,
+    for borderline events) so the upgrade is auditable in the evidence JSON.
     """
     if ev["n_reads"] < thr.min_reads:
         return "INSUFFICIENT", None
@@ -87,7 +111,19 @@ def _decide_step(
         return "ELIGIBLE", "SUPPORTED"
     if r <= 0:
         return "ELIGIBLE", "UNSUPPORTED"
-    return "ELIGIBLE", "AMBIGUOUS"  # borderline: 0 < rise < threshold
+    # borderline: 0 < rise < threshold
+    axes_by_flank = ev.get("boundary_axes_by_flank") or {}
+    p_vals = [
+        a["periodicity_p"] for a in axes_by_flank.values() if a.get("periodicity_p") is not None
+    ]
+    resolved = bool(p_vals) and (
+        sum(1 for p in p_vals if p < thr.periodicity_significance_alpha) / len(p_vals)
+        >= thr.periodicity_min_agree_frac
+    )
+    ev["periodicity_resolved_ambiguous"] = resolved
+    if resolved:
+        return "ELIGIBLE", "SUPPORTED"
+    return "ELIGIBLE", "AMBIGUOUS"
 
 
 def _elong_evidence(
@@ -102,11 +138,37 @@ def _elong_evidence(
     contended_nt: int,
     span_nt: int,
     thr: ScoreThresholds,
+    cif_value: Optional[float] = None,
+    n_codons: Optional[int] = None,
+    frame_chisq_p: Optional[float] = None,
+    cif_significance: Optional[dict] = None,
+    cif_contiguity: Optional[dict] = None,
+    body_uniformity_p: Optional[float] = None,
 ) -> dict:
     """Turn per-event frame sums into evidence + eligibility/call.
 
     Shared by the scalar (score_elongation_event) and vectorised
     (score_elongation_batch) scorers so decision logic is identical.
+
+    Two of the Chothani et al. (2022) signature scores ride along here as
+    evidence rather than as headline metrics, because the record schema
+    carries exactly one metric per event and `elong_in_frame` already owns it:
+
+    * ``overall_in_frame`` IS their PIF — frame-0 signal over total signal,
+      across every position in the span. It is not a separate field because it
+      would be a duplicate one; see docs and the CHANGELOG.
+    * ``cif`` is their CIF, supplied by the caller (it needs the per-codon
+      vector, which neither the prefix-sum kernel nor this function has).
+      None when the span is not a whole number of codons or no vector was
+      built. ``n_codons`` is the codon count that CIF was actually computed
+      over (the caller's trimmed vector length // 3, not ``span_nt // 3`` —
+      they differ whenever ``orf_signal_vector`` trims a partial codon at the
+      phase-offset boundary), promoted alongside `cif` so translon-level
+      composition can weight by codon count rather than read count.
+
+    Note the headline ``metric`` stays ``clean_in_frame`` where available —
+    PIF's uncontended-only sibling. The two differ exactly where events
+    overlap in different frames, which is the case PIF cannot express.
     """
     cont_e = cont_by_frame[a_e]
     clean_in_frame = (clean_inf / clean_tot) if clean_tot else None
@@ -135,7 +197,24 @@ def _elong_evidence(
         "covered_nt": covered,
         "metric": effective_in_frame,
         "metric_name": "elong_in_frame",
-        "overall_in_frame": overall_in_frame,
+        "overall_in_frame": overall_in_frame,  # == Chothani PIF
+        "cif": cif_value,
+        "n_codons": n_codons,
+        # docs/significance_testing_plan.md §2 "Level" lens -- chi-square
+        # goodness-of-fit of the whole-span 3-way frame tally against
+        # uniform 1/3. Evidence-only (does not gate eligibility/call here),
+        # same precedent as periodicity_p on the boundary axes.
+        "frame_chisq_p": frame_chisq_p,
+        # docs/significance_testing_plan.md §3 -- per-codon significance
+        # (low-depth-aware companion to `cif`) and its contiguity/run-length
+        # summary. Both evidence-only dicts, JSON-only (not schema columns):
+        # exploratory, not yet something composition weights by.
+        "cif_significance": cif_significance,
+        "cif_contiguity": cif_contiguity,
+        # docs/significance_testing_plan.md §2 "Uniformity" lens -- large p
+        # means frame-0 dominance is consistent across the body's two
+        # halves, small p flags a local patch. Evidence-only.
+        "body_uniformity_p": body_uniformity_p,
         "breadth": breadth,
         "span_nt": span_nt,
         "clean_in_frame": clean_in_frame,
@@ -170,10 +249,16 @@ def event_record(
         "n_reads",
         "map_track_mean",
         "map_track_low",
+        "cif",
+        "n_codons",
+        "confidence",
     }
     evidence = {k: _jsonable(v) for k, v in raw.items() if k not in drop}
     m = raw.get("metric")
     mtm = raw.get("map_track_mean")
+    cif_val = raw.get("cif")
+    n_codons = raw.get("n_codons")
+    confidence = raw.get("confidence")
     return {
         "event_id": int(event_id),
         "aspect": aspect,
@@ -188,4 +273,7 @@ def event_record(
         "thresholds_version": thr_version,
         "map_track_mean": (None if mtm is None else float(mtm)),
         "map_track_low": raw.get("map_track_low"),
+        "cif": (None if cif_val is None else float(cif_val)),
+        "n_codons": (None if n_codons is None else int(n_codons)),
+        "confidence": (None if confidence is None else float(confidence)),
     }

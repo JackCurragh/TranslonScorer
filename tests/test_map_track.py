@@ -64,6 +64,34 @@ def test_map_track_disabled_when_no_provider():
     assert _map_track_for_chrom(None, _events(), _THR) == {}
 
 
+def test_map_track_gap_reads_as_unknown_not_zero(tmp_path: Path):
+    """A position with no interval in the mappability bigwig (wrong chrom,
+    off-contig, assembly gap) must be distinguishable from a position with a
+    confirmed value of 0.0 — collapsing both to the same default silently
+    turns a data gap into evidence of low mappability."""
+    bw = tmp_path / "map.bw"
+    # Interval only covers [0, 500); the event's window (around 950) falls
+    # in a true gap with no interval at all, not a confirmed 0.0.
+    _write_bw(bw, "chr1", 20000, [(0, 500, 0.9)])
+    provider = BigwigSetProvider([str(bw)])
+
+    out = _map_track_for_chrom(provider, _events(), _THR)
+    assert out[1]["map_track_mean"] is None
+    assert out[1]["map_track_low"] is None
+
+
+def test_map_track_confirmed_zero_still_reads_as_low(tmp_path: Path):
+    """A position with an explicit 0.0 value (genuinely unmappable) must
+    still be counted — only a true gap should read as unknown."""
+    bw = tmp_path / "map.bw"
+    _write_bw(bw, "chr1", 20000, [(0, 20000, 0.0)])
+    provider = BigwigSetProvider([str(bw)])
+
+    out = _map_track_for_chrom(provider, _events(), _THR)
+    assert out[1]["map_track_mean"] == 0.0
+    assert out[1]["map_track_low"] is True
+
+
 def test_map_track_never_changes_call_or_eligibility(tmp_path: Path):
     """Same coverage, scored with vs without a mappability track: call/eligibility
     must be byte-identical — the annotation is diagnostic only."""

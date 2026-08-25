@@ -41,11 +41,17 @@ provider** changes:
 | source | provider | command |
 |---|---|---|
 | 1–20 genome/transcriptome BAMs | `BamSetProvider` | `score-bams` |
-| 1–20 bigWigs (coverage only) | `BigwigSetProvider` | (via API) |
+| 1–N bigWigs (coverage only) | `BigwigSetProvider` | `score-bigwig` |
 | annotation-scale sparse matrix | `MatrixProvider` | `score-matrix` |
 
 All three feed one scoring core and produce the same `fact_event_score` store
-and per-translon report.
+and per-translon report, and all three run under `pipeline` as a single call.
+
+**bigWig is the simplest source and the most lossy.** No offsets to calibrate
+and no index to build, but per-base depth carries no read-level splice
+information — so **junction events cannot be scored at all** and come back
+`INSUFFICIENT` with a null call (unassessable, *not* unsupported). The run warns
+with the count. Score junctions with `--bam` or matrix mode.
 
 The **feature source** (what to score) and the **coverage source** (the reads)
 are independent — mix any of them: e.g. score GTF CDSs against your BAMs, or your
@@ -68,7 +74,7 @@ The end-to-end flow is four steps:
 ```
 extract-events        feature source (GTF/BED/FASTA/sqlite) ─► genomic event store
    │
-score-bams / score-matrix   events + coverage ─► append-only score store
+score-bams / score-bigwig / score-matrix   events + coverage ─► score store
    │
 report                scores + events ─► per-translon report (+ consequentiality)
    │
@@ -110,18 +116,48 @@ translonscorer pipeline \
   --out-dir results/
 ```
 
-### B. The matrix (annotation scale)
+### B. Coverage tracks (bigWig)
+
+If all you have is coverage, pass bigWigs. Ribo-seq is stranded, so prefer the
+forward/reverse pair — an unstranded track mixes +/- signal at every position:
+
+```sh
+# one-shot: feature source = --gtf, coverage source = stranded bigWig pair
+translonscorer pipeline \
+  --gtf annotation.gtf --feature-type CDS --chrom 12 \
+  --forward-bigwig fwd.bw --reverse-bigwig rev.bw \
+  --sample mysample \
+  --out-dir results/
+```
+
+Repeat `--forward-bigwig`/`--reverse-bigwig` for more samples (Nth pairs with
+Nth). `--bigwig` takes unstranded tracks instead. Junction events are not
+scorable from bigWig — see the caveat above.
+
+### C. The matrix (annotation scale)
 
 The sparse matrix is **one logical matrix sharded into partition directories by
 read sequence**. Reads for any locus are spread across *all* partitions, so the
 matrix must **always be used in full** — there is no single-partition or subset
 usage. You point at the matrix **root** and every partition under it is scanned
-together:
+together.
+
+Matrix scoring needs a **P-site index** built once per matrix. It supplies the
+per-(sample, length) P-site offsets: a single flat offset across read lengths
+smears the P-site across frames and collapses in-frame fraction to the ~0.33
+random floor, so the index is required, not optional.
 
 ```sh
+# once per matrix — calibrates offsets and bakes the index
+translonscorer build-psite-index \
+  --matrix-dir matrix/global_partitioned \
+  --cds-gtf annotation.gtf --calibration-gtf annotation.gtf \
+  --out-dir matrix/psite_index
+
 translonscorer pipeline \
   --sqlite annotation.translons.sqlite \
   --matrix-dir matrix/global_partitioned \
+  --psite-index matrix/psite_index \
   --chrom chr12 \
   --out-dir results_chr12/ \
   --data-version matrix_v1
@@ -132,7 +168,11 @@ not restrict the matrix — all partitions are still read. Omit it for the whole
 genome. See [`runs/run_matrix_scoring.sh`](runs/run_matrix_scoring.sh) for a
 reproducible matrix run you can copy.
 
-### C. Step by step (full control)
+BAM/bigWig mode needs no index — it calibrates its own offsets per file (see
+`--offset-method`). That is the only difference between the two modes: the
+events, the scorer, the report and the store are identical.
+
+### D. Step by step (full control)
 
 ```sh
 # 1. events (once per feature set; reused across all scoring runs).
@@ -143,9 +183,11 @@ translonscorer extract-events --gtf annotation.gtf --feature-type CDS \
 # 2a. score from BAMs ...
 translonscorer score-bams  --events-dir run/events --bam a.bam --bam b.bam \
     --store-dir run/scores --data-version v1
-# 2b. ... or from the whole matrix (all partitions under the root)
+# 2b. ... or from the whole matrix (all partitions under the root).
+#     --psite-index is required; build it once with build-psite-index.
 translonscorer score-matrix --events-dir run/events \
     --matrix-dir matrix/global_partitioned \
+    --psite-index matrix/psite_index \
     --store-dir run/scores --data-version v1
 
 # 3. compose the per-translon report (+ default consequentiality)
@@ -181,88 +223,107 @@ The package is organised as a **functional core** (pure transforms) wrapped by
 an **imperative shell** (I/O + orchestration). See
 [`docs/architecture.md`](docs/architecture.md) for the design rationale.
 
+The spine is one line of dependency:
+
+```
+sources → events → provider.coverage() → scorer → report → consequentiality → store
+```
+
+Everything else hangs off it or sits beside it.
+
 ```
 TranslonScorer/
-├── cli.py              Click CLI — every command lives here
+├── cli.py              Click CLI (top level = the workflow; research/ legacy groups)
 ├── workflows.py        orchestration shell: pipeline / extract / score / report
 ├── model.py            dataclasses: Region, OffsetParams, ScoreThresholds,
-│                       FrameSupportParams, ConsequentialityPolicy, ScoreRecord
+│                       FrameSupportParams, ConsequentialityPolicy
 │
-│   ── functional core (pure, no I/O) ──
-├── events.py           annotation → deduplicated genomic events + membership
+│   ── the spine (pure, no I/O) ──
+├── events.py           features → deduplicated genomic events + membership
+├── io/feature_sources.py  GTF / BED12 / bigBed / FASTA / sqlite → features
 ├── offsets.py          P/A-site offset calibration (global | file | metagene)
-├── scoring/            the event scorer
+├── scoring/            the ONE event scorer
 │   ├── aspects.py        init / elongation / termination / junction scorers
 │   ├── evidence.py       evidence → eligibility/call decisions (thresholds)
-│   └── run.py            vectorised scorer; score_events()
+│   └── run.py            score_events() — batched elongation + per-event loop
 ├── report.py           compose per-translon report from event scores
 ├── consequential.py    dynamic consequentiality policy (no hard gates)
-├── qc.py               periodicity / frame-dominance QC (pure)
-├── clustering.py       profile clustering for confusing/contended loci
-├── frame_support.py    frame-posterior estimation (linear/latent/HMM)
 │
-│   ── coverage providers + profile building (the stateful edge) ──
+│   ── coverage providers: the ONE point where sources differ ──
 ├── coverage/
-│   ├── base.py           capability Protocols (CoverageProvider, SupportsSites…)
 │   ├── bam.py            BamSetProvider (1–20 BAMs; offsets; transcriptome→genome)
-│   ├── bigwig.py         BigwigSetProvider (coverage-only)
-│   ├── matrix.py         MatrixProvider (sparse annotation-scale matrix)
+│   ├── bigwig.py         BigwigSetProvider (coverage-only, lossy by design)
 │   ├── profile.py        pure P/A-site profile from reads + offset table
 │   ├── transcriptome.py  transcript→genome projection (exon walk)
+│   ├── base.py           MAPPABILITY_LEDGER_SCHEMA + the duck-typing convention
 │   └── profiles.py, locus_profiles.py, locus_features.py, transcript_coords.py,
-│       mapped_index.py, index_from_bam.py, junctions.py, junction_model.py
-│                         profile/index/junction construction from sources
+│       mapped_index.py, index_from_bam.py, junctions.py
+│                         a separate cohort profile BUILDER (the `profiles` and
+│                         `index-from-bam` commands) — not the scorer's providers
 │
 │   ── the sparse-matrix engine ──
-├── matrix_rollup.py    tabulate coverage/junctions over the matrix (region_coverage)
-├── matrix_scoring.py   score ORFs/profiles off the matrix
-├── matrix_normalisation.py  per-locus matrix normalisation
-├── matrix_qc.py        per-sample length/periodicity QC straight off the matrix
+├── matrix/
+│   ├── provider.py       MatrixProvider (requires a P-site index)
+│   ├── psite_index.py    build-psite-index + query_genomic_coverage
+│   ├── rollup.py         partition scanning; FrameRollup; junction tabulation
+│   ├── qc.py             per-sample length/periodicity QC off the matrix
+│   ├── normalisation.py  per-locus matrix normalisation
+│   └── clustering.py     profile clustering for confusing/contended loci
 │
 │   ── I/O adapters ──
 ├── io/
-│   ├── annotation.py     GTF → CDS / exon blocks (build_cds_blocks, build_exon_blocks)
+│   ├── annotation.py     GTF → CDS / exon blocks
 │   ├── annotation_bundle.py  build/load an annotation bundle directory
 │   ├── bam.py            read-id parsing, chrom normalisation, CIGAR, junctions
 │   ├── matrix.py         sparse-matrix partition manifests / readers
 │   ├── store.py          event + fact_event_score Parquet store read/write
 │   └── inspect.py        Parquet inspection helper (the `inspect` command)
 │
-│   ── frame analysis ──
+│   ── in-flight: a read/position index (nothing reads it yet) ──
+├── alignments/         builder.py, schema.py, provenance.py  (one row per alignment)
+├── counts/             builder.py, schema.py      (5′-end + junction counts per sample)
+│
+│   ── research: frame assignment (the `research` command group) ──
+├── frame_support.py    frame-posterior estimation (linear/latent/HMM)
 ├── frame/
 │   ├── bleed.py, deblur.py, hmm.py, latent.py   frame-correction models
-│   ├── frame_crosstalk.py, frame_method_compare.py
-│   ├── frame_disambiguation.py   ambiguous-read frame assignment
+│   ├── validation.py             posteriors vs annotated CDS frame
+│   ├── rdg_flux_export.py        RDG-Flux per-position frame-posterior export
 │   └── read_assignment.py        unique/fractional/EM/frame-aware assignment
 │
-│   ── ORF-composite path + score-table schema (research utilities) ──
+│   ── ORF table handling (the `legacy` command group) ──
 ├── orf/
-│   ├── score_schema.py, score_gates.py, panel_manifest.py, profile_compare.py
-│   ├── orfs_import.py (BED12→transcripts), map_orfs.py, assemble.py
-│   └── rdg_flux_export.py   RDG-Flux per-position frame-posterior export
+│   ├── orfs_import.py (BED12→transcripts), map_orfs.py
+│   └── score_schema.py, panel_manifest.py
+├── assemble.py         overlap resolution over scored candidates
 │
-│   ── legacy single-sample path (kept for `process-bam`) ──
+│   ── single-sample path (kept for `process-bam` / `profiles`) ──
 ├── config.py           Config dataclass + validate_config
 ├── legacy_workflow.py  process-bam / zarr orchestration
-├── core/               coordinates.py, orffinder.py, scoring.py (classic ORF scoring)
+├── qc.py               periodicity / frame-dominance QC (pure)
+├── core/               coordinates.py, orffinder.py
+│                       (orffinder is NOT legacy — it is the shared ORF-from-
+│                        sequence rule engine behind feature_sources.from_fasta)
 │
 │   ── lower-level format readers & misc ──
 ├── file_handlers/      bam.py, bed.py, bigwig.py, sparse_parquet.py, zarr.py
-├── utils/              io.py, logging.py
-└── visualization/      plots.py, report.py (HTML), riboseq_profile_style.py
+└── utils/              io.py, logging.py
 ```
 
-### A note on the `matrix_*.py` modules at the package root
+### Reading the CLI
 
-`matrix_rollup.py`, `matrix_scoring.py`, `matrix_normalisation.py` and
-`matrix_qc.py` sit at the package root (not in a subpackage). This is the
-**matrix engine** — it's deliberately kept as flat top-level peers, alongside
-the other top-level core modules (`clustering.py`, `frame_support.py`, etc.),
-which is how the codebase was consolidated when the old `pipeline/` package was
-removed. They are cohesive (one subject each) and import cleanly from `io/`,
-`coverage/` and `scoring/`. Grouping them into a `matrix/` subpackage would be a
-reasonable future tidy, but it is purely cosmetic and is intentionally not done
-here.
+`translonscorer --help` shows the workflow plus build/inspect infrastructure.
+Two groups hold everything that is not on the scoring path:
+
+- **`research`** — `compare-read-assignment`, `validate-panel`,
+  `export-rdg-flux`. Nothing under `frame/` is imported by the scorer; these
+  support the frame-assignment analyses.
+- **`legacy`** — `orfs-import`, `assemble`, `map-orfs`. ORF table handling;
+  `orf/` is not imported by the spine.
+
+Both still run (`translonscorer research export-rdg-flux --help`). They are
+grouped, not deprecated — the split exists so the top level reads as the
+product.
 
 ---
 

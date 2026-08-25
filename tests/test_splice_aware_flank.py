@@ -12,7 +12,7 @@ These tests build small synthetic (chrom, strand) intron maps and assert:
      (backward compatibility — the golden gate covers this too).
   2. the leader/UTR flank is correctly projected across a nearby intron to
      the true upstream/downstream exon when splice_context is given.
-  3. scalar (score_events) and vectorised (score_events_vectorised) agree
+  3. the shipped scorer and the test-only scalar reference agree
      when splice_context is threaded through end-to-end.
 """
 
@@ -20,13 +20,14 @@ from __future__ import annotations
 
 import polars as pl
 
+from tests.reference_scorer import score_events_scalar
 from TranslonScorer.model import ScoreThresholds
 from TranslonScorer.scoring.aspects import (
     _project_flank,
     score_initiation_event,
     score_termination_event,
 )
-from TranslonScorer.scoring.run import score_events, score_events_vectorised
+from TranslonScorer.scoring.run import score_events
 
 _THR = ScoreThresholds()
 
@@ -99,10 +100,18 @@ def test_init_splice_aware_flank_corrects_it():
     splice_ctx = {("chr1", "+"): [(40, 99)]}
     spliced = score_initiation_event(99, 1, cov, thr=_THR, chrom="chr1", splice_context=splice_ctx)
     assert spliced["flank_spliced"] is True
-    # Leader is honestly well-covered once correctly located -> much weaker
-    # (and here, ambiguous rather than falsely-clean-SUPPORTED) step.
+    # Leader is honestly well-covered once correctly located -> the DEPTH
+    # metric alone is weak, not the falsely-clean SUPPORTED the flat-genomic
+    # version reports.
     assert spliced["metric"] < 2.0
-    assert spliced["call"] != "SUPPORTED"
+    # But the body here is genuinely triplet-periodic (30/5/5) against a
+    # leader that, once correctly located, is genuinely flat/non-periodic
+    # (uniform 8.0) -- exactly the case the periodicity axis exists to catch.
+    # The borderline-depth AMBIGUOUS call is correctly resolved to SUPPORTED
+    # via periodicity, not via an inflated depth number, and that resolution
+    # is auditable rather than silent.
+    assert spliced["call"] == "SUPPORTED"
+    assert spliced["periodicity_resolved_ambiguous"] is True
 
 
 def _spliced_utr_coverage() -> dict:
@@ -171,10 +180,10 @@ def test_scalar_equals_vectorised_with_splice_context():
         schema={"pos": pl.Int64, "count": pl.Float64},
     )
 
-    scalar = score_events(events, cov, group="g", tier="t", thr=_THR, splice_context=splice_ctx)
-    vec = score_events_vectorised(
-        events, cov_df, group="g", tier="t", thr=_THR, splice_context=splice_ctx
+    scalar = score_events_scalar(
+        events, cov, group="g", tier="t", thr=_THR, splice_context=splice_ctx
     )
+    vec = score_events(events, cov_df, group="g", tier="t", thr=_THR, splice_context=splice_ctx)
 
     scalar = scalar.sort("event_id")
     vec = vec.sort("event_id")

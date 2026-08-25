@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from TranslonScorer.matrix.provider import MatrixProvider
 from TranslonScorer.matrix.psite_index import query_genomic_coverage
@@ -164,22 +165,18 @@ def test_matrix_provider_psite_index_mode(tmp_path: Path):
     assert cov["count"].sum() == 8.0
 
 
-def test_matrix_provider_default_mode_unaffected(monkeypatch, tmp_path: Path):
-    """Backward compatibility: without psite_index_dir, coverage() still goes
-    through the original region_coverage/ref_offset path unchanged."""
+def test_matrix_provider_requires_psite_index(tmp_path: Path):
+    """The P-site index is the ONLY matrix coverage strategy.
+
+    A flat offset applied across all read lengths smears the P-site across
+    frames and pins elong_in_frame to the ~0.33 random floor, so constructing
+    a MatrixProvider without an index is refused rather than silently
+    producing noise.
+    """
     import TranslonScorer.matrix.provider as matrix_mod
 
-    called = {}
-
-    def _fake_region_coverage(dirs, regions, *, ref_offset, group_level, sample_names, n_workers):
-        called["ref_offset"] = ref_offset
-        return pl.DataFrame({"pos": [42], "count": [1.0]})
-
-    monkeypatch.setattr("TranslonScorer.matrix.rollup.region_coverage", _fake_region_coverage)
-    provider = matrix_mod.MatrixProvider([str(tmp_path)], ref_offset=15)
-    cov = provider.coverage([Region("chr1", 0, 100)], site="P")
-    assert called["ref_offset"] == 15
-    assert cov["count"].to_list() == [1.0]
+    with pytest.raises(ValueError, match="psite_index_dir"):
+        matrix_mod.MatrixProvider([str(tmp_path)], psite_index_dir="")
 
 
 # ---------------------------------------------------------------------------

@@ -865,16 +865,12 @@ def query_genomic_coverage(
     annotation, all unmodified).
 
     Offsets are already baked into `p_site` at index-build time (see module
-    docstring); site="A" applies the same +3 nt shift MatrixProvider already
-    applies for its flat-ref_offset mode. site="P" needs no shift (the index
-    IS P-site).
+    docstring); site="A" applies a +3 nt (one codon) shift. site="P" needs no
+    shift (the index IS P-site).
 
     If `index_dir/usable_sample_lengths.parquet` exists, (sample, length)
-    pairs not listed there are excluded — the same QC-gate semantics
-    workflows.score_matrix_rollup_workflow already applies for the
-    FrameRollup path (its `psite_index_dir` branch), kept here for parity so
-    switching a caller from FrameRollup to this path doesn't silently
-    reintroduce known-bad (sample, length) combinations.
+    pairs not listed there are excluded, so known-bad combinations flagged by
+    the QC gate never reach the scorer.
 
     Parameters
     ----------

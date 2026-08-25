@@ -4,7 +4,15 @@ on:
   push:
     branches: [ "main" ]
     paths:
-      - 'translonscorer/**'
+      # Repo-root-relative. The old 'translonscorer/**' filter matched nothing
+      # (this repo IS translonscorer), so this workflow never fired on a code
+      # change.
+      - 'TranslonScorer/**'
+      - 'tests/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'requirements.txt'
+      - 'pyproject.toml'
       - '.github/workflows/docker-latest.yml'
   workflow_dispatch:
 
@@ -20,11 +28,13 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r translonscorer/requirements.txt
-          pip install -e translonscorer
+          pip install -r requirements.txt
+          pip install -e .
           pip install pytest
+      # No `|| true`. The docker job needs: test, so swallowing the exit code
+      # made this gate decorative — a failing suite would still publish.
       - name: Run tests
-        run: pytest -q translonscorer/tests || true
+        run: pytest -q tests
 
   docker:
     name: Build and push latest
@@ -53,6 +63,6 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: translonscorer/Dockerfile
+          file: Dockerfile
           push: true
           tags: ${{ steps.prep.outputs.image }}

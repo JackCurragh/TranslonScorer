@@ -8,6 +8,7 @@ consequential.apply_policy (tier-confidence × expression, no hard gates).
 from __future__ import annotations
 
 import polars as pl
+import pytest
 
 from TranslonScorer.consequential import apply_policy
 from TranslonScorer.model import ConsequentialityPolicy
@@ -107,3 +108,55 @@ def test_apply_policy_empty():
     out = apply_policy(pl.DataFrame(schema={"feature_id": pl.Utf8}))
     assert "consequential" in out.columns
     assert out.is_empty()
+
+
+# ---------------------------------------------------------------------------
+# §6: confidence-weighted tier_confidence (significance_testing_plan.md §6)
+# ---------------------------------------------------------------------------
+
+
+def _scores_with_confidence(init_confidence: float) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "event_id": [1, 2, 3],
+            "aspect": ["init", "elongation", "term"],
+            "call": ["SUPPORTED", "SUPPORTED", "SUPPORTED"],
+            "eligibility": ["ELIGIBLE"] * 3,
+            "n_reads": [30.0, 25.0, 22.0],
+            "metric": [1.8, 0.9, 1.4],
+            "confidence": [init_confidence, 1.0, 1.0],
+            "group": ["g"] * 3,
+            "tier": ["aggregate"] * 3,
+        }
+    )
+
+
+def _fe() -> pl.DataFrame:
+    return pl.DataFrame(
+        {"feature_id": ["t"] * 3, "event_id": [1, 2, 3], "role": ["init", "elongation", "term"]}
+    )
+
+
+def test_compose_report_carries_per_aspect_confidence():
+    out = compose_report(_scores_with_confidence(0.5), _fe())
+    assert out["init_confidence"][0] == pytest.approx(0.5)
+    assert out["elongation_confidence"][0] == pytest.approx(1.0)
+
+
+def test_tier_confidence_weights_by_aspect_confidence():
+    """All three chain aspects SUPPORTED either way -- a flat mean-of-SUPPORTED
+    would give tier_confidence=1.0 regardless of how confident each call was.
+    Weighting by confidence should pull it below 1.0 when one aspect's own
+    battery barely agreed."""
+    low = apply_policy(compose_report(_scores_with_confidence(0.1), _fe()))
+    high = apply_policy(compose_report(_scores_with_confidence(1.0), _fe()))
+    assert high["tier_confidence"][0] == pytest.approx(1.0)
+    assert low["tier_confidence"][0] < high["tier_confidence"][0]
+
+
+def test_tier_confidence_falls_back_to_equal_weight_without_confidence_column():
+    """No confidence column at all (pre-§6 reports) -- exactly the original
+    flat mean-of-SUPPORTED behaviour."""
+    scores = _scores_with_confidence(0.1).drop("confidence")
+    out = apply_policy(compose_report(scores, _fe()))
+    assert out["tier_confidence"][0] == pytest.approx(1.0)

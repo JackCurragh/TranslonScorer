@@ -3,31 +3,13 @@ Core functionality for TranslonScorer.
 
 This module contains the core algorithms and functionality including:
 - ORF prediction and classification
-- Scoring algorithms and metrics
 - Coordinate transformations
 """
 
 from .coordinates import change_point_analysis, classify_orf, orfrelativeposition
 from .orffinder import build_codon_automaton, find_all_positions, find_orfs, preporfs
-from .scoring import (
-    assigningscore,
-    calculate_scores,
-    existingscore,
-    globalscores,
-    newscoring,
-    oldscoring,
-    sru_score,
-)
 
 __all__ = [
-    # Scoring functions
-    "sru_score",
-    "calculate_scores",
-    "oldscoring",
-    "newscoring",
-    "globalscores",
-    "existingscore",
-    "assigningscore",
     # Coordinate functions
     "classify_orf",
     "orfrelativeposition",

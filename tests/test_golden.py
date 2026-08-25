@@ -4,11 +4,12 @@ Gate command:  make gate   (= pytest tests/test_golden.py -q)
 
 Assertions
 ----------
-1. GAPDH golden: score_events on the synthetic GAPDH-locus fixture reproduces
-   outputs/reference_scores_gapdh.parquet with max|Δmetric|==0 and 0
-   call/eligibility mismatches.
-2. Scalar ≡ vectorised: score_events and score_events_vectorised agree (Δ=0)
-   on the same fixture, including a contended elongation pair.
+1. GAPDH golden: the shipped ``scoring.run.score_events`` on the synthetic
+   GAPDH-locus fixture reproduces outputs/reference_scores_gapdh.parquet with
+   max|Δmetric|==0 and 0 call/eligibility mismatches.
+2. Product ≡ reference: the shipped scorer and the independent scalar
+   implementation in ``tests/reference_scorer.py`` agree (Δ=0) on the same
+   fixture, including a contended elongation pair.
 
 To regenerate the golden (only needed when intentionally changing the scorer):
     python3 tests/test_golden.py
@@ -20,12 +21,10 @@ from pathlib import Path
 
 import polars as pl
 
+from tests.reference_scorer import score_events_scalar
 from TranslonScorer.events import extract_events
 from TranslonScorer.model import ScoreThresholds
-from TranslonScorer.scoring.run import (
-    score_events,
-    score_events_vectorised,
-)
+from TranslonScorer.scoring.run import score_events
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -119,10 +118,22 @@ def _gapdh_coverage() -> dict:
     return cov
 
 
+def _cov_df(cov: dict) -> pl.DataFrame:
+    return pl.DataFrame(
+        {"pos": list(cov.keys()), "count": list(cov.values())},
+        schema={"pos": pl.Int64, "count": pl.Float64},
+    )
+
+
 def _run_gapdh() -> pl.DataFrame:
+    """Golden is produced by the SHIPPED scorer, not the test-only reference.
+
+    (It used to run the scalar reference, so the golden only reached the
+    product transitively via the scalar≡vectorised test.)
+    """
     return score_events(
         _gapdh_events(),
-        _gapdh_coverage(),
+        _cov_df(_gapdh_coverage()),
         group="gapdh",
         tier="aggregate",
         thr=_THR,
@@ -256,37 +267,95 @@ def test_gapdh_golden():
     _assert_identical(result, golden, "gapdh_golden")
 
 
-def test_scalar_equals_vectorised_gapdh():
-    """score_events and score_events_vectorised agree on the GAPDH fixture."""
+def test_product_equals_scalar_reference_gapdh():
+    """Shipped score_events agrees with the independent scalar reference."""
     events = _gapdh_events()
     cov_dict = _gapdh_coverage()
-    cov_df = pl.DataFrame(
-        {"pos": list(cov_dict.keys()), "count": list(cov_dict.values())},
-        schema={"pos": pl.Int64, "count": pl.Float64},
-    )
-    scalar = score_events(events, cov_dict, group="gapdh", tier="aggregate", thr=_THR)
-    vec = score_events_vectorised(events, cov_df, group="gapdh", tier="aggregate", thr=_THR)
-    _assert_identical(scalar, vec, "scalar_vs_vec_gapdh")
+    scalar = score_events_scalar(events, cov_dict, group="gapdh", tier="aggregate", thr=_THR)
+    product = score_events(events, _cov_df(cov_dict), group="gapdh", tier="aggregate", thr=_THR)
+    _assert_identical(scalar, product, "scalar_vs_product_gapdh")
 
 
-def test_scalar_equals_vectorised_contended():
-    """score_events and score_events_vectorised agree on a contended-elong fixture."""
+def test_product_equals_scalar_reference_contended():
+    """Same, on a contended elongation pair — where the prefix-sum kernel is
+    least obvious by inspection and the reference earns its keep."""
     events = _contend_events()
     cov_dict = _contend_coverage()
-    cov_df = pl.DataFrame(
-        {"pos": list(cov_dict.keys()), "count": list(cov_dict.values())},
-        schema={"pos": pl.Int64, "count": pl.Float64},
-    )
     overlaps_dict = _contend_overlaps_dict()
     overlaps_df = _contend_overlaps_df()
 
-    scalar = score_events(
+    scalar = score_events_scalar(
         events, cov_dict, overlaps=overlaps_dict, group="test", tier="aggregate", thr=_THR
     )
-    vec = score_events_vectorised(
-        events, cov_df, overlaps_df=overlaps_df, group="test", tier="aggregate", thr=_THR
+    product = score_events(
+        events, _cov_df(cov_dict), overlaps_df=overlaps_df, group="test", tier="aggregate", thr=_THR
     )
-    _assert_identical(scalar, vec, "scalar_vs_vec_contended")
+    _assert_identical(scalar, product, "scalar_vs_product_contended")
+
+
+def test_scalar_equals_vectorised_on_cif_and_n_codons():
+    """`_assert_identical` only checks metric/call/eligibility — cif and
+    n_codons are first-class columns computed independently in both the
+    scalar (`score_elongation_event`) and vectorised (`score_elongation_batch`)
+    paths, and nothing else cross-checks that they actually agree. Three
+    blocks, deliberately varied in size/phase/strand/depth so a divergence
+    couldn't hide behind a degenerate case."""
+    events = pl.DataFrame(
+        [
+            {
+                "event_id": 1,
+                "type": "elongation",
+                "chrom": "chr1",
+                "start": 100,
+                "end": 190,
+                "strand": 1,
+                "phase": 0,
+            },
+            {
+                "event_id": 2,
+                "type": "elongation",
+                "chrom": "chr1",
+                "start": 300,
+                "end": 345,
+                "strand": 1,
+                "phase": 1,
+            },
+            {
+                "event_id": 3,
+                "type": "elongation",
+                "chrom": "chr1",
+                "start": 500,
+                "end": 700,
+                "strand": -1,
+                "phase": 2,
+            },
+        ],
+        schema={
+            "event_id": pl.UInt64,
+            "type": pl.Utf8,
+            "chrom": pl.Utf8,
+            "start": pl.Int64,
+            "end": pl.Int64,
+            "strand": pl.Int64,
+            "phase": pl.Int64,
+        },
+    )
+    cov = {}
+    cov.update({p: (25.0 if p % 3 == 0 else 4.0) for p in range(90, 200)})
+    cov.update({p: (12.0 if (p - 1) % 3 == 0 else 3.0) for p in range(290, 355)})
+    cov.update({p: (18.0 if p % 3 == 2 else 6.0) for p in range(490, 710)})
+    cov_df = pl.DataFrame(
+        {"pos": list(cov.keys()), "count": list(cov.values())},
+        schema={"pos": pl.Int64, "count": pl.Float64},
+    )
+
+    scalar = score_events_scalar(events, cov, group="g", tier="t", thr=_THR).sort("event_id")
+    vec = score_events(events, cov_df, group="g", tier="t", thr=_THR).sort("event_id")
+
+    assert scalar["cif"].to_list() == vec["cif"].to_list()
+    assert scalar["n_codons"].to_list() == vec["n_codons"].to_list()
+    # Sanity: the fixture actually exercises non-degenerate values, not all-None.
+    assert any(v is not None for v in scalar["cif"].to_list())
 
 
 # ---------------------------------------------------------------------------
@@ -575,7 +644,7 @@ def test_coverage_base_schema_and_duck_typing():
 
 def test_coverage_profile_apply_offsets_psite():
     """apply_offsets with site='P' adds P-site offset to tran_start_bam."""
-    from TranslonScorer.coverage.profile import apply_offsets
+    from TranslonScorer.coverage.psite_profile import apply_offsets
 
     reads = pl.DataFrame(
         {
@@ -595,7 +664,7 @@ def test_coverage_profile_apply_offsets_psite():
 
 def test_coverage_profile_apply_offsets_asite():
     """apply_offsets with site='A' adds P-site offset + 3."""
-    from TranslonScorer.coverage.profile import apply_offsets
+    from TranslonScorer.coverage.psite_profile import apply_offsets
 
     reads = pl.DataFrame(
         {
@@ -612,7 +681,7 @@ def test_coverage_profile_apply_offsets_asite():
 
 def test_coverage_profile_apply_offsets_empty():
     """apply_offsets on empty reads returns correct schema."""
-    from TranslonScorer.coverage.profile import apply_offsets
+    from TranslonScorer.coverage.psite_profile import apply_offsets
 
     reads = pl.DataFrame(
         schema={
@@ -632,8 +701,8 @@ def test_coverage_profile_prefix_sums_bit_identical():
     as the re-exported versions in scoring/run.py (bit-identical after migration)."""
     import numpy as np
 
-    from TranslonScorer.coverage.profile import _prefix_sums as prof_ps
-    from TranslonScorer.coverage.profile import _range_sums as prof_rs
+    from TranslonScorer.coverage.psite_profile import _prefix_sums as prof_ps
+    from TranslonScorer.coverage.psite_profile import _range_sums as prof_rs
     from TranslonScorer.scoring.run import _prefix_sums as run_ps
     from TranslonScorer.scoring.run import _range_sums as run_rs
 
@@ -691,10 +760,10 @@ def test_gapdh_golden_via_provider():
 
     # Score using both paths and assert bit-identical
     direct = score_events(
-        _gapdh_events(), _gapdh_coverage(), group="gapdh", tier="aggregate", thr=_THR
+        _gapdh_events(), _cov_df(_gapdh_coverage()), group="gapdh", tier="aggregate", thr=_THR
     )
     via_provider = score_events(
-        _gapdh_events(), cov_via_provider, group="gapdh", tier="aggregate", thr=_THR
+        _gapdh_events(), _cov_df(cov_via_provider), group="gapdh", tier="aggregate", thr=_THR
     )
     _assert_identical(direct, via_provider, "gapdh_via_provider")
 
@@ -708,7 +777,7 @@ def test_provider_capabilities():
     assert callable(getattr(provider, "size_factors", None))
     assert not hasattr(provider, "junction_support")
 
-    mp = MatrixProvider([])
+    mp = MatrixProvider([], psite_index_dir="/nonexistent/index")
     for method in ("coverage", "size_factors", "junction_support", "mappability_ledger"):
         assert callable(getattr(mp, method, None)), method
 
@@ -763,3 +832,101 @@ if __name__ == "__main__":
             f"  event={r['event_id']} type={r['aspect']} "
             f"elig={r['eligibility']} call={r['call']} metric={r['metric']:.4f}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Evidence-blob agreement
+#
+# _assert_identical deliberately compares only metric/call/eligibility, so the
+# evidence JSON -- overall_in_frame (== Chothani PIF), cif, breadth,
+# identifiability, competitor_share -- was entirely unpinned. Anything in there
+# could drift between the batched and scalar paths, or silently change shape
+# between releases, without a single test noticing. It is part of the published
+# output, so it gets the same treatment as the headline columns.
+# ---------------------------------------------------------------------------
+
+
+def _assert_evidence_identical(a: pl.DataFrame, b: pl.DataFrame, label: str) -> None:
+    import json as _j
+
+    key = ["event_id", "aspect"]
+    a, b = a.sort(key), b.sort(key)
+
+    def _same(x, y, path):
+        if isinstance(x, dict):
+            assert isinstance(y, dict) and x.keys() == y.keys(), f"[{label}] {path} keys differ"
+            for k in x:
+                _same(x[k], y[k], f"{path}.{k}")
+        elif isinstance(x, (int, float)) and not isinstance(x, bool):
+            assert y == pytest.approx(x), f"[{label}] {path}: {x} vs {y}"
+        else:
+            assert x == y, f"[{label}] {path}: {x!r} vs {y!r}"
+
+    for ra, rb in zip(a.iter_rows(named=True), b.iter_rows(named=True)):
+        ea, eb = _j.loads(ra["evidence"]), _j.loads(rb["evidence"])
+        assert ea.keys() == eb.keys(), (
+            f"[{label}] evidence keys differ for event {ra['event_id']}: "
+            f"{sorted(set(ea) ^ set(eb))}"
+        )
+        for k in ea:
+            _same(ea[k], eb[k], f"event {ra['event_id']}.{k}")
+
+
+def test_evidence_matches_between_batched_and_scalar_gapdh():
+    events = _gapdh_events()
+    cov_dict = _gapdh_coverage()
+    scalar = score_events_scalar(events, cov_dict, group="gapdh", tier="aggregate", thr=_THR)
+    product = score_events(events, _cov_df(cov_dict), group="gapdh", tier="aggregate", thr=_THR)
+    _assert_evidence_identical(scalar, product, "evidence_gapdh")
+
+
+def test_evidence_matches_between_batched_and_scalar_contended():
+    """The contended case is where the two CIF vector builds could diverge:
+    the batch path reads sorted sparse arrays, the scalar path a dict."""
+    events = _contend_events()
+    cov_dict = _contend_coverage()
+    scalar = score_events_scalar(
+        events,
+        cov_dict,
+        overlaps=_contend_overlaps_dict(),
+        group="test",
+        tier="aggregate",
+        thr=_THR,
+    )
+    product = score_events(
+        events,
+        _cov_df(cov_dict),
+        overlaps_df=_contend_overlaps_df(),
+        group="test",
+        tier="aggregate",
+        thr=_THR,
+    )
+    _assert_evidence_identical(scalar, product, "evidence_contended")
+
+
+def test_elongation_evidence_carries_pif_and_cif():
+    """Both signature scores are present and in range on a real fixture.
+
+    PIF (``overall_in_frame``) stays in the evidence JSON blob; CIF is a
+    first-class column (promoted alongside `n_codons` so translon-level
+    composition can weight by codon count -- see report.py) and must
+    therefore NOT also be duplicated into the evidence blob.
+    """
+    events = _gapdh_events()
+    product = score_events(
+        events, _cov_df(_gapdh_coverage()), group="gapdh", tier="aggregate", thr=_THR
+    )
+    import json as _j
+
+    elong = product.filter(pl.col("aspect") == "elongation")
+    assert elong.height > 0
+    for row in elong.iter_rows(named=True):
+        ev = _j.loads(row["evidence"])
+        assert "overall_in_frame" in ev, "PIF must be present under its existing name"
+        assert "cif" not in ev, "cif is a first-class column now, not duplicated in evidence JSON"
+        if ev["overall_in_frame"] is not None:
+            assert 0.0 <= ev["overall_in_frame"] <= 1.0
+        if row["cif"] is not None:
+            assert 0.0 <= row["cif"] <= 1.0
+        if row["n_codons"] is not None:
+            assert row["n_codons"] > 0

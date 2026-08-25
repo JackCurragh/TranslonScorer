@@ -1,0 +1,32 @@
+# Local data, caches and run outputs. data/ alone is multi-GB of cohort BAMs,
+# matrices and annotation — it must never enter the build context, let alone a
+# published image.
+data/
+outputs/
+# ...except the committed golden reference, which is a test fixture, not output.
+!outputs/reference_scores_gapdh.parquet
+runs/
+results/
+test_output/
+notebooks/
+bench/
+slurm/
+notes/
+
+# Build artefacts
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+
+# VCS, CI and local tooling
+.git/
+.github/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+coverage.xml
+.venv*/
+venv/

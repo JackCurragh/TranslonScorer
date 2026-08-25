@@ -158,15 +158,41 @@ def common_options(func):
 def cli():
     """TranslonScorer: identify and score translational events from Ribo-seq data.
 
-    Event-scoring workflow (recommended):
+    The event-scoring workflow:
       pipeline        one-shot: extract-events → score → report
-      extract-events  annotation sqlite → genomic event store
+      extract-events  any feature source → deduplicated genomic event store
       score-matrix    score events against the sparse annotation-scale matrix
       score-bams      score events against 1-20 genome/transcriptome BAMs
+      score-bigwig    score events against 1-20 bigWigs (coverage only)
       report          compose per-translon report + consequentiality
       consequential   re-gate an existing report under a policy
 
+    Two command groups hold work that is not part of that path:
+      research        frame-assignment experiments and method comparisons
+      legacy          the older ORF-composite workflow
+
     Run `translonscorer <command> --help` for details.
+    """
+
+
+@cli.group("research")
+def research():
+    """Experimental frame-assignment work and method comparisons.
+
+    These are research tools, not part of the scoring path: nothing under
+    `research` is imported by the scorer. They are grouped here so the
+    top-level surface stays the workflow, not deleted — the analyses they
+    support are live.
+    """
+
+
+@cli.group("legacy")
+def legacy():
+    """The older ORF-composite workflow (pre-event-scoring).
+
+    Self-contained: no module under `orf/` is imported by the event-scoring
+    spine. Grouped rather than removed — these commands still run and the
+    ORF-from-sequence work behind them is used.
     """
 
 
@@ -181,14 +207,17 @@ def cli():
     "--out-dir",
     "-o",
     required=True,
-    help="Output root; L0b written to <out-dir>/l0b/, L1 to <out-dir>/l1/.",
+    help="Output root; alignments written to <out-dir>/alignments/, counts to <out-dir>/counts/.",
 )
 @click.option("--genome-id", default="GRCh38.p14", show_default=True, help="Genome assembly ID.")
 @click.option(
     "--junction-set-id", default="GENCODE_v44", show_default=True, help="Junction set label."
 )
 @click.option(
-    "--l0a-version", default="2026-06", show_default=True, help="L0a data-release version."
+    "--source-data-version",
+    default="2026-06",
+    show_default=True,
+    help="Upstream read-data release version.",
 )
 @click.option(
     "--aligner-cfg-hash", default="default", show_default=True, help="Aligner config fingerprint."
@@ -200,7 +229,10 @@ def cli():
 )
 @click.option("--workers", default=4, show_default=True, help="Parallel chromosome workers.")
 @click.option(
-    "--samtools-threads", default=2, show_default=True, help="Threads per samtools call (L0b only)."
+    "--samtools-threads",
+    default=2,
+    show_default=True,
+    help="Threads per samtools call (alignment build only).",
 )
 @click.option(
     "--bam-glob",
@@ -211,32 +243,32 @@ def cli():
     "raw and a filtered BAM are present.",
 )
 @click.option(
-    "--skip-l0b",
+    "--skip-alignments",
     is_flag=True,
     default=False,
-    help="Skip L0b build (use when L0b already exists in <out-dir>/l0b/).",
+    help="Skip the alignment build (use when <out-dir>/alignments/ already exists).",
 )
 @click.option(
-    "--skip-l1",
+    "--skip-counts",
     is_flag=True,
     default=False,
-    help="Skip L1 build.",
+    help="Skip the count-table build.",
 )
 def build_cache(
     partition_dir,
     out_dir,
     genome_id,
     junction_set_id,
-    l0a_version,
+    source_data_version,
     aligner_cfg_hash,
     chroms,
     workers,
     samtools_threads,
     bam_glob,
-    skip_l0b,
-    skip_l1,
+    skip_alignments,
+    skip_counts,
 ):
-    """Build the durable evidence cache: L0b alignment loci + L1 raw 5′ positional index.
+    """Build the durable evidence cache: the alignment table + raw 5′ count tables.
 
     This is the one-time (per junction-set release) build that scans the partitioned BAMs
     and produces the Parquet artefacts everything else reads from.
@@ -253,7 +285,7 @@ def build_cache(
       translonscorer build-cache \\
         --partition-dir /data/global_partitioned \\
         --out-dir /cache/GRCh38_v44 \\
-        --skip-l0b \\
+        --skip-alignments \\
         --chroms chr1 --chroms chr2 \\
         --workers 4
     """
@@ -262,29 +294,29 @@ def build_cache(
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    from .l0b import build_l0b
-    from .l0b.contracts import VersionKey
-    from .l1 import build_l1
+    from .alignments import build_alignments
+    from .alignments.provenance import VersionKey
+    from .counts import build_counts
 
     key = VersionKey(
         genome_id=genome_id,
         aligner_cfg_hash=aligner_cfg_hash,
         junction_set_id=junction_set_id,
-        l0a_version=l0a_version,
+        source_data_version=source_data_version,
         multimap_policy="unique_only",
     )
 
     partition_path = Path(partition_dir)
     out_path = Path(out_dir)
-    l0b_path = out_path / "l0b"
-    l1_path = out_path / "l1"
+    alignment_path = out_path / "alignments"
+    count_path = out_path / "counts"
     chrom_list = list(chroms) or None
 
-    if not skip_l0b:
-        logging.info("=== Building L0b ===")
-        build_l0b(
+    if not skip_alignments:
+        logging.info("=== Building alignment table ===")
+        build_alignments(
             partition_path,
-            l0b_path,
+            alignment_path,
             key,
             chroms=chrom_list,
             workers=workers,
@@ -292,22 +324,24 @@ def build_cache(
             bam_glob=bam_glob,
         )
     else:
-        logging.info("Skipping L0b (--skip-l0b set); expecting shards in %s", l0b_path)
+        logging.info(
+            "Skipping alignments (--skip-alignments set); expecting shards in %s", alignment_path
+        )
 
-    if not skip_l1:
-        logging.info("=== Building L1 ===")
-        build_l1(
-            l0b_path,
+    if not skip_counts:
+        logging.info("=== Building count tables ===")
+        build_counts(
+            alignment_path,
             partition_path,
-            l1_path,
+            count_path,
             key,
             chroms=chrom_list,
             workers=workers,
         )
     else:
-        logging.info("Skipping L1 (--skip-l1 set)")
+        logging.info("Skipping counts (--skip-counts set)")
 
-    logging.info("Cache build complete. L0b → %s  L1 → %s", l0b_path, l1_path)
+    logging.info("Cache build complete. alignments → %s  counts → %s", alignment_path, count_path)
 
 
 @cli.command("process-bam")
@@ -535,8 +569,7 @@ def profiles(**kwargs):
     else:
         cds_df, exon_df = bam_handlers.getexons_and_cds(config.annotation)
 
-    from .coverage.locus_profiles import build_locus_profiles_zarr
-    from .coverage.profiles import (
+    from .coverage.cohort_profiles import (
         gene_expression_matrix_from_profiles,
         profiles_from_bam,
         profiles_from_bigwig,
@@ -544,6 +577,7 @@ def profiles(**kwargs):
         profiles_from_zarr,
         write_profiles_parquet,
     )
+    from .coverage.locus_profiles import build_locus_profiles_zarr
     from .coverage.transcript_coords import cds_to_transcript_space
 
     log_info(
@@ -832,64 +866,7 @@ def profiles(**kwargs):
             log_info(f"Frame support written to: {cfg.frame_support_out}")
 
 
-@cli.command("score-compare-frame")
-@click.option("--orfs", required=True, help="ORFs to score (CSV/TSV/Parquet).")
-@click.option("--exons", required=True, help="Transcript exon table (CSV/TSV/Parquet).")
-@click.option("--bigwig", required=True, help="BigWig coverage track.")
-@click.option(
-    "--frame-support",
-    "frame_support",
-    required=True,
-    help="Frame support Parquet from the profiles command.",
-)
-@click.option("--out-prefix", required=True, help="Output prefix for raw/frame/comparison tables.")
-@click.option(
-    "--profiles",
-    "profiles_path",
-    help="Optional transcript profiles Parquet for frame-weighted-count summaries.",
-)
-@click.option(
-    "--panel-manifest", help="Optional frozen panel manifest to merge onto ORFs before scoring."
-)
-@click.option("--scoring-method", type=click.Choice(["classic", "modern"]), default="modern")
-@click.option("--sru-range", type=int, default=15)
-@click.option("--label-column", help="Optional truth/category column for score-gap summaries.")
-@click.option("--max-workers", type=int, default=None)
-def score_compare_frame_cmd(
-    orfs: str,
-    exons: str,
-    bigwig: str,
-    frame_support: str,
-    out_prefix: str,
-    profiles_path: Optional[str],
-    panel_manifest: Optional[str],
-    scoring_method: str,
-    sru_range: int,
-    label_column: Optional[str],
-    max_workers: Optional[int],
-):
-    """Gate 1: compare raw ORF scores with frame-weighted scores."""
-    setup_logging()
-    from .orf.score_gates import compare_raw_frame_scoring
-
-    paths = compare_raw_frame_scoring(
-        orfs_path=orfs,
-        exons_path=exons,
-        bigwig_path=bigwig,
-        frame_support_path=frame_support,
-        out_prefix=out_prefix,
-        scoring_method=scoring_method,
-        sru_range=sru_range,
-        profiles_path=profiles_path,
-        panel_manifest_path=panel_manifest,
-        label_column=label_column,
-        max_workers=max_workers,
-    )
-    for label, path in paths.items():
-        log_info(f"{label}: {path}")
-
-
-@cli.command("validate-panel")
+@research.command("validate-panel")
 @click.option(
     "--panel-manifest", required=True, help="Panel manifest to validate/freeze (CSV/TSV/Parquet)."
 )
@@ -909,135 +886,7 @@ def validate_panel_cmd(panel_manifest: str, out_csv: Optional[str]):
         click.echo(report)
 
 
-@cli.command("score-compare-existing")
-@click.option("--raw-scores", required=True, help="Existing raw score table (CSV/TSV/Parquet).")
-@click.option(
-    "--frame-scores", required=True, help="Existing frame-weighted score table (CSV/TSV/Parquet)."
-)
-@click.option("--out-prefix", required=True, help="Output prefix for comparison tables.")
-@click.option("--label-column", help="Optional truth/category column for score-gap summaries.")
-def score_compare_existing_cmd(
-    raw_scores: str, frame_scores: str, out_prefix: str, label_column: Optional[str]
-):
-    """Compare already generated raw and frame-weighted score tables."""
-    setup_logging()
-    from .orf.score_gates import summarize_existing_score_pair
-
-    paths = summarize_existing_score_pair(
-        raw_scores_path=raw_scores,
-        frame_scores_path=frame_scores,
-        out_prefix=out_prefix,
-        label_column=label_column,
-    )
-    for label, path in paths.items():
-        log_info(f"{label}: {path}")
-
-
-@cli.command("compare-profiles")
-@click.option("--profile-a", required=True, help="First transcript profile table.")
-@click.option("--profile-b", required=True, help="Second transcript profile table.")
-@click.option("--out-prefix", required=True, help="Output prefix for profile comparison.")
-@click.option("--label-a", default="bigwig", help="Label for first profile table.")
-@click.option("--label-b", default="bam", help="Label for second profile table.")
-@click.option(
-    "--write-deltas/--no-write-deltas", default=False, help="Write per-position delta table."
-)
-def compare_profiles_cmd(
-    profile_a: str, profile_b: str, out_prefix: str, label_a: str, label_b: str, write_deltas: bool
-):
-    """Gate 2: compare two transcript-space profile tables."""
-    setup_logging()
-    from .orf.profile_compare import compare_profile_files
-
-    paths = compare_profile_files(
-        profile_a_path=profile_a,
-        profile_b_path=profile_b,
-        out_prefix=out_prefix,
-        label_a=label_a,
-        label_b=label_b,
-        write_deltas=write_deltas,
-    )
-    for label, path in paths.items():
-        log_info(f"{label}: {path}")
-
-
-@cli.command("compare-frame-methods")
-@click.option(
-    "--profiles",
-    required=True,
-    help="Transcript-space profile table with tran_id, pos, count[, length].",
-)
-@click.option(
-    "--cds",
-    "cds_path",
-    required=True,
-    help="Transcript-space CDS table with tran_id,start,stop or tran_start,tran_stop.",
-)
-@click.option(
-    "--out-prefix", required=True, help="Output prefix for frame-support and comparison tables."
-)
-@click.option(
-    "--methods",
-    default="linear,latent",
-    help="Comma-separated methods to compare; first is baseline.",
-)
-@click.option(
-    "--frame-by-length/--no-frame-by-length",
-    default=True,
-    help="Model frame leakage per read length when available.",
-)
-@click.option(
-    "--hmm-lambda", type=float, default=2.0, help="HMM smoothing strength for +hmm methods."
-)
-@click.option(
-    "--background",
-    type=click.Choice(["flat", "zero"]),
-    default="flat",
-    help="Background model for latent EM.",
-)
-@click.option(
-    "--trim-nt",
-    type=int,
-    default=30,
-    help="Trim this many nucleotides from CDS ends for validation summaries.",
-)
-@click.option(
-    "--write-validation-rows/--no-write-validation-rows",
-    default=False,
-    help="Write CDS-interior per-row validation tables.",
-)
-def compare_frame_methods_cmd(
-    profiles: str,
-    cds_path: str,
-    out_prefix: str,
-    methods: str,
-    frame_by_length: bool,
-    hmm_lambda: float,
-    background: str,
-    trim_nt: int,
-    write_validation_rows: bool,
-):
-    """Compare frame-only correction methods, e.g. linear versus latent EM."""
-    setup_logging()
-    from .frame.frame_method_compare import compare_frame_methods
-
-    method_list = [m.strip().lower() for m in methods.split(",") if m.strip()]
-    paths = compare_frame_methods(
-        profiles_path=profiles,
-        cds_path=cds_path,
-        out_prefix=out_prefix,
-        methods=method_list,
-        frame_by_length=frame_by_length,
-        hmm_lambda=hmm_lambda,
-        background=background,
-        trim_nt=trim_nt,
-        write_validation_rows=write_validation_rows,
-    )
-    for label, path in paths.items():
-        log_info(f"{label}: {path}")
-
-
-@cli.command("export-rdg-flux")
+@research.command("export-rdg-flux")
 @click.option(
     "--profiles",
     required=True,
@@ -1140,7 +989,7 @@ def export_rdg_flux_cmd(
 ):
     """Export RDG-Flux v1 per-position frame posterior substrate."""
     setup_logging()
-    from .orf.rdg_flux_export import export_rdg_flux_v1
+    from .frame.rdg_flux_export import export_rdg_flux_v1
 
     paths = export_rdg_flux_v1(
         profiles_path=profiles,
@@ -1167,62 +1016,7 @@ def export_rdg_flux_cmd(
         log_info(f"{label}: {path}")
 
 
-@cli.command("frame-disambiguation")
-@click.option("--bam", help="BAM to project onto transcript candidates.")
-@click.option("--annotation", "-a", help="GTF annotation used for transcript models.")
-@click.option(
-    "--candidates",
-    help="Precomputed candidate table with read_key, tran_id, and transcript position.",
-)
-@click.option("--cds", "cds_path", help="Transcript-space CDS table for --candidates mode.")
-@click.option("--out-prefix", required=True, help="Output prefix for disambiguation tables.")
-@click.option("--bam-collapsed", is_flag=True, default=False)
-@click.option("--bam-count-from", type=click.Choice(["name", "tag"]))
-@click.option("--bam-count-pattern")
-@click.option("--bam-count-tag")
-def frame_disambiguation_cmd(
-    bam: Optional[str],
-    annotation: Optional[str],
-    candidates: Optional[str],
-    cds_path: Optional[str],
-    out_prefix: str,
-    bam_collapsed: bool,
-    bam_count_from: Optional[str],
-    bam_count_pattern: Optional[str],
-    bam_count_tag: Optional[str],
-):
-    """Gate 3: quantify frame-discordant ambiguous read assignments."""
-    setup_logging()
-    from .frame.frame_disambiguation import (
-        frame_disambiguation_from_bam,
-        frame_disambiguation_from_candidates,
-    )
-
-    if candidates:
-        if not cds_path:
-            raise click.BadParameter("--cds is required with --candidates")
-        paths = frame_disambiguation_from_candidates(
-            candidates_path=candidates,
-            cds_path=cds_path,
-            out_prefix=out_prefix,
-        )
-    else:
-        if not bam or not annotation:
-            raise click.BadParameter("Provide either --candidates + --cds or --bam + --annotation")
-        paths = frame_disambiguation_from_bam(
-            bam_path=bam,
-            annotation_path=annotation,
-            out_prefix=out_prefix,
-            collapsed=bam_collapsed,
-            count_from=bam_count_from,
-            count_pattern=bam_count_pattern,
-            count_tag=bam_count_tag,
-        )
-    for label, path in paths.items():
-        log_info(f"{label}: {path}")
-
-
-@cli.command("compare-read-assignment")
+@research.command("compare-read-assignment")
 @click.option(
     "--candidates",
     required=True,
@@ -1341,23 +1135,6 @@ def compare_read_assignment_cmd(
         log_info(f"{label}: {path}")
 
 
-@cli.command("plot")
-@click.option("--scored-orfs", "-s", required=True, help="CSV file of scored ORFs")
-@click.option("--bigwig", "-w", required=True, help="BigWig file containing Ribo-seq coverage")
-@click.option("--exons", "-e", required=True, help="CSV file containing exon positions")
-@click.option(
-    "--plot-range", default=30, type=int, help="Plot range around start position (default: 30)"
-)
-@click.option("--output", "-o", required=True, help="Base name for output files")
-def plot(scored_orfs: str, bigwig: str, exons: str, plot_range: int, output: str):
-    """Generate visualization reports from scored ORFs."""
-    setup_logging()
-    from .visualization import plots
-
-    plots.plottop10(scored_orfs, bigwig, exons, plot_range, output)
-    log_info("Report generation complete!")
-
-
 @cli.command("index-from-bam")
 @click.option("--bam", "-b", required=True, help="Input BAM used to align reads.")
 @click.option(
@@ -1406,7 +1183,7 @@ def index_from_bam_cmd(
     log_info(f"Read index written: {path}")
 
 
-@cli.command("orfs-import")
+@legacy.command("orfs-import")
 @click.option("--bed12", required=True, help="Input ORFs in BED12 format.")
 @click.option(
     "--annotation", "-a", required=True, help="GTF annotation file for exon/transcript models."
@@ -1491,7 +1268,7 @@ def features(
         log_info("Legacy feature tables written")
 
 
-@cli.command("assemble")
+@legacy.command("assemble")
 @click.option(
     "--orfs-parquet", required=True, help="ORF candidates with composite scores (Parquet)."
 )
@@ -1501,13 +1278,13 @@ def features(
 def assemble_cmd(orfs_parquet: str, out_parquet: str, solver: str, timeout_sec: int):
     """Assemble a locus translome by selecting a consistent set of ORFs under soft penalties."""
     setup_logging()
-    from .orf.assemble import assemble_translome
+    from .assemble import assemble_translome
 
     assemble_translome(orfs_parquet, out_parquet, solver=solver, timeout_sec=timeout_sec)
     log_info("Translome assembly complete")
 
 
-@cli.command("map-orfs")
+@legacy.command("map-orfs")
 @click.option(
     "--orfs",
     "orfs_parquet",
@@ -1876,13 +1653,6 @@ def build_matrix_cache_cmd(matrix_dir, n_workers):
 )
 @click.option("--annotation-version", default="", help="Annotation version stamped into the store.")
 @click.option(
-    "--ref-offset",
-    type=int,
-    default=15,
-    show_default=True,
-    help="P-site offset used when the matrix was built.",
-)
-@click.option(
     "--sample",
     "sample_names",
     multiple=True,
@@ -1899,29 +1669,16 @@ def build_matrix_cache_cmd(matrix_dir, n_workers):
     "--n-workers", type=int, default=None, help="Worker processes for partition scanning."
 )
 @click.option(
-    "--gtf",
-    default=None,
-    help=(
-        "GTF annotation file.  When provided the FrameRollup scoring path is used: "
-        "reads are projected to transcriptome coordinates, P-site offsets are "
-        "calibrated per (sample, length), and frame scoring is offset-correct. "
-        "ELONGATION ONLY (no init/term/junction/mappability). Prefer --psite-index "
-        "WITHOUT --gtf instead: same offset accuracy, every event type, one pipeline."
-    ),
-)
-@click.option(
     "--psite-index",
     "psite_index_dir",
-    default=None,
+    required=True,
     help=(
-        "Directory produced by build-psite-index. Meaning depends on --gtf: "
-        "WITH --gtf (legacy) — offsets feed the FrameRollup path (elongation only). "
-        "WITHOUT --gtf (recommended) — coverage is read directly from the P-site "
-        "index (per-(sample, length) offset-corrected genomic positions), scoring "
-        "every event type (init/term/elongation/junction) with the same accuracy "
-        "fix, through the normal pipeline (splice-aware flanks, mappability, etc. "
-        "all apply). Either way, (sample, length) pairs listed in "
-        "usable_sample_lengths.parquet (if present in the index dir) are honoured."
+        "Directory produced by build-psite-index. Coverage is read from it as "
+        "per-(sample, length) offset-corrected genomic positions — the only "
+        "matrix coverage strategy, because a flat offset across read lengths "
+        "collapses elong_in_frame to the ~0.33 random floor. (sample, length) "
+        "pairs listed in usable_sample_lengths.parquet (if present in the index "
+        "dir) are honoured."
     ),
 )
 @click.option(
@@ -1952,11 +1709,9 @@ def score_matrix_cmd(
     store_dir,
     data_version,
     annotation_version,
-    ref_offset,
     sample_names,
     site,
     n_workers,
-    gtf,
     psite_index_dir,
     context_gtf,
     mappability_bigwig,
@@ -1966,15 +1721,13 @@ def score_matrix_cmd(
     The matrix is sharded by read sequence; point --matrix-dir at the root and
     all partitions are scanned together (there is no valid single-partition use).
 
-    Three modes: --psite-index alone (RECOMMENDED — accurate per-(sample,length)
-    offsets, every event type); --gtf (+ optional --psite-index for offsets) —
-    the older FrameRollup path, elongation only, kept for backwards
-    compatibility; neither — legacy flat-offset path (frame scoring may be
-    inaccurate; --ref-offset applies).
+    Coverage always comes from --psite-index (build it with build-psite-index),
+    giving per-(sample, length) offset-corrected positions and scoring every
+    event type through the same pipeline as score-bams / score-bigwig.
     """
     setup_logging()
     from .io.matrix import discover_partitions
-    from .workflows import score_matrix_rollup_workflow, score_matrix_workflow
+    from .workflows import score_matrix_workflow
 
     if bool(matrix_dir) == bool(partitions):
         raise click.BadParameter(
@@ -1984,58 +1737,20 @@ def score_matrix_cmd(
         [str(p) for p in discover_partitions(matrix_dir)] if matrix_dir else list(partitions)
     )
     log_info(f"Scoring against {len(part_dirs)} matrix partitions")
+    log_info(f"Reading offset-corrected coverage from P-site index {psite_index_dir}")
 
-    if gtf:
-        from .io.annotation import build_cds_blocks
-
-        if context_gtf:
-            log_info(
-                "--context-gtf is ignored on the FrameRollup path (--gtf): "
-                "init/term are not scored there yet, only elongation."
-            )
-        if mappability_bigwig:
-            log_info(
-                "--mappability-bigwig is ignored on the FrameRollup path (--gtf): "
-                "not wired into score_matrix_rollup_workflow."
-            )
-        log_info(
-            "Tip: --psite-index without --gtf now gives the same offset accuracy "
-            "plus init/term/junction/mappability in one pass; --gtf/FrameRollup is "
-            "elongation-only and kept for backwards compatibility."
-        )
-        log_info(f"FrameRollup path: loading CDS from {gtf}")
-        cds_df = build_cds_blocks(gtf)
-        written = score_matrix_rollup_workflow(
-            events_dir,
-            part_dirs,
-            store_dir,
-            cds_df,
-            data_version=data_version,
-            annotation_version=annotation_version,
-            sample_names=list(sample_names) or None,
-            n_workers=n_workers,
-            psite_index_dir=psite_index_dir,
-        )
-    else:
-        if psite_index_dir:
-            log_info(f"P-site index path: reading offset-corrected coverage from {psite_index_dir}")
-        else:
-            log_info(
-                "Legacy flat-offset path (no --gtf/--psite-index); frame scoring may be inaccurate"
-            )
-        written = score_matrix_workflow(
-            events_dir,
-            part_dirs,
-            store_dir,
-            data_version=data_version,
-            annotation_version=annotation_version,
-            ref_offset=ref_offset,
-            psite_index_dir=psite_index_dir,
-            sample_names=list(sample_names) or None,
-            n_workers=n_workers,
-            context_gtf=context_gtf,
-            mappability_bigwig=mappability_bigwig,
-        )
+    written = score_matrix_workflow(
+        events_dir,
+        part_dirs,
+        store_dir,
+        data_version=data_version,
+        annotation_version=annotation_version,
+        psite_index_dir=psite_index_dir,
+        sample_names=list(sample_names) or None,
+        n_workers=n_workers,
+        context_gtf=context_gtf,
+        mappability_bigwig=mappability_bigwig,
+    )
     log_info(f"Scores written: {written or '(no events scored)'}")
 
 
@@ -2435,6 +2150,30 @@ def consequential_cmd(
     "--bam", "bams", multiple=True, help="Genome/transcriptome BAM (repeatable) → BAM mode."
 )
 @click.option(
+    "--bigwig",
+    "bigwigs",
+    multiple=True,
+    help=(
+        "Unstranded genomic bigwig (repeatable, 1-N samples) → bigwig mode. "
+        "Prefer --forward-bigwig/--reverse-bigwig: Ribo-seq is stranded and an "
+        "unstranded track mixes +/- signal at every position. NOTE: bigwig "
+        "coverage cannot score junction events (no read-level splice info) — "
+        "they are recorded INSUFFICIENT."
+    ),
+)
+@click.option(
+    "--forward-bigwig",
+    "forward_bigwigs",
+    multiple=True,
+    help="Forward/plus-strand bigwig (repeatable; Nth pairs with Nth --reverse-bigwig).",
+)
+@click.option(
+    "--reverse-bigwig",
+    "reverse_bigwigs",
+    multiple=True,
+    help="Reverse/minus-strand bigwig (repeatable; pairs with --forward-bigwig).",
+)
+@click.option(
     "--chrom", "chroms", multiple=True, help="Restrict to chromosome(s) (repeatable; default: all)."
 )
 @click.option(
@@ -2495,27 +2234,6 @@ def consequential_cmd(
     help="Consequential expression-percentile floor.",
 )
 @click.option(
-    "--cds-bigbed",
-    "cds_bigbed_path",
-    default=None,
-    help=(
-        "BigBed file providing CDS exon structure for FrameRollup scoring "
-        "(calibrated per-sample P-site offsets, transcriptome-coordinate frame "
-        "scoring).  Pass the same BigBed used as the feature source (--bigbed) "
-        "or a separate CDS annotation BigBed.  Activates the FrameRollup path "
-        "instead of the legacy flat-offset path."
-    ),
-)
-@click.option(
-    "--cds-gtf",
-    "cds_gtf_path",
-    default=None,
-    help=(
-        "GTF file providing CDS exon structure for FrameRollup scoring. "
-        "Use instead of --cds-bigbed when the feature source is a GTF or sqlite."
-    ),
-)
-@click.option(
     "--n-workers", type=int, default=None, help="Worker processes for matrix partition scanning."
 )
 @click.option(
@@ -2544,8 +2262,7 @@ def consequential_cmd(
     help=(
         "Precomputed mappability track (Umap/GEM-mappability style bigwig, values "
         "~0..1). Annotates every scored event with a diagnostic map_track_mean/"
-        "map_track_low, surfaced in the report — never affects eligibility/call. "
-        "Ignored on the FrameRollup path (--cds-bigbed/--cds-gtf)."
+        "map_track_low, surfaced in the report — never affects eligibility/call."
     ),
 )
 @click.option(
@@ -2553,12 +2270,10 @@ def consequential_cmd(
     "psite_index_dir",
     default=None,
     help=(
-        "Directory produced by build-psite-index (matrix mode). Routes coverage "
-        "through per-(sample, length) offset-corrected genomic positions instead "
-        "of a flat offset — fixes the elong_in_frame accuracy floor while still "
-        "scoring init/term/junction/mappability. RECOMMENDED over --cds-bigbed/"
-        "--cds-gtf (FrameRollup), which is elongation-only; ignored when either "
-        "of those is also given (FrameRollup takes precedence, unchanged)."
+        "Directory produced by build-psite-index. REQUIRED in matrix mode "
+        "(--matrix-dir): supplies the per-(sample, length) offset-corrected "
+        "genomic coverage. Not used in BAM mode, which calibrates its own "
+        "offsets (see --offset-method)."
     ),
 )
 def pipeline_cmd(
@@ -2573,6 +2288,9 @@ def pipeline_cmd(
     stop_codons,
     matrix_dir,
     bams,
+    bigwigs,
+    forward_bigwigs,
+    reverse_bigwigs,
     chroms,
     data_version,
     annotation_version,
@@ -2585,29 +2303,50 @@ def pipeline_cmd(
     annotation,
     min_tier_confidence,
     min_expression_percentile,
-    cds_bigbed_path,
-    cds_gtf_path,
     n_workers,
     context_gtf,
     context_flank,
     mappability_bigwig,
     psite_index_dir,
 ):
-    """One-shot event-scoring run: extract-events → score (matrix or BAMs) → report.
+    """One-shot event-scoring run: extract-events → score → report.
 
     Feature source (exactly one): --gtf / --bed12 / --bigbed / --fasta / --sqlite.
-    Coverage source (exactly one): --matrix-dir (whole sharded matrix) or --bam
-    (1-20 BAMs). Equivalent to running extract-events, score-matrix/score-bams and
-    report in sequence, into one output directory.
+    Coverage source (exactly one): --matrix-dir (whole sharded matrix), --bam
+    (1-20 BAMs), or bigwigs (--bigwig, or --forward-bigwig/--reverse-bigwig
+    pairs). Equivalent to running extract-events, score-matrix/score-bams/
+    score-bigwig and report in sequence, into one output directory.
+
+    Bigwig is the simplest source — no offsets to calibrate, no index to build —
+    and the most lossy: no P/A-site distinction and NO junction scoring, so
+    junction events come back INSUFFICIENT (unassessable, not unsupported).
     """
     setup_logging()
     from .io.matrix import discover_partitions
     from .model import ConsequentialityPolicy, OffsetParams
     from .workflows import pipeline_workflow
 
-    if bool(matrix_dir) == bool(bams):
+    if forward_bigwigs or reverse_bigwigs:
+        if len(forward_bigwigs) != len(reverse_bigwigs):
+            raise click.BadParameter(
+                f"--forward-bigwig and --reverse-bigwig must be given in pairs "
+                f"(got {len(forward_bigwigs)} forward, {len(reverse_bigwigs)} reverse)"
+            )
+        if bigwigs:
+            raise click.BadParameter(
+                "use either --bigwig (unstranded) or --forward-bigwig/--reverse-bigwig "
+                "(stranded), not both"
+            )
+    stranded = bool(forward_bigwigs)
+    bigwig_arg = (
+        [{"forward": f, "reverse": r} for f, r in zip(forward_bigwigs, reverse_bigwigs)]
+        if stranded
+        else list(bigwigs)
+    )
+    if sum(bool(x) for x in (matrix_dir, bams, bigwig_arg)) != 1:
         raise click.BadParameter(
-            "provide exactly one of --matrix-dir (matrix mode) or --bam (BAM mode)"
+            "provide exactly one coverage source: --matrix-dir (matrix mode), --bam "
+            "(BAM mode), or --bigwig / --forward-bigwig+--reverse-bigwig (bigwig mode)"
         )
     n_src = sum(bool(x) for x in (gtf_path, bed12_path, bigbed_path, fasta_path, sqlite_path))
     if n_src != 1:
@@ -2616,6 +2355,10 @@ def pipeline_cmd(
         )
     partition_dirs = [str(p) for p in discover_partitions(matrix_dir)] if matrix_dir else None
     if partition_dirs:
+        if not psite_index_dir:
+            raise click.BadParameter(
+                "matrix mode requires --psite-index (build it with build-psite-index)"
+            )
         log_info(f"Scoring against {len(partition_dirs)} matrix partitions")
     exon_df = None
     if transcriptome:
@@ -2628,24 +2371,12 @@ def pipeline_cmd(
         min_tier_confidence=min_tier_confidence,
         min_expression_percentile=min_expression_percentile,
     )
-    cds_df = None
-    if cds_bigbed_path or cds_gtf_path:
-        if cds_bigbed_path and cds_gtf_path:
-            raise click.BadParameter("provide only one of --cds-bigbed or --cds-gtf, not both")
-        if cds_bigbed_path:
-            from .io.annotation import build_cds_blocks_from_bigbed
-
-            log_info(f"FrameRollup path: loading CDS blocks from BigBed {cds_bigbed_path}")
-            cds_df = build_cds_blocks_from_bigbed(cds_bigbed_path)
-        else:
-            from .io.annotation import build_cds_blocks
-
-            log_info(f"FrameRollup path: loading CDS blocks from GTF {cds_gtf_path}")
-            cds_df = build_cds_blocks(cds_gtf_path)
     paths = pipeline_workflow(
         out_dir,
         partition_dirs=partition_dirs,
         bams=list(bams) or None,
+        bigwigs=bigwig_arg or None,
+        stranded=stranded,
         data_version=data_version,
         chroms=list(chroms) or None,
         annotation_version=annotation_version,
@@ -2655,7 +2386,6 @@ def pipeline_cmd(
         sample_names=list(sample_names) or None,
         site=site,
         transcriptome=transcriptome,
-        cds_df=cds_df,
         n_workers=n_workers,
         exon_df=exon_df,
         policy=policy,

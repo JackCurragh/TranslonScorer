@@ -7,7 +7,7 @@ Architecture contract (non-negotiable)
    called lazily and its result cached; downstream `coverage()` calls reuse
    the cached offset table without recomputing.
 2. Profile generation is then pure: reads + offset table + site → positions.
-   The pure function `coverage.profile.apply_offsets` is used for this.
+   The pure function `coverage.psite_profile.apply_offsets` is used for this.
 3. A-site = P-site + 3 nt by default unless the offset table specifies a
    distinct A-site column (future extension).
 4. Unique mappers by default; multimappers recorded in mappability_ledger.
@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import polars as pl
 
 from TranslonScorer.coverage.base import MAPPABILITY_LEDGER_SCHEMA
-from TranslonScorer.coverage.profile import site_position
+from TranslonScorer.coverage.psite_profile import site_position
 from TranslonScorer.model import OffsetParams, Region
 from TranslonScorer.offsets import global_offsets, make_offset_table, metagene_offsets
 
@@ -423,7 +423,7 @@ class BamSetProvider:
         if not rows:
             return pl.DataFrame(schema=out_schema)
 
-        df = pl.DataFrame(rows)
+        df = _junction_rows_to_df(rows, out_schema, by_sample)
         group_cols = ["junction_id", "kind"] + (["sample_id"] if by_sample else [])
         return df.group_by(group_cols).agg(pl.col("count").sum()).sort("junction_id")
 
@@ -439,6 +439,30 @@ class BamSetProvider:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _junction_rows_to_df(rows: List[dict], out_schema: dict, by_sample: bool) -> pl.DataFrame:
+    """Build the junction-support DataFrame from raw row dicts.
+
+    Junction IDs are a deterministic hash (see events.py) and can exceed
+    signed Int64 -- roughly half of them will, since the hash is
+    ~uniform over the full 64-bit space. ``pl.DataFrame(rows)`` infers a
+    column's dtype from only the first ``infer_schema_length`` rows
+    (default 100); if those happen to be small, a later large ID doesn't
+    just get mis-typed, it raises: building each column as a plain Python
+    list first and passing ``schema=out_schema`` explicitly bypasses that
+    row-sampling inference entirely, so the declared UInt64 dtype is used
+    for the whole column regardless of which rows are large.
+    """
+    return pl.DataFrame(
+        {
+            "junction_id": [int(r["junction_id"]) for r in rows],
+            "kind": [str(r["kind"]) for r in rows],
+            "count": [float(r["count"]) for r in rows],
+            **({"sample_id": [str(r["sample_id"]) for r in rows]} if by_sample else {}),
+        },
+        schema=out_schema,
+    )
 
 
 def _resolve_chrom(chrom: str, refs: set) -> Optional[str]:

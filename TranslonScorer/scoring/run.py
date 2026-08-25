@@ -1,18 +1,16 @@
-"""End-to-end event scoring: scalar reference and vectorised batch orchestration.
+"""End-to-end event scoring.
 
-score_events           — scalar reference scorer (one event at a time)
-score_events_vectorised — vectorised scorer (elongation via prefix sums)
-score_elongation_batch — vectorised elongation kernel (reusable)
-
-Prefix-sum helpers (_prefix_sums, _range_sums) will migrate to
-coverage/profile.py in T10 when the coverage provider layer is built.
+One scorer for every coverage source. Elongation is batched through prefix
+sums; init/term/junction are a per-event loop. An independent scalar
+implementation is kept in ``tests/reference_scorer.py`` and diffed against
+this one — deliberately outside product code, so there is only ever one
+scoring path shipping.
 
 Public API
 ----------
 DEFAULT_THRESHOLDS      — default ScoreThresholds instance
-score_elongation_batch  — vectorised elongation: prefix sums → {event_id: dict}
-score_events            — scalar reference scorer → pl.DataFrame
-score_events_vectorised — vectorised scorer → pl.DataFrame
+score_elongation_batch  — batched elongation: prefix sums → {event_id: dict}
+score_events            — score an event table against coverage → pl.DataFrame
 """
 
 from __future__ import annotations
@@ -25,95 +23,32 @@ import polars as pl
 from TranslonScorer.events import SpliceContext
 from TranslonScorer.model import ScoreThresholds
 from TranslonScorer.scoring.aspects import (
-    score_elongation_event,
+    _elong_body_uniformity,
+    _elong_frame_chisq,
     score_initiation_event,
     score_junction_event,
     score_termination_event,
 )
+from TranslonScorer.scoring.attribution import compose_confidence
 from TranslonScorer.scoring.evidence import (
     _RECORD_SCHEMA,
     _elong_evidence,
     event_record,
+)
+from TranslonScorer.scoring.signature import (
+    cif,
+    cif_codon_contiguity,
+    cif_codon_significance,
+    orf_signal_vector,
 )
 
 DEFAULT_THRESHOLDS = ScoreThresholds()
 
 
 # ---------------------------------------------------------------------------
-# FrameRollup-based elongation scorer (Step 2 — NFR2 path)
-# ---------------------------------------------------------------------------
-
-
-def score_elongation_from_rollup(
-    events: pl.DataFrame,
-    scored_rollup: pl.DataFrame,
-    *,
-    thr: ScoreThresholds = DEFAULT_THRESHOLDS,
-) -> Dict[int, dict]:
-    """Map FrameRollup scores (feature-level) to elongation evidence per event_id.
-
-    `scored_rollup` is the output of score_frame_rollup: columns
-    (sample_name, feature_id, length, n_reads, frame0_count, elong_in_frame, ...).
-    For each elongation event, aggregates across samples and lengths to produce
-    an overall elong_in_frame metric, then applies eligibility/call thresholds.
-
-    Contention and per-position breadth are not available from the rollup;
-    identifiability is None and breadth is 1.0 (rollup covers the full CDS span).
-    """
-    if events.is_empty() or scored_rollup.is_empty():
-        return {}
-
-    # Aggregate scored_rollup to feature level: weighted elong_in_frame
-    agg = (
-        scored_rollup.group_by("feature_id")
-        .agg(
-            pl.col("n_reads").sum().alias("n_reads"),
-            pl.col("frame0_count").sum().alias("frame0_count"),
-        )
-        .with_columns((pl.col("frame0_count") / pl.col("n_reads")).alias("elong_in_frame"))
-    )
-    fid_to_row = {r["feature_id"]: r for r in agg.iter_rows(named=True)}
-
-    elong = events.filter(pl.col("type") == "elongation")
-    out: Dict[int, dict] = {}
-    for r in elong.iter_rows(named=True):
-        eid = r["event_id"]
-        fid = r.get("feature_id")
-        score_row = fid_to_row.get(fid)
-        n = float(score_row["n_reads"]) if score_row else 0.0
-        metric = float(score_row["elong_in_frame"]) if score_row else 0.0
-        span_nt = int(r["end"] - r["start"])
-
-        if n < thr.min_reads:
-            eligibility, call = "INSUFFICIENT", None
-        elif metric >= thr.elong_in_frame:
-            eligibility, call = "ELIGIBLE", "SUPPORTED"
-        else:
-            eligibility, call = "ELIGIBLE", "UNSUPPORTED"
-
-        out[int(eid)] = {
-            "n_reads": n,
-            "covered_nt": 0,
-            "metric": metric,
-            "metric_name": "elong_in_frame",
-            "overall_in_frame": metric,
-            "breadth": 1.0,
-            "span_nt": span_nt,
-            "clean_in_frame": metric,
-            "contended_nt": 0,
-            "identifiability": None,
-            "competitor_share": {},
-            "noise_share": 0.0,
-            "eligibility": eligibility,
-            "call": call,
-        }
-    return out
-
-
-# ---------------------------------------------------------------------------
 # Prefix-sum helpers — canonical implementation in coverage/profile.py
 # ---------------------------------------------------------------------------
-from TranslonScorer.coverage.profile import (  # noqa: E402, F401
+from TranslonScorer.coverage.psite_profile import (  # noqa: E402, F401
     _prefix_sums,
     _range_sums,
 )
@@ -214,6 +149,10 @@ def score_elongation_batch(
     if elong.is_empty():
         return {}
     pos_sorted, cum_total, cum_by_frame = _prefix_sums(cov_pos, cov_cnt)
+    # cum_total is a prefix array (len n+1, [0] = 0), so this recovers the
+    # sorted counts without a second argsort. Needed because CIF is per-codon
+    # and cannot be derived from event-level frame sums.
+    cnt_sorted = _np.diff(cum_total)
     event_ids = elong["event_id"].to_numpy()
     starts = elong["start"].to_numpy().astype(_np.int64)
     ends = elong["end"].to_numpy().astype(_np.int64)
@@ -248,6 +187,18 @@ def score_elongation_batch(
         clean_in_frame = float(
             frame_reads[row][expected_frame[row]] - contended_frame[row][expected_frame[row]]
         )
+        vec = orf_signal_vector(
+            pos_sorted,
+            cnt_sorted,
+            int(starts[row]),
+            int(ends[row]),
+            int(expected_frame[row]),
+            int(strand[row]),
+        )
+        cif_sig = cif_codon_significance(
+            vec, min_reads=thr.cif_codon_min_reads, alpha=thr.periodicity_significance_alpha
+        )
+        cif_contig = cif_codon_contiguity(cif_sig["sig_mask"]) if cif_sig else None
         out[int(event_id)] = _elong_evidence(
             float(total_reads[row]),
             int(covered_positions[row]),
@@ -260,6 +211,12 @@ def score_elongation_batch(
             int(contended_nt[row]),
             int(ends[row] - starts[row]),
             thr,
+            cif_value=cif(vec),
+            n_codons=(len(vec) // 3) if len(vec) else None,
+            frame_chisq_p=_elong_frame_chisq(frame_reads[row].tolist()),
+            cif_significance=cif_sig,
+            cif_contiguity=cif_contig,
+            body_uniformity_p=_elong_body_uniformity(vec, min_codons=thr.elong_uniformity_min_codons),
         )
     return out
 
@@ -271,80 +228,6 @@ def score_elongation_batch(
 
 def score_events(
     events: pl.DataFrame,
-    coverage: Dict[int, float],
-    *,
-    overlaps: Optional[Dict[int, list]] = None,
-    junction_support: Optional[Dict[int, dict]] = None,
-    group: str = "aggregate",
-    tier: str = "aggregate",
-    thr: ScoreThresholds = DEFAULT_THRESHOLDS,
-    splice_context: Optional[SpliceContext] = None,
-    map_track: Optional[Dict[int, dict]] = None,
-) -> pl.DataFrame:
-    """Reference scorer: score every event in `events` → granular long-form table.
-
-    events columns: event_id, type, start, end, strand, phase[, chrom].
-    overlaps: {elongation event_id → [(o_start, o_end, competitor_phase, competitor_id)]}.
-    junction_support: {junction event_id → spanning count}.
-    splice_context: optional {(chrom, strand) → [(donor, acceptor), ...]} (see
-        events.build_splice_context). When given (and events carries a
-        `chrom` column), init/term leader/UTR flanks are projected across
-        nearby introns instead of read as raw flanking genomic bases.
-    map_track: optional {event_id → {"map_track_mean": float, "map_track_low":
-        bool}} (see workflows._map_track_for_chrom) — a region-context
-        mappability annotation, merged into every event type uniformly. Never
-        affects eligibility/call.
-
-    Scalar reference implementation; score_events_vectorised must reproduce this.
-    """
-    overlaps = overlaps or {}
-    junction_support = junction_support or {}
-    map_track = map_track or {}
-    rows: List[dict] = []
-    for r in events.iter_rows(named=True):
-        t, eid = r["type"], r["event_id"]
-        if t == "init":
-            raw = score_initiation_event(
-                r["start"],
-                r["strand"],
-                coverage,
-                thr=thr,
-                chrom=r.get("chrom"),
-                splice_context=splice_context,
-            )
-        elif t == "term":
-            raw = score_termination_event(
-                r["start"],
-                r["strand"],
-                coverage,
-                thr=thr,
-                chrom=r.get("chrom"),
-                splice_context=splice_context,
-            )
-        elif t == "elongation":
-            raw = score_elongation_event(
-                r["start"],
-                r["end"],
-                r["phase"],
-                r["strand"],
-                coverage,
-                overlaps.get(eid),
-                thr=thr,
-            )
-        elif t == "junction":
-            raw = score_junction_event(junction_support.get(eid, {}), thr=thr)
-        else:
-            continue
-        if eid in map_track:
-            raw = {**raw, **map_track[eid]}
-        rows.append(event_record(eid, t, group, tier, raw, thr.version))
-    return (
-        pl.from_dicts(rows, schema=_RECORD_SCHEMA) if rows else pl.DataFrame(schema=_RECORD_SCHEMA)
-    )
-
-
-def score_events_vectorised(
-    events: pl.DataFrame,
     cov_df: pl.DataFrame,
     *,
     overlaps_df: Optional[pl.DataFrame] = None,
@@ -355,15 +238,27 @@ def score_events_vectorised(
     splice_context: Optional[SpliceContext] = None,
     map_track: Optional[Dict[int, dict]] = None,
 ) -> pl.DataFrame:
-    """Vectorised scorer: elongation via prefix sums, init/term scalar.
+    """Score every event in `events` → granular long-form table.
 
-    cov_df columns: pos (Int64), count (Float64).
-    overlaps_df columns: event_id, other_event_id, overlap_start, overlap_end, comp_phase.
-    splice_context: see score_events — projects init/term leader/UTR flanks
-        across nearby introns when given (and events carries `chrom`).
-    map_track: see score_events — region-context mappability annotation.
+    The one scorer. Elongation is batched through prefix sums (where the volume
+    is); init/term/junction are a plain per-event loop (far fewer point events,
+    and clearer than a fiddly vectorisation).
 
-    Reproduces score_events exactly; only elongation summation is vectorised.
+    events columns: event_id, type, start, end, strand, phase[, chrom].
+    cov_df: per-position coverage — pos (Int64), count (Float64).
+    overlaps_df: event_id, other_event_id, overlap_start, overlap_end, comp_phase.
+    junction_support: {junction event_id → spanning count}.
+    splice_context: optional {(chrom, strand) → [(donor, acceptor), ...]} (see
+        events.build_splice_context). When given (and events carries a
+        `chrom` column), init/term leader/UTR flanks are projected across
+        nearby introns instead of read as raw flanking genomic bases.
+    map_track: optional {event_id → {"map_track_mean": float, "map_track_low":
+        bool}} (see workflows._map_track_for_chrom) — a region-context
+        mappability annotation, merged into every event type uniformly. Never
+        affects eligibility/call.
+
+    An independent scalar implementation lives in ``tests/reference_scorer.py``
+    and is diffed against this one on every run; it is not product code.
     """
     junction_support = junction_support or {}
     map_track = map_track or {}
@@ -405,6 +300,7 @@ def score_events_vectorised(
             continue
         if eid in map_track:
             raw = {**raw, **map_track[eid]}
+        raw = {**raw, "confidence": compose_confidence(t, raw, thr)}
         rows.append(event_record(eid, t, group, tier, raw, thr.version))
     return (
         pl.from_dicts(rows, schema=_RECORD_SCHEMA) if rows else pl.DataFrame(schema=_RECORD_SCHEMA)

@@ -4,8 +4,9 @@ Unlike the data-backed tests (test_bam_provider / test_frame_rollup / psite),
 these generate every fixture in tmp_path (tiny FASTA + bigwig via pyBigWig, tiny
 BAM via pysam), so they exercise genome/sequence -> candidate ORF extraction ->
 coverage provider -> scoring INSIDE CI, where the gitignored data/ fixtures are
-absent. They lock in the two silent-failure bugs fixed during real-data E2E
-validation: the bigwig out-of-bounds clamp and the annotation guard.
+absent. The bigwig test's ORF ends at the contig edge on purpose, so it also
+guards the out-of-bounds clamp fix. (The annotation fail-loud guard is covered
+separately in test_new_tree_units.)
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import pytest
 
 from TranslonScorer.workflows import (
     extract_events_workflow,
+    pipeline_workflow,
     score_bams_workflow,
     score_bigwigs_workflow,
 )
@@ -111,3 +113,96 @@ def test_e2e_bam_gtf(tmp_path: Path):
     df = _read_store(str(store_dir))
     assert df.height > 0
     assert _elong_covered(df) > 0
+
+
+def _write_bigwig(path: Path, contig: str, length: int, value: float = 5.0):
+    """Dense coverage over a whole contig, as a real bigwig file."""
+    pyBigWig = pytest.importorskip("pyBigWig")
+    bw = pyBigWig.open(str(path), "w")
+    bw.addHeader([(contig, length)])
+    bw.addEntries(
+        [contig] * length,
+        list(range(length)),
+        ends=list(range(1, length + 1)),
+        values=[value] * length,
+    )
+    bw.close()
+
+
+def test_pipeline_end_to_end_with_bigwig(tmp_path: Path):
+    """pipeline() runs the bigwig path in ONE call: extract -> score -> report.
+
+    The bigwig coverage source was reachable only via score-bigwig; pipeline
+    accepted --matrix-dir or --bam and nothing else, so the simplest path was
+    the one with no single-invocation run.
+    """
+    fasta = tmp_path / "tran.fa"
+    fasta.write_text(f">tranA\n{_ORF_SEQ}\n")
+
+    bw_path = tmp_path / "cov.bw"
+    _write_bigwig(bw_path, "tranA", len(_ORF_SEQ))
+
+    out_dir = tmp_path / "run"
+    paths = pipeline_workflow(
+        str(out_dir),
+        bigwigs=[str(bw_path)],
+        data_version="v1",
+        fasta_path=str(fasta),
+        start_codons=["ATG"],
+    )
+
+    assert Path(paths["report"]).exists(), "pipeline produced no report"
+    df = _read_store(paths["scores"])
+    assert df.height > 0
+    assert _elong_covered(df) > 0, "coverage never reached an elongation event"
+    report = pl.read_parquet(paths["report"])
+    assert report.height > 0
+
+
+def test_pipeline_rejects_two_coverage_sources(tmp_path: Path):
+    """Exactly one coverage source. Matrix/BAM/bigwig are mutually exclusive."""
+    fasta = tmp_path / "tran.fa"
+    fasta.write_text(f">tranA\n{_ORF_SEQ}\n")
+    bw_path = tmp_path / "cov.bw"
+    _write_bigwig(bw_path, "tranA", len(_ORF_SEQ))
+
+    with pytest.raises(ValueError, match="exactly one coverage source"):
+        pipeline_workflow(
+            str(tmp_path / "run"),
+            bigwigs=[str(bw_path)],
+            bams=[str(tmp_path / "nonexistent.bam")],
+            fasta_path=str(fasta),
+        )
+
+    with pytest.raises(ValueError, match="exactly one coverage source"):
+        pipeline_workflow(str(tmp_path / "run2"), fasta_path=str(fasta))
+
+
+def test_bigwig_junction_warning_names_the_count(caplog):
+    """Junction events are unassessable from bigwig -- say so, with a count.
+
+    They land INSUFFICIENT/null, which is correct but reads like "no junction
+    support found" rather than "this source cannot answer the question".
+    """
+    import logging
+
+    from TranslonScorer.workflows import _warn_bigwig_cannot_score_junctions
+
+    events = pl.DataFrame(
+        {
+            "event_id": [1, 2, 3],
+            "type": ["elongation", "junction", "junction"],
+        }
+    )
+    with caplog.at_level(logging.WARNING):
+        n = _warn_bigwig_cannot_score_junctions(events)
+    assert n == 2
+    assert "2 junction event" in caplog.text
+    assert "NOT" in caplog.text  # unassessable, not unsupported
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert (
+            _warn_bigwig_cannot_score_junctions(events.filter(pl.col("type") == "elongation")) == 0
+        )
+    assert caplog.text == ""

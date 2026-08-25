@@ -329,7 +329,7 @@ def _reads() -> pl.DataFrame:
 
 
 def test_apply_offsets_psite_groups_positions():
-    from TranslonScorer.coverage.profile import apply_offsets
+    from TranslonScorer.coverage.psite_profile import apply_offsets
 
     out = apply_offsets(_reads(), {29: 12, 30: 13}, site="P")
     d = dict(zip(out["pos"], out["count"]))
@@ -338,7 +338,7 @@ def test_apply_offsets_psite_groups_positions():
 
 
 def test_apply_offsets_asite_adds_codon():
-    from TranslonScorer.coverage.profile import apply_offsets
+    from TranslonScorer.coverage.psite_profile import apply_offsets
 
     out = apply_offsets(_reads(), {29: 12, 30: 13}, site="A")
     d = dict(zip(out["pos"], out["count"]))
@@ -347,7 +347,7 @@ def test_apply_offsets_asite_adds_codon():
 
 
 def test_apply_offsets_default_offset_fallback():
-    from TranslonScorer.coverage.profile import apply_offsets
+    from TranslonScorer.coverage.psite_profile import apply_offsets
 
     out = apply_offsets(_reads(), {}, site="P", default_offset=10)
     d = dict(zip(out["pos"], out["count"]))
@@ -356,7 +356,7 @@ def test_apply_offsets_default_offset_fallback():
 
 
 def test_apply_offsets_empty_and_bad_site_and_missing_cols():
-    from TranslonScorer.coverage.profile import apply_offsets
+    from TranslonScorer.coverage.psite_profile import apply_offsets
 
     empty = apply_offsets(pl.DataFrame(), {}, site="P")
     assert empty.is_empty() and "pos" in empty.columns
@@ -367,7 +367,7 @@ def test_apply_offsets_empty_and_bad_site_and_missing_cols():
 
 
 def test_size_factors_single_and_multi():
-    from TranslonScorer.coverage.profile import size_factors
+    from TranslonScorer.coverage.psite_profile import size_factors
 
     # no sample col => trivial
     assert size_factors(pl.DataFrame({"pos": [1], "count": [1.0]})) == {"": 1.0}

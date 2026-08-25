@@ -128,7 +128,7 @@ def test_transcriptome_requires_exon_df():
 
 def test_site_position_strand_aware():
     """P/A-site placement is strand-aware: + uses 5'=ref_start, - uses 5'=ref_end-1."""
-    from TranslonScorer.coverage.profile import site_position
+    from TranslonScorer.coverage.psite_profile import site_position
 
     # + strand read [1000, 1029): 5'=1000; P=1000+12=1012; A=1015
     assert site_position(1000, 1029, False, 12, "P") == (1, 1012)
@@ -166,6 +166,52 @@ def test_bam_set_provider_junction_support_empty():
     assert "junction_id" in result.columns
     assert "kind" in result.columns
     assert result.is_empty()
+
+
+def test_naive_dataframe_construction_actually_crashes_on_large_junction_ids():
+    """Ground the regression: reproduce the exact pre-fix crash, so the fix
+    below isn't defending against a hypothetical. Junction IDs are a
+    deterministic hash and roughly half will exceed signed Int64; letting
+    polars infer a column's dtype from only its first ~100 rows means a
+    small early sample plus one later large value doesn't just get
+    mis-typed, it raises."""
+    import polars as pl
+
+    big = 2**63 + 12345  # fits UInt64, not signed Int64
+    rows = [{"junction_id": i, "kind": "span_conf", "count": 1.0} for i in range(1, 150)]
+    rows.append({"junction_id": big, "kind": "span_conf", "count": 1.0})
+    with pytest.raises(pl.exceptions.ComputeError):
+        pl.DataFrame(rows)
+
+
+def test_junction_rows_to_df_handles_ids_beyond_signed_int64():
+    """The actual fix: explicit schema + plain-Python-list columns survive
+    exactly the row pattern that crashes naive `pl.DataFrame(rows)` above."""
+    from TranslonScorer.coverage.bam import _junction_rows_to_df
+
+    big = 2**63 + 12345
+    out_schema = {"junction_id": pl.UInt64, "kind": pl.Utf8, "count": pl.Float64}
+    rows = [{"junction_id": i, "kind": "span_conf", "count": 1.0} for i in range(1, 150)]
+    rows.append({"junction_id": big, "kind": "span_conf", "count": 1.0})
+
+    df = _junction_rows_to_df(rows, out_schema, by_sample=False)
+
+    assert df.schema["junction_id"] == pl.UInt64
+    assert df["junction_id"].to_list()[-1] == big
+
+
+def test_junction_rows_to_df_by_sample():
+    from TranslonScorer.coverage.bam import _junction_rows_to_df
+
+    out_schema = {
+        "junction_id": pl.UInt64,
+        "kind": pl.Utf8,
+        "count": pl.Float64,
+        "sample_id": pl.Utf8,
+    }
+    rows = [{"junction_id": 1, "kind": "span_conf", "count": 1.0, "sample_id": "s1"}]
+    df = _junction_rows_to_df(rows, out_schema, by_sample=True)
+    assert df["sample_id"].to_list() == ["s1"]
 
 
 def test_bam_set_provider_mappability_ledger_empty():
@@ -208,10 +254,10 @@ def test_srr_bam_offsets_calibrated_once():
 def test_srr_gapdh_score_sane():
     """Score GAPDH locus from SRR11005875 BAM; assert sane init/elong/term calls."""
     # Minimal GAPDH annotation (single-exon proxy; real test would use full exon_df)
+    from tests.reference_scorer import score_events_scalar
     from tests.test_golden import _gapdh_events
     from TranslonScorer.coverage.bam import BamSetProvider
     from TranslonScorer.model import OffsetParams, Region, ScoreThresholds
-    from TranslonScorer.scoring.run import score_events
 
     provider = BamSetProvider(
         [str(GENOME_BAM)],
@@ -228,7 +274,7 @@ def test_srr_gapdh_score_sane():
 
     thr = ScoreThresholds()
     events = _gapdh_events()
-    result = score_events(events, cov_dict, group="gapdh", tier="aggregate", thr=thr)
+    result = score_events_scalar(events, cov_dict, group="gapdh", tier="aggregate", thr=thr)
 
     assert result.height > 0, "expected non-empty score results"
     calls = dict(zip(result["aspect"].to_list(), result["call"].to_list()))

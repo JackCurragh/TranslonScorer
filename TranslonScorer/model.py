@@ -52,6 +52,24 @@ class ScoreThresholds:
     elong_identifiability: float = 0.50  # contended attribution below this → AMBIGUOUS
     junc_min_spanning: float = 20.0  # spanning reads for SUPPORTED junction
     mappability_low: float = 0.50  # map_track_mean below this -> map_track_low=True (evidence-only)
+    periodicity_min_codons: int = 5  # per-side codon floor for the boundary significance test
+    periodicity_significance_alpha: float = 0.05  # periodicity_p below this counts as "significant"
+    periodicity_min_agree_frac: float = 0.5  # fraction of flank lengths that must agree to
+    # resolve an AMBIGUOUS init/term call to SUPPORTED via periodicity (see _decide_step)
+
+    # --- significance_testing_plan.md: per-aspect lens batteries (first-pass,
+    # unvalidated against a real cohort -- see docs/significance_testing_results.md) ---
+    cif_codon_min_reads: int = 10  # per-codon reads floor for cif_codon_significance
+    lens_agree_frac: float = 0.5  # fraction of an aspect's lenses that must agree for
+    # "battery passed" in attribution (2 of 3 default; junction uses all-of-2, see
+    # ATTRIBUTION_MIN_AGREE_FRAC overrides in scoring/attribution.py)
+    elong_uniformity_min_codons: int = 5  # per-half codon floor, elongation body-split test
+    init_uniformity_gini_max: float = 0.6  # gini_body_inframe below this counts as "uniform"
+    cif_level_min_frac: float = 0.5  # cif_significance.frac_significant floor for CIF "Level" lens
+    cif_contiguity_max_run_frac: float = 0.7  # cif_contiguity.max_run_frac below this
+    # counts as "scattered" (not clustered) for CIF's Uniformity lens
+    mappability_confidence_penalty: float = 0.7  # elongation confidence multiplier when
+    # map_track_low is set -- downweight, never gate (significance_testing_plan.md §2/item 8)
 
 
 # ---------------------------------------------------------------------------

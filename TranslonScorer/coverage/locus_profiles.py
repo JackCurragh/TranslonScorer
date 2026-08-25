@@ -46,6 +46,26 @@ def _offset_for(length: int, offsets: Dict[int, int], default_offset: int) -> in
         return default_offset
 
 
+def _a_site_positions(
+    starts: np.ndarray,
+    stops: np.ndarray,
+    strands: List[str],
+    offsets: np.ndarray,
+) -> np.ndarray:
+    """Strand-aware A-site genomic positions.
+
+    The offset is the distance from the read's 5' end, so the genomic
+    direction depends on strand: plus-strand reads advance from ``start``,
+    minus-strand reads retreat from the genomic-right 5' end (``stop - 1``).
+    Using ``start + offset`` for both strands (the pre-fix behaviour) shifts
+    every reverse-strand profile by the whole footprint length and destroys
+    its frame assignment -- a ~15nt error on a typical RPF, not a rounding
+    quirk.
+    """
+    is_minus = np.asarray([str(s) == "-" for s in strands], dtype=bool)
+    return np.where(is_minus, stops - 1 - offsets, starts + offsets)
+
+
 def _iter_loci_from_bed(bed_path: str) -> Iterator[Tuple[str, str, int, int]]:
     """Yield (locus_id, chr, start, stop) from a 4+ column BED-like file."""
     df = pl.read_csv(bed_path, has_header=False, separator="\t")
@@ -144,11 +164,14 @@ def build_locus_profiles_zarr(
         if idx.is_empty():
             continue
 
-        # Compute A-site genomic positions for index rows
-        # Simple rule: A-site = start + offset (improve for strand-specific when available)
         lengths = idx.get_column("length").to_list()
         ofs = np.array([_offset_for(L, offsets, default_offset) for L in lengths], dtype=np.int64)
-        a_site = idx.get_column("start").to_numpy() + ofs
+        a_site = _a_site_positions(
+            idx.get_column("start").to_numpy(),
+            idx.get_column("stop").to_numpy(),
+            idx.get_column("strand").to_list(),
+            ofs,
+        )
         # Keep those within locus bounds
         mask = (a_site >= locus_start) & (a_site < locus_end)
         if not mask.any():

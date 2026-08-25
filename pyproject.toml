@@ -3,8 +3,8 @@ requires = ["setuptools<70", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "TranslonScorer"
-version = "0.2.0"
+name = "translonscorer"
+version = "0.3.0"
 description = "A CLI for scoring translational events from Ribo-seq data"
 readme = "README.md"
 # zarr>=3.1 (a core dep, for the zarr v3 matrix store) requires Python >=3.11,
@@ -79,7 +79,7 @@ dev = [
   "bump2version>=1.0",
 ]
 full = [
-  "TranslonScorer[bigwig, zarr, viz, fastbam, perf, cluster, dev]",
+  "translonscorer[bigwig, zarr, viz, fastbam, perf, cluster, dev]",
 ]
 
 [project.urls]

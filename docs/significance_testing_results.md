@@ -617,30 +617,108 @@ output, not just the exit code:
   source, curated ORF calls here vs. GTF+ORF-finder candidates there, not a
   contradiction).
 
-**Whole-genome/transcriptome-scale was not attempted.** Reasoning, stated
-plainly rather than left implicit: a genome-wide run against this exact
-`iRibo.good.unique.with_junction`-equivalent pairing was attempted once
-before this session (`hpc_pancreas_local/translonscorer_merged_bigwig/
-iRibo.good.unique.with_junction/logs/iRibo.good.unique.with_junction.log`,
-discovered during the bigwig-correction search above) and **aborted before
-scoring completed** — events were extracted genome-wide but the log ends at
-"Aborted!" with no further detail, root cause unknown. Naively scaling
-chr12's 24.9s by chromosome count (chr12 is one of the larger, more
-gene-dense autosomes, so this likely overestimates rather than
-underestimates the true multiplier) suggests genome-wide compute could
-plausibly land somewhere in the range of several minutes to ~20 minutes if
-nothing else goes wrong — but that linear extrapolation cannot account for
-whatever actually caused the prior real attempt to fail (memory
-accumulation across chromosomes, bigwig access patterns at full genome
-scale, or something else entirely), and there is no reason to assume
-chr12's clean run means that failure mode won't recur elsewhere. Given a
-real, evidenced prior failure at that exact scale, attempting it blind and
-unattended was judged not to be the responsible next step in this session;
-chr12 was chosen instead as the largest scope with both a solid time
-estimate behind it and now a real, completed, successful result. A
-genome-wide (or even multi-chromosome) attempt is a reasonable, well-scoped
-follow-up — ideally starting by looking at what actually killed the prior
-attempt, not by repeating it and hoping.
+## Whole-genome run: full iRibo pancreas catalog, corrected bigwig
+
+The chr12 result above made a genome-wide attempt tractable-looking; this
+section covers what a closer look at the prior failed attempt showed, and
+the real result of trying again.
+
+### What the prior aborted attempt's log actually shows
+
+Before re-attempting genome-wide scale, looked (a few minutes, not a
+forensic investigation) at
+`hpc_pancreas_local/translonscorer_merged_bigwig/iRibo.good.unique.with_junction/`
+beyond just the one "Aborted!" line found during the bigwig-correction
+search:
+
+- The log (`logs/iRibo.good.unique.with_junction.log`, 412 bytes total) has
+  exactly three lines: a start marker, the one-time junction-scoring
+  warning, and "Aborted!" — no traceback, no exit code, no memory numbers,
+  no chromosome/locus indicator of where it died. Genuinely uninformative
+  beyond timing (see below), as anticipated.
+- `runner.log` alongside it is empty (0 bytes).
+- The file's last-write timestamp is ~7 minutes after the junction warning
+  was logged, and **`events/` completed cleanly for all 24 chromosomes**
+  (every `events/`, `feature_event/`, and `event_overlap/` parquet file
+  present, all timestamped within the same minute as the warning) — so
+  extraction was not the failure point. There is **no `scores/` directory
+  at all** anywhere in that tree — scoring never wrote even one chromosome's
+  output before dying.
+- Put together: extraction succeeded genome-wide, scoring ran for roughly 7
+  minutes producing zero persisted output, then died with nothing logged.
+  Consistent with (but not proof of) a whole-run-then-persist-at-the-end
+  design in whatever script produced that run, rather than this session's
+  per-chromosome-checkpointed approach — if scoring holds everything in
+  memory and only writes once at the end, any failure partway through
+  loses everything and leaves no trace, which matches what's observed. No
+  single obvious cause (no OOM message, no bad-record error) — routing
+  around a specific bug wasn't possible because there wasn't one to find in
+  the log; the structural fix (checkpoint per chromosome, log progress) is
+  what actually addresses it regardless of the original cause.
+
+### The real genome-wide run
+
+Same corrected pairing as the chr12 run (`merged_bigwigs_a15/
+merged_good_unique_with_junction` × full `iRibo.Pancreas_pooled.bed12`,
+all 48,293 entries, no `--chrom` restriction), but scored **one chromosome
+at a time**, each persisted to its own store shard immediately, with a
+timestamped log line per chromosome (not just start/end) — so a mid-run
+failure this time would leave real partial output and a real trail,
+unlike the prior attempt. Backgrounded and polled via a log-tailing
+monitor rather than blocked on.
+
+```
+[07:40:42] extract-events done in 1.0s: {'events': 488888, 'elongation': 220374,
+           'junction': 171928, 'init': 48293, 'term': 48293, 'chroms': 24}
+[07:41:30] [1/24] chr1:  49603 events -> 49603 scored in 48.2s  (cumulative: 49603)
+[07:41:51] [2/24] chr10: 19880 events -> 19880 scored in 20.9s  (cumulative: 69483)
+   ... (21 more chromosomes, each logged individually) ...
+[08:21:31] [24/24] chrY:   827 events ->   827 scored in  0.4s  (cumulative: 488888)
+[08:21:31] ALL CHROMOSOMES DONE. total_rows=488888 total_time=471.1s
+```
+
+**Completed successfully — no failure this time.** All 24 chromosomes,
+488,888 events scored, **471.1s (7.9 minutes) of active compute** as
+measured by the script's own `time.perf_counter()` calls, which — usefully
+— turned out to exclude time the host spent asleep: real wall-clock from
+start to finish was ~41 minutes, because the machine was suspended for
+roughly half an hour between chr2 and chr20 (visible as a jump from
+`07:46:11` to `08:18:21` in the log, while the process's own accumulated
+CPU time only grew from ~2 to ~5 minutes over that span, and every
+individual chromosome both before and after that gap scored in its normal
+10–50s range). Worth calling out precisely because it's the kind of thing
+that could easily be *mis*read as a stall if the only evidence were a big
+gap between two log timestamps — the per-chromosome timing and the
+process's own CPU-time accounting are what make it possible to tell "host
+was asleep" apart from "computation hung" after the fact, which the prior
+attempt's single-shot logging couldn't have distinguished either way.
+
+This came in under the "several minutes to ~20 minutes" estimate from the
+chr12 section, and matches this session's linear extrapolation from
+per-event costs closely: 220,374 actual elongation events vs. an
+estimate, built before the chr12 run, that would have scaled to roughly
+that order of magnitude.
+
+**Output, checked at genome scale, not just "it finished":**
+
+- 193,967 / 220,374 elongation events have real reads; 111,784 clear the
+  >500-read high-depth bar, with **mean metric 0.807 and 98.7% above 0.5**
+  — identical, within noise, to the chr12-only figures (0.807 mean,
+  98.8%). The frame-registration correction holds uniformly across the
+  whole genome, not just gene-dense regions.
+- 251,673 / 488,888 events have a non-null `confidence`.
+- 3,616 elongation events carry a real `competitor_share`; 186 of those
+  have more than one competitor (a genome-wide, real-scale confirmation
+  that the multi-way-overlap design gap is not a locus-specific artifact —
+  see the plan doc addendum). Proportionally far rarer here (186 /
+  220,374 ≈ 0.08%) than on the GAPDH BAM's GTF+ORF-finder-derived event
+  set (45%) — consistent with this doc's repeated finding that overlap
+  density tracks the annotation source's redundancy, not a property of
+  the pancreas data itself: `iRibo.Pancreas_pooled.bed12` is a curated,
+  already-deduplicated call set genome-wide, same as it was in the smaller
+  regions.
+- All 171,928 junction events are `eligibility=INSUFFICIENT` — the bigwig
+  ceiling, confirmed exactly as documented at full scale, no surprises.
 
 ## Open decisions: defaults picked and why
 

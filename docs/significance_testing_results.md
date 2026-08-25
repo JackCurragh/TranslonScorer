@@ -500,6 +500,148 @@ Both examples ran clean on this machine as of this commit (`bash
 scripts/cli_smoke_tests.sh`, exit 0, 8 passed / 0 failed / 0 skipped with
 the pancreas data present; 5 passed / 0 failed / 1 skipped without it).
 
+## Performance profile: what the significance layer actually costs
+
+Measured with stdlib `cProfile` (no new dependency — checked, `pyinstrument`/
+`line_profiler` aren't installed and weren't worth adding for this). Two data
+points: GAPDH (shallow, `dev`-vs-`current` branch comparison via a disposable
+`git worktree` so the working tree was never touched) and the pancreas region
+(real depth, current branch only — `dev` has none of these functions at all,
+and GAPDH already established the relative-overhead shape).
+
+**GAPDH (636 events, shallow BAM depth, `--offset-method global`)**: total
+`score_bams_workflow` cProfile cumtime went from 0.187s (`dev`, pre-session)
+to 0.252s (this branch) — **+0.065s, +35%**. CIF's per-codon floor barely
+fires at this depth (99 `binomtest` calls total), so this is close to a
+lower bound on the new layer's overhead.
+
+**Pancreas region (398 events, 180 elongation, real depth, corrected
+`merged_bigwigs_a15`, scipy import pre-warmed to isolate steady-state cost
+from one-time module-load cost — the cold run was 1.87s, 1.1s of which was
+scipy.stats' own first-import machinery, not scoring)**: `score_bigwigs_workflow`
+cumtime **0.758s** for 398 events. Breakdown of where it goes, within
+`score_elongation_batch`'s 0.494s (180 elongation events):
+
+| Function | cumtime | % of elongation-scoring time | Character |
+|---|---|---|---|
+| `cif_codon_significance` | 0.339s | 69% | **Expensive — flag plainly, see below** |
+| `_elong_body_uniformity` (→`_split_half_consistency`) | 0.088s | 18% | Moderate |
+| `_elong_frame_chisq` | 0.051s | 10% | Cheap |
+
+Plus, outside the elongation batch: `_boundary_axes_for_flank` (init/term,
+old + new fields combined) 0.089s, `mannwhitneyu` (feeding `_share_consistency`/
+`_periodicity_significance`) 0.063s across 222 calls, bigwig coverage I/O
+0.113s (pre-existing, not part of the significance layer).
+
+**Cheap — reuses existing tallies, near-zero marginal cost:**
+`_elong_frame_chisq` (one `scipy.stats.chisquare` call on the 3-element tally
+`_range_sums` already computed), `gini_body_inframe`/`gini_outer_inframe`
+(same `_codon_bins` output, different reduction), the four battery functions
+(`init_battery`/`term_battery`/`elong_battery`/`cif_battery`) and
+`compose_confidence`/`classify_neighbor_outcome`/`classify_termination_downstream`
+(pure Python arithmetic over already-computed evidence fields — none showed
+measurable tottime in either profile), the three dropoff lenses (reuse
+`_dropoff_at`'s window machinery, share the same bounded `mannwhitneyu`
+budget as the boundary axes).
+
+**Moderate — genuine new statistic, but bounded per event, not per-codon:**
+`_split_half_consistency`/`_share_consistency` (elongation body-uniformity
+and initiation share-consistency both route through it) — a real
+Mann-Whitney U test per event/flank, non-trivial per-call cost from scipy's
+own overhead, but O(1) calls per event regardless of depth or ORF length.
+
+**Expensive — flag plainly, per the brief:** `cif_codon_significance`'s
+per-codon `scipy.stats.binomtest` loop is **the standout cost**: 69% of
+elongation-scoring time and roughly 45% of total scoring wall-time on real
+deep data (vs. negligible on GAPDH's shallow data — this scales with real
+depth, which is exactly why GAPDH's profile didn't show it). 5,069
+`binomtest` calls for 180 elongation events (~28 testable codons/event on
+average, matching the 159/180-events-testable, 5,153-total-testable-codons
+finding from the original pancreas follow-up). Each call costs ~63µs, and
+profiling shows most of that is **not** the binomial tail calculation itself
+— it's scipy's generic distribution-object machinery
+(`axis_nan_policy_wrapper`, `argsreduce`, `broadcast_arrays`) that
+`scipy.stats.binomtest` pays on every call regardless of how trivial the
+input is. This is O(testable codons) per elongation event, not O(1), so it
+is the one lens whose cost will keep growing fastest as depth and ORF length
+increase — worth optimizing (batching/vectorizing the test across codons
+instead of one Python-level scipy call each, or a cheaper approximation for
+high-count codons where a normal approximation to the binomial is
+adequate) before running this at sustained high-depth production scale.
+**Not attempted here** — flagging the cost with real numbers is the
+brief's ask; the fix is a separate, scoped piece of work.
+
+## Chromosome-scale run: chr12, corrected pancreas bigwig, full iRibo catalog
+
+Given the CIF finding above, an honest estimate was built before attempting
+anything larger than the ~300kb GAPDH-region window used elsewhere in this
+doc: at 2.74ms/elongation-event (0.494s / 180 events, pancreas-region
+figure) and roughly 4.7 elongation blocks per bed12 entry (180 events / 38
+entries in that window), scaling to all 2,456 `chr12` entries in
+`iRibo.Pancreas_pooled.bed12` predicted ~11,600 elongation events and a
+rough compute estimate in the low tens of seconds to a couple of minutes —
+tractable enough to just run it, bounded to one chromosome rather than
+genome-wide.
+
+**Run, not just estimated** — `translonscorer extract-events` (`--bed12
+iRibo.Pancreas_pooled.bed12 --chrom chr12`) then `score-bigwig` against
+`merged_bigwigs_a15`, launched as a backgrounded process with progress
+logging (timestamped extract/score/total lines to a log file, polled rather
+than blocked on) rather than a single long foreground call:
+
+```
+[06:44:59] extract-events starting (chr12, full iRibo pancreas bed12)
+[06:45:00] extract-events done in 0.6s: {'events': 26696, 'feature_event': 26700,
+           'event_overlap': 212, 'by_type': {'init': 2456, 'elongation': 12122,
+           'term': 2456, 'junction': 9662}, 'chroms': 1}
+[06:45:00] score-bigwig starting
+[06:45:24] score-bigwig done in 24.3s
+[06:45:24] TOTAL: 24.9s
+```
+
+26,696 events scored in under 25 seconds — faster than the estimate above
+(12,122 actual elongation events vs. ~11,600 predicted, close). Checked the
+output, not just the exit code:
+
+- 10,976 / 12,122 elongation events have real reads; 6,307 clear the
+  >500-read "high depth" bar used throughout this doc, with **mean
+  elongation `metric` 0.807 and 98.8% above the 0.5 SUPPORTED threshold** —
+  the frame-registration fix (see the bigwig-correction section above) holds
+  at full-chromosome scale, not just the narrow validation window.
+- 13,916 / 26,696 events have a non-null `confidence`.
+- 160 elongation events carry a real, non-empty `competitor_share` —
+  `event_overlap` wiring is live at this scale too (212 overlap rows
+  extracted for the whole chromosome, noticeably sparser than the GAPDH
+  BAM run's 478 rows for a ~4,000× smaller genomic window — consistent with
+  this doc's earlier note that overlap density reflects the annotation
+  source, curated ORF calls here vs. GTF+ORF-finder candidates there, not a
+  contradiction).
+
+**Whole-genome/transcriptome-scale was not attempted.** Reasoning, stated
+plainly rather than left implicit: a genome-wide run against this exact
+`iRibo.good.unique.with_junction`-equivalent pairing was attempted once
+before this session (`hpc_pancreas_local/translonscorer_merged_bigwig/
+iRibo.good.unique.with_junction/logs/iRibo.good.unique.with_junction.log`,
+discovered during the bigwig-correction search above) and **aborted before
+scoring completed** — events were extracted genome-wide but the log ends at
+"Aborted!" with no further detail, root cause unknown. Naively scaling
+chr12's 24.9s by chromosome count (chr12 is one of the larger, more
+gene-dense autosomes, so this likely overestimates rather than
+underestimates the true multiplier) suggests genome-wide compute could
+plausibly land somewhere in the range of several minutes to ~20 minutes if
+nothing else goes wrong — but that linear extrapolation cannot account for
+whatever actually caused the prior real attempt to fail (memory
+accumulation across chromosomes, bigwig access patterns at full genome
+scale, or something else entirely), and there is no reason to assume
+chr12's clean run means that failure mode won't recur elsewhere. Given a
+real, evidenced prior failure at that exact scale, attempting it blind and
+unattended was judged not to be the responsible next step in this session;
+chr12 was chosen instead as the largest scope with both a solid time
+estimate behind it and now a real, completed, successful result. A
+genome-wide (or even multi-chromosome) attempt is a reasonable, well-scoped
+follow-up — ideally starting by looking at what actually killed the prior
+attempt, not by repeating it and hoping.
+
 ## Open decisions: defaults picked and why
 
 All added to `ScoreThresholds` (`model.py`), each commented

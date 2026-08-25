@@ -5,6 +5,12 @@
 from __future__ import annotations
 
 from TranslonScorer.model import ScoreThresholds
+from TranslonScorer.scoring.aspects import (
+    junction_internal_consistency,
+    score_elongation_event,
+    score_initiation_event,
+    score_junction_event,
+)
 from TranslonScorer.scoring.attribution import (
     cif_battery,
     classify_neighbor_outcome,
@@ -16,12 +22,6 @@ from TranslonScorer.scoring.attribution import (
     pair_cif_neighbors,
     pair_elongation_neighbors,
     term_battery,
-)
-from TranslonScorer.scoring.aspects import (
-    junction_internal_consistency,
-    score_elongation_event,
-    score_initiation_event,
-    score_junction_event,
 )
 
 _THR = ScoreThresholds()

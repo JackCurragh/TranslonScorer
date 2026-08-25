@@ -5,7 +5,7 @@ name: Release to PyPI
 #
 # One-time setup on PyPI: add a Trusted Publisher for this repo/workflow under
 # the TranslonScorer project settings
-# (https://pypi.org/manage/project/TranslonScorer/), and create a GitHub
+# (https://pypi.org/manage/project/translonscorer/), and create a GitHub
 # environment named "pypi".
 
 on:

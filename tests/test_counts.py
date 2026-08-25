@@ -100,25 +100,12 @@ def test_junc_sorted(count_dir):
 
 
 def test_unique_only_policy(count_dir):
-    """Count tables must contain only unique-mapping reads (nh==1 from the alignment table)."""
-    alignments = pl.read_parquet(
-        ALIGNMENTS_PREBUILT / "chr1.parquet", columns=["read_id", "nh", "is_secondary"]
-    )
-    unique_rids = set(
-        alignments.filter((pl.col("nh") == 1) & (~pl.col("is_secondary")))["read_id"]
-        .cast(pl.UInt64)
-        .to_list()
-    )
-    multi_rids = (
-        set(alignments.filter(pl.col("nh") > 1)["read_id"].cast(pl.UInt64).to_list()) - unique_rids
-    )  # reads that appear ONLY as multimappers
+    """Count output records the requested unique-only multimap policy."""
+    from TranslonScorer.alignments.provenance import read_meta
 
-    # If multi_rids contributed to the count tables, we'd find their pos5 values in the shard.
-    # Since this cohort is small, sample a few multimapper positions and confirm
-    # their contributions are absent.
+    meta = read_meta(count_dir)
+    assert meta["version_key"]["multimap_policy"] == "unique_only"
     pos = pl.read_parquet(count_dir / "chr1_pos.parquet")
-    # Total count pos rows should match what a unique-only join produces
-    expected_unique_reads = len(unique_rids)
     assert pos["sample_id"].n_unique() > 0  # sanity
     # Per-position unique read count should be >= 1
     assert pos["count"].min() >= 1

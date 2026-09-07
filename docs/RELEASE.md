@@ -73,6 +73,15 @@ runs, each step gated on the previous:
 4. **release** — creates a GitHub Release with the distributions attached and
    generated notes.
 
+> **Gotcha — reusable-workflow permissions.** A called workflow's jobs may not
+> request more permission than the *calling* job grants, and GitHub validates
+> that when the run starts, **before any job-level `if` is evaluated**. `ci.yml`'s
+> `image` job declares `packages: write`, so the `gate` job here must grant it
+> too — even though that job is gated to main-branch pushes and can never run on
+> a tag. Getting this wrong fails the entire run as `startup_failure` with zero
+> jobs and the message "This run likely failed because of a workflow file issue",
+> which names neither the job nor the permission. This bit v0.3.1's first tag.
+
 ### Container tag meanings
 
 | tag | written by | means |

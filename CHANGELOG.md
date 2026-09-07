@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.1] - 2026-09-07
+
+**First published release.** Every prior release run failed before reaching
+PyPI: `pyproject.toml` declared `name = "TranslonScorer"`, so the wheel was
+built as `TranslonScorer-*.whl` and PyPI rejected it with a 400 ("should
+contain the normalized project name") — after a fully green build, because
+`twine check` does not catch a non-normalised wheel filename. The name was
+corrected in 88adeb8; this release adds a CI assertion on the dist filenames
+so the failure mode cannot recur, and is the first tag cut after the fix.
+Trusted Publishing itself was never the problem — the v0.3.0 run
+authenticated successfully and failed only on the filename.
+
+
 ### Added
 
 - init/term boundary events now carry frame-resolved evidence alongside the
@@ -57,6 +72,41 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   genomically `stop - 1`, not `start` — the old formula anchored a
   reverse-strand read at its 3' end and walked the offset the wrong
   direction, destroying its frame assignment. Fixed via `_a_site_positions`.
+- Event partitions with differing inferred integer widths no longer break
+  concatenation. Polars infers a large integer ID column as Int128 in one
+  chromosome's parquet and UInt64 in another (depending on the values that
+  chromosome happens to hold), so reading the event store back could fail
+  outright or silently push every downstream join onto Polars' much slower
+  Int128 path. `_read_event_subdir` now normalises each partition to the
+  first partition's schema, pinning the declared UInt64 width for
+  `event_id`/`other_event_id`/`junction_id`.
+
+### Changed
+
+- **Release machinery consolidated to one gate and one release path.** Four
+  overlapping workflows became two. `ci.yml` is now the single definition of
+  "does this pass" (lint, typecheck, test, build) and `release.yml` *calls*
+  it via `workflow_call`, so a tagged release re-runs the identical gate
+  rather than a drifting copy. `ruff`/`black` are enforced in CI for the
+  first time — they were defined in the Makefile but run by no workflow.
+- **Container tags now have one owner each.** `docker-latest.yml` and
+  `publish-translonscorer.yml` both pushed `:latest` on every push to `main`,
+  one of them with no test gate at all, racing for the same tag; both are
+  deleted. `:latest`, `:vX.Y.Z` and `:X.Y` are written only by `release.yml`
+  and mean *the most recent release*; `ci.yml` publishes `:main` and
+  `:sha-<short>` for the tip of `main`, gated on lint+test. Consumers
+  pinning `ghcr.io/jackcurragh/translonscorer:latest` (the riboseq Nextflow
+  modules) now follow releases instead of every commit — pin `:main` for the
+  previous behaviour.
+- `black`/`ruff`/`mypy` targeted Python 3.10 while `requires-python` is
+  `>=3.11`; aligned to 3.11.
+- The `Makefile` runs every target through one `$(PYTHON)` (default
+  `python3`) using `-m` module invocation, so targets no longer fail with
+  "command not found" when tools are not on `PATH`
+  (`make test PYTHON=.venv/bin/python`). The TestPyPI `release-test` target
+  is replaced by `make preflight`, which mirrors CI's build job; TestPyPI
+  exercises neither OIDC nor the trusted-publisher binding, so it could
+  never rehearse the real path.
 
 ## [0.3.0] - 2026-08-09
 

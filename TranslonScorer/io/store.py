@@ -77,7 +77,27 @@ def _read_event_subdir(base: str, subdir: str) -> pl.DataFrame:
     paths = sorted(root.glob("*.parquet"))
     if not paths:
         return pl.DataFrame()
-    return pl.concat([pl.read_parquet(str(p)) for p in paths])
+    frames = [pl.read_parquet(str(p)) for p in paths]
+    # Polars may infer large integer IDs differently when one chromosome has
+    # no rows or only a narrow value range (e.g. Int128 vs UInt64).  Event IDs
+    # are semantically one unsigned integer key; normalise later partitions to
+    # the first partition's schema before concatenation.
+    target = frames[0].schema.copy()
+    # Event keys are declared UInt64 throughout the scorer.  Keeping the
+    # canonical width here avoids pushing downstream joins onto Polars' much
+    # slower Int128 execution path when one partition was inferred as Int128.
+    for name in ("event_id", "other_event_id", "junction_id"):
+        if name in target:
+            target[name] = pl.UInt64
+    normalised = []
+    for frame in frames:
+        casts = [
+            pl.col(name).cast(dtype, strict=False).alias(name)
+            for name, dtype in target.items()
+            if frame.schema.get(name) != dtype
+        ]
+        normalised.append(frame.with_columns(casts) if casts else frame)
+    return pl.concat(normalised)
 
 
 def read_events(events_dir: str) -> pl.DataFrame:

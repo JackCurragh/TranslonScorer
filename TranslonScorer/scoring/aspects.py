@@ -926,7 +926,9 @@ def _frame_total_and_hits(
     return total, hits
 
 
-def _two_proportion_p(a_hits: float, a_total: float, b_hits: float, b_total: float) -> Optional[float]:
+def _two_proportion_p(
+    a_hits: float, a_total: float, b_hits: float, b_total: float
+) -> Optional[float]:
     """Two-sided chi-square test of two proportions (2x2 contingency:
     in-frame vs off-frame, side A vs side B). None when either side has no
     signal or scipy is unavailable -- same honesty convention used

@@ -22,92 +22,132 @@ publication via **Trusted Publishing** (OIDC, no stored token).
   ```
   Verify first with `bump2version --dry-run --verbose patch`.
 
-  The `make` targets call the `bump2version` **executable**, so they fail with
-  "command not found" unless it is on `PATH`. `pip install --user bump2version`
-  puts it in the user scripts dir, which often is not. Either add that dir to
-  `PATH` or call the module directly — equivalent, and PATH-independent:
+  Every `make` target runs through one interpreter, `$(PYTHON)` (default
+  `python3`), and invokes tools as `$(PYTHON) -m <tool>` rather than as bare
+  executables — a `pip install --user` puts them in a scripts dir that is
+  usually not on `PATH`, which is what used to make these fail with "command
+  not found". Point it at a venv when you have one:
   ```bash
-  python3 -m bumpversion --dry-run --verbose minor   # check
-  python3 -m bumpversion minor                       # commit + tag
+  make bump-minor PYTHON=.venv/bin/python
+  python3 -m bumpversion --dry-run --verbose minor    # check before bumping
   ```
 
-## 2. CI (`.github/workflows/ci.yml`)
+## 2. CI — the gate (`.github/workflows/ci.yml`)
 
-Runs on push/PR to `main` and `dev` (matches RiboMetric):
+There is **one** definition of "does this pass". It runs on push/PR to `main`
+and `dev`, and `release.yml` *calls* it (`workflow_call`) so a tagged release
+re-runs the identical gate instead of a drifting copy. Adding a job here
+automatically enforces it at release time.
 
-- **test** job — matrix Python 3.11 + 3.12; installs samtools + htslib system
-  libs (for pysam / pyBigWig); `pip install -e '.[full]'`; `python -m build`;
-  `pytest -n auto`; coverage + Codecov upload on 3.12.
-- **type-check** job — `mypy` (`mypy.ini`). Report-only while alpha; drop the
+- **lint** — `ruff check` + `black --check`. Fatal. (Previously defined in the
+  `Makefile` but never run by CI, so it sat red unnoticed.)
+- **typecheck** — `mypy` (`mypy.ini`). Report-only while alpha; drop the
   `|| true` to make it fail-on-error before 1.0 (RiboMetric fails on warnings).
+- **test** — matrix Python 3.11 + 3.12; installs samtools + htslib system libs
+  (for pysam / pyBigWig); `pip install -e '.[full]'`; `pytest -n auto`;
+  coverage + Codecov upload on 3.12.
+- **build** — `python -m build` → sdist + wheel, `twine check`, **and an
+  assertion that both filenames start with `translonscorer-`**. That last check
+  exists because it is precisely what broke every release before v0.3.1 (§8):
+  `twine check` passes a non-normalised wheel, and PyPI rejects it with a 400
+  only at upload, long after a green build. The artifact is uploaded as `dist`
+  and is what `release.yml` publishes — the bits that ship are the bits CI
+  checked.
+- **image** — on pushes to `main` only, gated on lint+test: builds and pushes
+  `ghcr.io/<owner>/translonscorer:main` and `:sha-<short>`.
+
+Locally, `make preflight` mirrors the **build** job exactly (build + twine
+check + filename assertion).
 
 ## 3. Release (`.github/workflows/release.yml`)
 
-Triggered by pushing a `v*` tag (which `bump2version` creates):
+The single release path. Pushing a `vX.Y.Z` tag (which `bump2version` creates)
+runs, each step gated on the previous:
 
-1. **build** — `python -m build` → sdist + wheel; `twine check`; upload artifact.
-2. **publish** — downloads the artifact and publishes with
+1. **gate** — calls `ci.yml` in full, on the tag.
+2. **pypi** — downloads the `dist` artifact the gate built and publishes with
    `pypa/gh-action-pypi-publish` from the `pypi` GitHub environment using OIDC
    Trusted Publishing (no API token in the repo).
+3. **image** — pushes `ghcr.io/<owner>/translonscorer:vX.Y.Z`, `:X.Y` and
+   `:latest`, then smoke-tests the pushed digest with `--help`.
+4. **release** — creates a GitHub Release with the distributions attached and
+   generated notes.
 
-## 4. One-time setup (before the first PyPI release)
+### Container tag meanings
 
-Status as of 2026-08-09: **steps 1 and 2 are done**; the first publish has not
-run yet.
+| tag | written by | means |
+|---|---|---|
+| `:latest` | `release.yml` | the most recent release |
+| `:vX.Y.Z`, `:X.Y` | `release.yml` | that release |
+| `:main`, `:sha-<short>` | `ci.yml` | tip of `main`, lint+test green |
 
-1. ✅ **PyPI Trusted Publisher (PENDING flow — first release).** Registered
-   2026-08-09. Until the first publish creates the project, there is no project
-   page to add a publisher on, so this is a *pending* publisher at the account
-   level: https://pypi.org/manage/account/publishing/ → "Add a new pending
-   publisher", with PyPI project name `TranslonScorer`, owner `JackCurragh`,
-   repo `TranslonScorer`, workflow `release.yml`, environment `pypi`. On the
-   first successful publish PyPI creates the project and converts this into a
-   normal publisher, managed at
-   https://pypi.org/manage/project/TranslonScorer/.
+`:latest` used to mean "tip of main" — two separate workflows
+(`docker-latest.yml`, `publish-translonscorer.yml`) both pushed it on every
+main push, one of them with **no test gate**, racing each other for the same
+tag. Both are deleted; nothing but `release.yml` writes `:latest` now.
 
-   Two fields are easy to get wrong and both fail as an opaque "not authorised"
-   at publish time, long after a green build: **"Workflow name" wants the
-   filename** (`release.yml`, not the `name:` inside the YAML), and the
-   environment name must match `environment: pypi` in `release.yml` exactly.
-2. ✅ **GitHub Environment `pypi`** (Settings → Environments). Created. The
-   `publish` job declares `environment: pypi`; if it does not exist the job
-   fails before it ever contacts PyPI, with an error that does not mention PyPI.
+**Consumers to be aware of:** `ensembl-genes-nf/pipelines/riboseq/modules/translonscorer.nf`
+and its `-feature` twin default to `ghcr.io/jackcurragh/translonscorer:latest`.
+Under the new meaning they follow releases rather than every main commit —
+which is what you want for reproducible annotation runs. Pin
+`params.translonscorer_container` to `:vX.Y.Z` for a fixed run, or to `:main`
+to keep the old always-newest behaviour.
+
+## 4. One-time setup — **done, and proven working**
+
+1. ✅ **PyPI Trusted Publisher (pending flow).** Registered 2026-08-09 at the
+   account level (https://pypi.org/manage/account/publishing/ → "Add a new
+   pending publisher"): project `translonscorer`, owner `JackCurragh`, repo
+   `TranslonScorer`, workflow `release.yml`, environment `pypi`. On the first
+   successful publish PyPI creates the project and converts this into a normal
+   publisher at https://pypi.org/manage/project/translonscorer/.
+
+   Two fields are easy to get wrong and both fail as an opaque "not authorised":
+   **"Workflow name" wants the filename** (`release.yml`, not the `name:` inside
+   the YAML), and the environment name must match `environment: pypi` exactly.
+2. ✅ **GitHub Environment `pypi`** (Settings → Environments). Created.
    Optionally add a required reviewer to make each publish pause for approval.
 3. **Codecov:** enable the repo (no token needed for public repos).
 4. Confirm the repo's default branches are `main`/`dev` (CI triggers).
 
-**TestPyPI rehearsal is *not* a useful pre-flight for this path.** `make
-release-test` uploads with a stored TestPyPI token, which exercises neither
-OIDC nor the pending-publisher binding — TestPyPI needs its own separate
-pending publisher. To catch metadata problems before tagging, run the build
-locally instead; that is exactly what the `build` job does:
-```bash
-python3 -m build && python3 -m twine check dist/*
-```
+**Steps 1 and 2 are not merely configured — they are verified.** The v0.3.0 run
+(32828505888) got as far as `Uploading distributions to
+https://upload.pypi.org/legacy/` and failed with a **400 on the filename**, not
+a 403 on auth. The OIDC token exchange succeeded. The only thing that has ever
+blocked a publish is §8.
+
+**TestPyPI rehearsal is not a useful pre-flight for this path** and there is
+deliberately no target for it: it uses a stored token, exercising neither OIDC
+nor the pending-publisher binding (TestPyPI needs its own separate publisher).
+`make preflight` is the real rehearsal — it reproduces CI's `build` job.
 
 ## 5. Release runbook
 
-```bash
-# 0. Ensure working tree is clean and on the release branch (main)
-git switch main && git pull && git status   # clean
+Releases are cut from **`main`**. (`v0.3.0` was tagged on `dev`; that is no
+longer the practice. `release.yml` fires on any `v*` tag regardless of branch,
+so the discipline is the runbook's, not the workflow's.)
 
-# 1. Update the changelog: move [Unreleased] items under the new version
+```bash
+# 0. Clean tree, on main, level with origin
+git switch main && git pull && git status
+
+# 1. Move [Unreleased] items under the new version
 $EDITOR CHANGELOG.md
 
-# 2. Pre-flight locally
-make clean && make test && make lint
-make dist && twine check dist/*
+# 2. Pre-flight — the same checks CI will run
+make lint test preflight PYTHON=.venv/bin/python
 
 # 3. Bump (commits + creates the vX.Y.Z tag) and push
-make bump-minor                 # or bump-patch / bump-major
+make bump-minor PYTHON=.venv/bin/python      # or bump-patch / bump-major
 git push origin main --follow-tags
 
-# 4. CI runs on the push; the tag triggers release.yml -> PyPI.
-#    Verify: https://pypi.org/project/TranslonScorer/  and the GitHub Release.
+# 4. Fast-forward dev so the branches do not diverge
+git branch -f dev main && git push origin dev
 
-# 5. Containers: the existing GHCR workflows
-#    (publish-translonscorer.yml / docker-latest.yml) build images on push to
-#    main. Tag-pin the image to the release if desired.
+# 5. The tag triggers release.yml: gate -> PyPI -> GHCR -> GitHub Release.
+#    Verify: https://pypi.org/project/translonscorer/
+#            ghcr.io/jackcurragh/translonscorer:vX.Y.Z and :latest
+#            the GitHub Release page
 ```
 
 ## 6. Gap closed vs. RiboMetric
@@ -116,22 +156,52 @@ git push origin main --follow-tags
 |---|---|---|
 | Semantic version, single bump command | bump2version | ✅ `.bumpversion.cfg`, `make bump-*` |
 | CI tests (py3.11/3.12) + coverage | ci.yml + Codecov | ✅ ci.yml |
+| Lint enforced in CI | ruff/black | ✅ ci.yml `lint` job (fatal) |
 | Type checking | mypy (fail) | ✅ mypy (report-only → tighten to fail) |
 | Tag → PyPI Trusted Publishing | release.yml | ✅ release.yml |
 | Changelog / citation | CHANGELOG.md / CITATION.cff | ✅ added |
 | Make targets | Makefile | ✅ Makefile |
-| Container image | GH Actions | ✅ pre-existing GHCR workflows |
+| Container image | GH Actions | ✅ ci.yml (`:main`) + release.yml (`:latest`) |
+| GitHub Release with artifacts | — | ✅ release.yml |
 
-## 7. Remaining to wire up (not code — config/secrets)
+## 7. Remaining before 1.0
 
-- ✅ PyPI Trusted Publisher + `pypi` GitHub environment registered 2026-08-09
-  (§4). Not yet exercised — the first tag push is the real test.
-- ✅ The workflows do live at the root of `JackCurragh/TranslonScorer` (`origin`
-  points there and `.github/workflows/` is at the repo root), so the subtree
-  concern is resolved for CI/release purposes.
-- **Decide which branch releases are cut from.** §5 below says `main`, but
-  `v0.3.0` was tagged on `dev` (which was 14 commits ahead of `main` at the
-  time). `release.yml` triggers on any `v*` tag regardless of branch, so both
-  work — but the runbook and practice should agree before this becomes a habit.
-- Before 1.0: make `mypy` fatal, ensure `pytest` is green in CI, and pin a
-  `requires-python` upper bound if needed.
+- Make `mypy` fatal (drop `|| true` in `ci.yml`). 229 errors outstanding,
+  overwhelmingly `X | None` passed into non-optional parameters.
+- Un-skip the contract tests in `tests/test_alignments.py` and
+  `tests/test_counts.py`. Both carry a module-level `skipif` on the local
+  `data/global_partitioned` cohort, so all 29 skip in CI — including the ones
+  their own comments call "contract tests (fast, no I/O beyond schema
+  inspection)", which need no cohort data. The provenance backbone (VersionKey,
+  schemas) currently has zero CI coverage.
+- Decide whether `requires-python` needs an upper bound.
+
+## 8. Post-mortem: why v0.2.0 and v0.3.0 never published
+
+Three release runs, three failures, no package on PyPI:
+
+| run | tag | date | outcome |
+|---|---|---|---|
+| 28224587497 | v0.2.0 | 2026-06-26 | failed |
+| 31315960329 | v0.3.0 | 2026-08-09 | failed |
+| 32828505888 | v0.3.0 (re-run) | 2026-08-25 | failed |
+
+Cause, from the last run's log:
+
+```
+400 Filename 'TranslonScorer-0.3.0-py3-none-any.whl' should
+contain the normalized project name 'translonscorer', not 'TranslonScorer'.
+```
+
+`pyproject.toml` had `name = "TranslonScorer"`. The **sdist** was already
+normalised (`translonscorer-0.3.0.tar.gz`), so only the wheel tripped it — and
+`twine check` passes a non-normalised wheel, so the build looked green right up
+to the upload. Fixed on main in `88adeb8` (`name = "translonscorer"`).
+
+Two lasting consequences:
+
+- **Never re-run `release.yml` on the `v0.3.0` tag.** That tag's tree still
+  carries the capitalised name; it will fail identically forever. The fix ships
+  in the next tag cut from `main`.
+- The `build` job and `make preflight` now assert the filename prefix, so this
+  class of failure is caught in CI rather than at upload.

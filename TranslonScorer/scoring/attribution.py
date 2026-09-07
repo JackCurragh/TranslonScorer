@@ -53,9 +53,7 @@ def init_battery(evidence: dict, thr: ScoreThresholds) -> dict:
     (body_share_consistency_p NOT significant at most flanks -- the
     near/far halves of the body flank agree on frame-0 share)."""
     axes = list((evidence.get("boundary_axes_by_flank") or {}).values())
-    level = (
-        None if evidence.get("consensus_rise") is None else evidence["consensus_rise"] > 0
-    )
+    level = None if evidence.get("consensus_rise") is None else evidence["consensus_rise"] > 0
 
     def _flank_majority(field: str, is_pass) -> Optional[bool]:
         vals = [a[field] for a in axes if a.get(field) is not None]
@@ -64,7 +62,9 @@ def init_battery(evidence: dict, thr: ScoreThresholds) -> dict:
         return (sum(1 for v in vals if is_pass(v)) / len(vals)) >= thr.periodicity_min_agree_frac
 
     phase = _flank_majority("periodicity_p", lambda p: p < thr.periodicity_significance_alpha)
-    uniformity_gini = _flank_majority("gini_body_inframe", lambda g: g < thr.init_uniformity_gini_max)
+    uniformity_gini = _flank_majority(
+        "gini_body_inframe", lambda g: g < thr.init_uniformity_gini_max
+    )
     uniformity_share = _flank_majority(
         "body_share_consistency_p", lambda p: p >= thr.periodicity_significance_alpha
     )
@@ -142,7 +142,9 @@ def cif_battery(evidence: dict, thr: ScoreThresholds) -> dict:
     level = None if frac is None else frac >= thr.cif_level_min_frac
 
     contig = evidence.get("cif_contiguity")
-    uniformity = None if contig is None else contig["max_run_frac"] < thr.cif_contiguity_max_run_frac
+    uniformity = (
+        None if contig is None else contig["max_run_frac"] < thr.cif_contiguity_max_run_frac
+    )
 
     chisq_p = evidence.get("frame_chisq_p")
     cross_agree = None
@@ -160,9 +162,7 @@ def cif_battery(evidence: dict, thr: ScoreThresholds) -> dict:
     }
 
 
-def compose_confidence(
-    aspect: str, evidence: dict, thr: ScoreThresholds
-) -> Optional[float]:
+def compose_confidence(aspect: str, evidence: dict, thr: ScoreThresholds) -> Optional[float]:
     """`confidence` for §6: fraction of this aspect's lenses that agree, with
     elongation additionally downweighted (never gated) when
     `map_track_low` is set -- docs/significance_testing_plan.md §2 "Cross-

@@ -149,7 +149,10 @@ def _compose_per_translon(
             # confidence in an aspect should reflect the events that carry
             # most of its reads, not be diluted equally by a low-read event.
             pl.when(pl.col("n_reads").sum() > 0)
-            .then((pl.col("confidence").fill_null(0.0) * pl.col("n_reads")).sum() / pl.col("n_reads").sum())
+            .then(
+                (pl.col("confidence").fill_null(0.0) * pl.col("n_reads")).sum()
+                / pl.col("n_reads").sum()
+            )
             .otherwise(None)
             .alias("confidence"),
         ]

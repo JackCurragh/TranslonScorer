@@ -116,7 +116,9 @@ def test_boundary_axes_for_flank_shape():
         "body_share_consistency_p",
     }
     assert set(axes) == expected_keys
-    assert axes["periodicity_delta"] == pytest.approx(axes["periodicity_body"] - axes["periodicity_outer"])
+    assert axes["periodicity_delta"] == pytest.approx(
+        axes["periodicity_body"] - axes["periodicity_outer"]
+    )
 
 
 def test_gini_body_inframe_low_for_steady_downstream_elongation():
@@ -280,9 +282,7 @@ def test_dropoff_after_share_none_off_contig():
 def test_dropoff_after_share_high_for_sustained_signal():
     term_pos = 99
     anchor = term_pos - 17
-    coverage = {
-        p: (30.0 if (p - anchor) % 3 == 0 else 5.0) for p in range(anchor, term_pos + 16)
-    }
+    coverage = {p: (30.0 if (p - anchor) % 3 == 0 else 5.0) for p in range(anchor, term_pos + 16)}
     share = _dropoff_after_share(term_pos, 1, coverage)
     assert share is not None
     assert share > 0.5

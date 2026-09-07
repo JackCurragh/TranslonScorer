@@ -343,7 +343,13 @@ def test_overlaps_df_for_scoring_joins_comp_phase(monkeypatch):
 
     out = workflows_mod._overlaps_df_for_scoring("unused_events_dir", events)
     assert out is not None
-    assert set(out.columns) >= {"event_id", "other_event_id", "overlap_start", "overlap_end", "comp_phase"}
+    assert set(out.columns) >= {
+        "event_id",
+        "other_event_id",
+        "overlap_start",
+        "overlap_end",
+        "comp_phase",
+    }
     by_event = dict(zip(out["event_id"].to_list(), out["comp_phase"].to_list()))
     assert by_event[10] == 1  # event 10's competitor is 11, whose own phase is 1
     assert by_event[11] == 0  # event 11's competitor is 10, whose own phase is 0
@@ -385,7 +391,12 @@ def test_overlaps_df_for_scoring_none_when_no_overlap_table(monkeypatch):
 @pytest.mark.parametrize(
     "workflow_name,extra_kwargs,provider_module,provider_name",
     [
-        ("score_bams_workflow", {"bams": ["fake.bam"]}, "TranslonScorer.coverage.bam", "BamSetProvider"),
+        (
+            "score_bams_workflow",
+            {"bams": ["fake.bam"]},
+            "TranslonScorer.coverage.bam",
+            "BamSetProvider",
+        ),
         (
             "score_bigwigs_workflow",
             {"bigwigs": ["fake.bw"]},
@@ -457,7 +468,9 @@ def test_score_workflow_wires_overlaps_df_through(
         str(tmp_path / "scores"),
         data_version="d1",
     )
-    assert "overlaps_df" in captured, "score_events was never called -- fixture coverage didn't reach it"
+    assert (
+        "overlaps_df" in captured
+    ), "score_events was never called -- fixture coverage didn't reach it"
     got = captured["overlaps_df"]
     assert got is not None
     by_event = dict(zip(got["event_id"].to_list(), got["comp_phase"].to_list()))

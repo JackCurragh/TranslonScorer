@@ -117,9 +117,7 @@ def test_score_events_populates_confidence_column():
         }
     )
     coverage = {p: (30.0 if p % 3 == 0 else 5.0) for p in range(0, 500)}
-    cov_df = pl.DataFrame(
-        {"pos": list(coverage.keys()), "count": list(coverage.values())}
-    )
+    cov_df = pl.DataFrame({"pos": list(coverage.keys()), "count": list(coverage.values())})
     scores = score_events(events, cov_df, thr=_THR)
     assert "confidence" in scores.columns
     by_aspect = dict(zip(scores["aspect"], scores["confidence"]))
@@ -176,9 +174,7 @@ def test_classify_termination_downstream_readthrough_without_a_known_neighbor():
 
 def test_classify_termination_downstream_distinct_when_neighbor_passes():
     ev = {"dropoff_after_share": 0.9}
-    assert (
-        classify_termination_downstream(ev, _THR, neighbor_passed=True) == "distinct_downstream"
-    )
+    assert classify_termination_downstream(ev, _THR, neighbor_passed=True) == "distinct_downstream"
 
 
 # ---------------------------------------------------------------------------
@@ -216,9 +212,7 @@ def test_pair_elongation_neighbors_both_independent():
 
 def test_pair_elongation_neighbors_leakage():
     scored = {
-        1: _elong_evidence_stub(
-            passes=False, competitor_share={2: 0.9}, identifiability=0.1
-        ),
+        1: _elong_evidence_stub(passes=False, competitor_share={2: 0.9}, identifiability=0.1),
         2: _elong_evidence_stub(passes=True, competitor_share={1: 0.9}),
     }
     out = pair_elongation_neighbors(scored, _THR)

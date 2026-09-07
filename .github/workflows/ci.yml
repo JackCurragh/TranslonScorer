@@ -1,25 +1,78 @@
 name: CI
 
+# THE gate. Every check the project enforces is defined here, exactly once.
+#
+# It runs on its own for pushes and PRs, and is *called* by release.yml
+# (`workflow_call`) so a tagged release re-runs the identical gate rather than
+# a drifting copy of it. Jobs added here are automatically enforced at release
+# time; there is no second place to update.
+#
+# The `image` job publishes the moving `:main` / `:sha-<short>` container tags
+# and is gated on lint+test. Release tags (`:vX.Y.Z`, `:X.Y`, `:latest`) are
+# published by release.yml instead — see docs/RELEASE.md §3.
+
 on:
   push:
     branches: [ main, dev ]
   pull_request:
     branches: [ main, dev ]
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/translonscorer
 
 jobs:
+  lint:
+    name: Lint (ruff + black)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install linters
+        run: python -m pip install --upgrade pip 'ruff>=0.6' 'black>=24.0'
+      - name: ruff
+        run: ruff check TranslonScorer tests
+      - name: black
+        run: black --check TranslonScorer tests
+
+  typecheck:
+    name: Type check (mypy, report-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip mypy
+          pip install -e '.[full]'
+      # Report-only while the codebase is alpha; drop `|| true` to make this
+      # fatal before 1.0, to match RiboMetric. See docs/RELEASE.md §2.
+      - name: mypy
+        run: mypy --config-file mypy.ini TranslonScorer || true
+
   test:
+    name: Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ['3.11', '3.12']
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
@@ -31,11 +84,8 @@ jobs:
 
       - name: Install package
         run: |
-          python -m pip install --upgrade pip build
+          python -m pip install --upgrade pip
           pip install -e '.[full]'
-
-      - name: Build package
-        run: python -m build
 
       - name: Run tests
         if: matrix.python-version != '3.12'
@@ -53,24 +103,88 @@ jobs:
           flags: unittests
           fail_ci_if_error: false
 
-  type-check:
+  build:
+    name: Build sdist + wheel
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Install dependencies
+      - name: Build
         run: |
-          python -m pip install --upgrade pip mypy
-          pip install -e '.[full]'
+          python -m pip install --upgrade pip build twine
+          python -m build
 
-      # Report-only while the codebase is alpha; tighten to fail-on-error
-      # (drop `|| true`) before the 1.0 release to match RiboMetric.
-      - name: Run mypy (report-only)
-        run: mypy --config-file mypy.ini TranslonScorer || true
+      # `twine check` alone does NOT catch a non-normalised wheel filename,
+      # which is what silently failed every release before v0.3.1: pyproject
+      # said `name = "TranslonScorer"`, the wheel came out as
+      # TranslonScorer-*.whl, and PyPI rejected it with a 400 *after* a fully
+      # green build. Assert the filenames here so it fails in CI instead.
+      - name: Check metadata and wheel filename normalisation
+        run: |
+          twine check dist/*
+          set -euo pipefail
+          for f in dist/*.whl dist/*.tar.gz; do
+            base="$(basename "$f")"
+            case "$base" in
+              translonscorer-*) ;;
+              *) echo "::error::$base is not normalised; PyPI requires the 'translonscorer-' prefix (check [project] name in pyproject.toml)"; exit 1 ;;
+            esac
+          done
+          echo "dist filenames normalised:"; ls -1 dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  image:
+    name: Publish :main container
+    # Moving tags for the tip of main only. Release tags come from release.yml.
+    # Gated on lint+test so a broken tree can never reach the registry — the
+    # old publish-translonscorer.yml had no test gate at all and raced
+    # docker-latest.yml for the same `:latest` tag.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=main
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test built image
+        run: docker run --rm "${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}" --help

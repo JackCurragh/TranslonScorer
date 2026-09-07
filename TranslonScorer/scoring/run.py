@@ -216,7 +216,9 @@ def score_elongation_batch(
             frame_chisq_p=_elong_frame_chisq(frame_reads[row].tolist()),
             cif_significance=cif_sig,
             cif_contiguity=cif_contig,
-            body_uniformity_p=_elong_body_uniformity(vec, min_codons=thr.elong_uniformity_min_codons),
+            body_uniformity_p=_elong_body_uniformity(
+                vec, min_codons=thr.elong_uniformity_min_codons
+            ),
         )
     return out
 

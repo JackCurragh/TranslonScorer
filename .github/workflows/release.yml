@@ -29,8 +29,16 @@ jobs:
   gate:
     name: CI gate
     uses: ./.github/workflows/ci.yml
+    # A called workflow's jobs may not request more than the calling job
+    # grants, and GitHub validates that at STARTUP -- before any job-level
+    # `if` is evaluated. ci.yml's `image` job declares `packages: write`, so
+    # omitting it here fails the whole run with "workflow file issue" and no
+    # jobs at all, even though that job is gated to main-branch pushes and
+    # never runs on a tag. Grant it so the file validates; the `if` still
+    # keeps the job from running here.
     permissions:
       contents: read
+      packages: write
 
   pypi:
     name: Publish to PyPI

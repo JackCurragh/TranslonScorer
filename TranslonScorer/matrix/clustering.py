@@ -27,6 +27,7 @@ import numpy as np
 import polars as pl
 
 from TranslonScorer.utils.logging import log_info, log_warning
+from TranslonScorer.utils.narrow import as_int
 
 
 @dataclass(frozen=True)
@@ -300,7 +301,7 @@ def _agglomerative_distance(
     if distance_threshold is not None:
         labels = fcluster(Z, float(distance_threshold), criterion="distance")
     else:
-        labels = fcluster(Z, int(n_clusters), criterion="maxclust")
+        labels = fcluster(Z, as_int(n_clusters), criterion="maxclust")
     return labels.astype(int) - 1
 
 

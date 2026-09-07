@@ -7,7 +7,7 @@ including error handling and informational messages.
 
 import logging
 import sys
-from typing import Optional, Type
+from typing import Type
 
 
 def setup_logging(level: int = logging.INFO) -> None:
@@ -48,7 +48,7 @@ def log_warning(message: str) -> None:
 def log_error(
     message: str,
     raise_exception: bool = True,
-    exception_type: Optional[Type[Exception]] = RuntimeError,
+    exception_type: Type[Exception] = RuntimeError,
 ) -> None:
     """
     Log an error message and optionally raise an exception.

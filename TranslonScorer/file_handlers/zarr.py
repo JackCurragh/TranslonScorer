@@ -16,11 +16,11 @@ avoid materializing the full matrix.
 """
 
 import importlib
-from typing import Iterator, List, Tuple
+from typing import Any, Iterator, List, Tuple
 
 import polars as pl
 
-_zarr_mod = None
+_zarr_mod: Any = None  # the zarr module once _require_zarr() has run
 _zarr_err = None
 
 
@@ -52,7 +52,7 @@ def _open_counts(zroot: str):
         root = _zarr_mod.open(zroot, mode="r")
         # If this is already an Array (path points directly to an array), return it
         try:
-            from zarr.core import Array as _ZarrArray  # zarr 2.x
+            from zarr.core import Array as _ZarrArray  # type: ignore[attr-defined]  # zarr 2.x
         except Exception:
             _ZarrArray = None  # type: ignore
         if _ZarrArray is not None and isinstance(root, _ZarrArray):

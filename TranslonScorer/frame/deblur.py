@@ -29,10 +29,12 @@ using Richardson-Lucy (RL):
 where K_flip = K[::-1].  RL is non-negative and mass-preserving.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import polars as pl
+
+from TranslonScorer.utils.narrow import as_int
 
 from .bleed import _cds_interior
 
@@ -136,7 +138,7 @@ def learn_kernel(
             if tid not in cds_tran_ids:
                 continue
             cds_start, cds_stop = cds_lookup[tid]
-            mxp = int(sub["pos"].max())
+            mxp = as_int(sub["pos"].max())
             arr = _dense_array(sub, mxp, pad=W + 1)
             for anchor in range(cds_start, cds_stop, 3):
                 lo, hi = anchor - W, anchor + W + 1
@@ -155,7 +157,7 @@ def learn_kernel(
             if tid not in cds_tran_ids:
                 continue
             cds_start, cds_stop = cds_lookup[tid]
-            mxp = int(sub["pos"].max())
+            mxp = as_int(sub["pos"].max())
             arr = _dense_array(sub, mxp, pad=W + 1)
             for anchor in range(cds_start, cds_stop, 3):
                 lo, hi = anchor - W, anchor + W + 1
@@ -212,7 +214,7 @@ def _rl_deconvolve(
 
 def deconvolve(
     profiles: pl.DataFrame,
-    kernels: Dict[Optional[int], object],
+    kernels: Dict[Optional[int], Any],
     rl_iters: int = _RL_ITERS,
 ) -> pl.DataFrame:
     """Apply Richardson-Lucy deconvolution to transcript-space profiles.

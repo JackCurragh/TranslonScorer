@@ -122,13 +122,15 @@ def _build_tx_models_streaming(gtf_path: str, chroms: Set[str]) -> Dict[str, TxM
             continue
         chrom = str(r["Chromosome"]) if r.get("Chromosome") is not None else None
         strand = str(r.get("Strand")) if r.get("Strand") is not None else None
-        s = int(r["Start"]) - 1  # GTF is 1-based inclusive; convert to 0-based half-open
-        e = int(r["End"])  # end becomes exclusive
+        s = int(r["Start"])  # type: ignore[call-overload]
+        s -= 1  # GTF is 1-based inclusive; convert to 0-based half-open
+        e = int(r["End"])  # type: ignore[call-overload]
         if chrom is None or strand is None:
             continue
         exons_by_tx.setdefault(str(tx), []).append((s, e))
         if str(tx) not in meta_by_tx:
-            meta_by_tx[str(tx)] = (_norm_chr(chrom), strand, r.get("gene_id"))
+            gid = r.get("gene_id")
+            meta_by_tx[str(tx)] = (_norm_chr(chrom), strand, None if gid is None else str(gid))
 
     for tx, exons in exons_by_tx.items():
         chrom, strand, gene_id = meta_by_tx.get(tx, (None, None, None))
@@ -242,7 +244,7 @@ def import_bed12(
                 juncs = _junctions_from_blocks(blocks, strand)
                 length_nt = sum(b2 - b1 for b1, b2 in blocks)
                 candidates = by_chr_strand.get((chrom, strand), [])
-                scored: List[Tuple[int, int, str]] = []
+                scored = []
                 for tid in candidates:
                     tx = tx_models[tid]
                     tb = tx_bounds[tid]
@@ -291,7 +293,7 @@ def import_bed12(
                     gend_last = blocks[-1][1] - 1
                     t_start = _map_genomic_to_tran(tx, gstart)
                     if t_start is not None:
-                        t_end = t_start + length_nt
+                        t_end: Optional[int] = t_start + length_nt
                     else:
                         te_last = _map_genomic_to_tran(tx, gend_last)
                         t_end = te_last + 1 if te_last is not None else None
@@ -325,7 +327,7 @@ def import_bed12(
             juncs = _junctions_from_blocks(blocks, strand)
             length_nt = sum(b2 - b1 for b1, b2 in blocks)
             candidates = by_chr_strand.get((chrom, strand), [])
-            scored: List[Tuple[int, int, str]] = []
+            scored = []
             for tid in candidates:
                 tx = tx_models[tid]
                 tb = tx_bounds[tid]

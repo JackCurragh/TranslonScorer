@@ -369,8 +369,10 @@ def process_bam(bam: str, chromsizes: str, annotation: str, output: str, strande
         stranded=stranded,
     )
     # Minimal validation for this subcommand
-    config._validate_file_exists(config.bam, "BAM")
-    config._validate_file_exists(config.chromsizes, "Chromosome sizes")
+    # bam/chromsizes are required click options on this subcommand, so they
+    # are never None here even though Config types them Optional.
+    config._validate_file_exists(str(config.bam), "BAM")
+    config._validate_file_exists(str(config.chromsizes), "Chromosome sizes")
     config._validate_file_exists(config.annotation, "Annotation")
     from .legacy_workflow import process_bam_workflow
 
@@ -1237,7 +1239,10 @@ def orfs_import_cmd(
 )
 @click.option("--progress/--no-progress", default=True, help="Show progress bars (default: on).")
 def features(
-    annotation: str, out_dir: str = None, output_prefix: str = None, progress: bool = True
+    annotation: str,
+    out_dir: Optional[str] = None,
+    output_prefix: Optional[str] = None,
+    progress: bool = True,
 ):
     """Build an annotation bundle (exons, CDS, features, feature_map, transcripts, loci, manifest)."""
     setup_logging()
@@ -1254,6 +1259,7 @@ def features(
     # Always build the bundle
     from .io.annotation_bundle import build_annotation_bundle
 
+    assert out_dir is not None  # guarded by the BadParameter check above
     bdir, paths = build_annotation_bundle(annotation, out_dir, progress=progress)
     log_info(f"Annotation bundle written at: {bdir}")
 

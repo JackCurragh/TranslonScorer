@@ -59,7 +59,9 @@ def _generation_paths(manifest_path: Path, manifest: dict) -> list[Path]:
     return [manifest_path.parent / item["path"] for item in generations]
 
 
-def _parse_read_id(query_name: str) -> Optional[int]:
+def _parse_read_id(query_name: Optional[str]) -> Optional[int]:
+    if query_name is None:
+        return None
     match = READ_NAME_RE.search(query_name)
     return int(match.group(1)) if match else None
 
@@ -125,10 +127,9 @@ def _scan_event_bucket(path: Path) -> pl.LazyFrame:
         "length": pl.Int64,
         "event_count": pl.UInt32,
     }
-    try:
-        return pl.scan_csv(path, separator="\t", schema_overrides=schema)
-    except TypeError:
-        return pl.scan_csv(path, separator="\t", dtypes=schema)
+    # `dtypes=` was the pre-1.0 spelling of `schema_overrides=`; polars is
+    # pinned ==1.36.1 so the old fallback was unreachable.
+    return pl.scan_csv(path, separator="\t", schema_overrides=schema)
 
 
 def _regions_from_exons(exon_df: pl.DataFrame) -> list[Region]:
@@ -150,7 +151,7 @@ def _spool_bam_events(
     regions: Optional[list[Region]],
 ) -> dict[int, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    handles = {}
+    handles: dict = {}
     paths: dict[int, Path] = {}
     seen_region_events = set()
     try:
@@ -178,7 +179,7 @@ def _spool_bam_events(
                     for record in bam.fetch(_chrom, region.start, region.end)
                 )
             else:
-                records = bam.fetch(until_eof=True)
+                records = bam.fetch(until_eof=True)  # type: ignore[assignment]
 
             for record in records:
                 if record.is_unmapped or record.reference_name is None:

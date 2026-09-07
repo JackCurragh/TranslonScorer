@@ -131,7 +131,7 @@ def _build_junc_stream(
     return result
 
 
-def _pa_to_pl(pa_type) -> pl.PolarsDataType:
+def _pa_to_pl(pa_type) -> type[pl.DataType]:
     """Minimal PyArrow→Polars type mapping for schema construction."""
     import pyarrow as pa
 

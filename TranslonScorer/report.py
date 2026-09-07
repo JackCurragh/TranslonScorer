@@ -184,7 +184,7 @@ def _compose_per_translon(
 
     out = totals
     for aspect in _ordered_aspects(per_aspect["aspect"].unique().to_list()):
-        select_cols = [
+        select_cols: list = [
             "feature_id",
             pl.when(pl.col("supported_frac") >= supported_frac_min)
             .then(pl.lit(_SUPPORTED))

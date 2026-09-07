@@ -75,7 +75,11 @@ def assemble_translome(
         prob += pulp.lpSum(score_terms) - pulp.lpSum(penalty_terms)
         prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=timeout_sec))
         chosen_idx = [i for i in range(orfs.height) if xs[i].value() and xs[i].value() > 0.5]
-        out = orfs.take(chosen_idx) if chosen_idx else pl.DataFrame({})
+        # `DataFrame.take` was removed in polars 1.x (and there is no
+        # `DataFrame.gather` — only Series has one), so this raised
+        # AttributeError for every ILP solve. Row selection by positional
+        # index is `df[indices]`.
+        out = orfs[chosen_idx] if chosen_idx else pl.DataFrame({})
     else:
         out = greedy_refine(orfs)
 

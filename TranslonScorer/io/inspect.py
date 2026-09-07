@@ -82,7 +82,7 @@ def inspect_parquet(
                 rng = f" [{s}:{e}]" if s is not None and e is not None else ""
                 click.echo(f"  - {k}: {fid}{rng}")
         if out_csv:
-            rows = []
+            rows: list = []
             for r in df.head(limit).iter_rows(named=True):
                 rows.extend(_expand_row(r))
             pl.from_dicts(rows).write_csv(out_csv)

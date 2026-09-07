@@ -7,12 +7,15 @@ No state, no offset computation, no profile generation.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
 
+from TranslonScorer.utils.narrow import as_int
+
+ox: Any  # module or None -- optional fast BAM reader
 try:
-    import oxbow as ox  # optional fast BAM reader
+    import oxbow as ox  # noqa: F811
 except Exception:
     ox = None
 
@@ -141,7 +144,7 @@ def readbam(
 
     if not (os.path.exists(f"{bampath}.bai") or os.path.exists(bampath.replace(".bam", ".bai"))):
         log_info("BAM index not found, creating index…")
-        _pysam.index(bampath)
+        _pysam.index(bampath)  # type: ignore[attr-defined]
 
     if ox is not None:
         bamfile = ox.read_bam(bampath)
@@ -158,7 +161,7 @@ def readbam(
                     {
                         "rname": bam.get_reference_name(aln.reference_id),
                         "pos": int(aln.reference_start),
-                        "end": int(aln.reference_end),
+                        "end": as_int(aln.reference_end),
                         "seq": aln.query_sequence or "",
                         "flag": int(aln.flag),
                         "qname": aln.query_name,
@@ -218,7 +221,7 @@ def readbam(
             df = df.with_columns(
                 pl.col("qname")
                 .map_elements(
-                    lambda s: int(pat.match(s).group("count")) if pat.match(s) else 1,
+                    lambda s: int(m.group("count")) if (m := pat.match(s)) else 1,
                     return_dtype=pl.Int64,
                 )
                 .alias("count")
@@ -232,10 +235,13 @@ def readbam(
                 q2c: Dict[str, int] = {}
                 with _pysam.AlignmentFile(bampath, "rb") as bam:
                     for aln in bam.fetch(until_eof=True):
+                        qname = aln.query_name
+                        if qname is None:  # unnamed record: nothing to key on
+                            continue
                         try:
-                            q2c[aln.query_name] = int(aln.get_tag(count_tag))
+                            q2c[qname] = int(aln.get_tag(count_tag))
                         except Exception:
-                            q2c[aln.query_name] = 1
+                            q2c[qname] = 1
                 if "qname" in df.columns:
                     df = df.with_columns(
                         pl.col("qname")

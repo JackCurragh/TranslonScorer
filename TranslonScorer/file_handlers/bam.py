@@ -5,10 +5,13 @@ readbam() has moved to io/bam.py; re-exported here for backward compatibility.
 All other helpers remain here until the full pipeline/ cleanup (T14).
 """
 
+from typing import Any
+
 import polars as pl
 
+ox: Any  # module or None -- optional fast BAM reader
 try:
-    import oxbow as ox  # optional fast BAM reader
+    import oxbow as ox  # noqa: F811
 except Exception:
     ox = None
 import os

@@ -110,7 +110,7 @@ def _nudge_to_frame0(
         total = sum(fd.values())
         if total < min_reads:
             continue
-        dom = max(fd, key=fd.get)
+        dom = max(fd, key=lambda k: fd[k])
         if dom == 0 or fd[dom] / total < min_fraction:
             continue
         shift = -1 if dom == 1 else 1

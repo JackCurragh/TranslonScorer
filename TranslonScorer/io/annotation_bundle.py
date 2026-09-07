@@ -153,7 +153,7 @@ def load_annotation_bundle(
     tx = pl.read_parquet(os.path.join(dir_path, "transcripts.parquet"))
     loci_bed = os.path.join(dir_path, "loci.bed")
     if not os.path.exists(loci_bed):
-        loci_bed = None
+        loci_bed = ""  # "" means absent here, matching build_annotation_bundle
     manifest_path = os.path.join(dir_path, "manifest.json")
     manifest = {}
     if os.path.exists(manifest_path):

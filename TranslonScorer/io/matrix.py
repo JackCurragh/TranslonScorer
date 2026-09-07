@@ -59,7 +59,7 @@ def _count_parquets(mp: Path, manifest: dict) -> List[str]:
     generations = manifest.get("generations") or [
         {"path": manifest.get("path", "global.AAAA_counts/generation=000001")}
     ]
-    paths = []
+    paths: list = []
     for gen in generations:
         gen_dir = mp.parent / gen["path"]
         paths.extend(str(p) for p in sorted(gen_dir.rglob("*.parquet")))
@@ -95,6 +95,19 @@ def _discover_bam(partition_dir: "str | Path") -> Optional[Path]:
     return candidates[0] if candidates else None
 
 
+def require_bam(partition_dir: "str | Path") -> Path:
+    """`_discover_bam`, but a missing BAM is an error with the directory named.
+
+    Callers that cannot proceed without one used to pass the Optional straight
+    into pysam, which failed further down with a message that did not say which
+    partition was empty.
+    """
+    bam = _discover_bam(partition_dir)
+    if bam is None:
+        raise FileNotFoundError(f"no unique_reads.*.bam in partition {partition_dir}")
+    return bam
+
+
 # ---------------------------------------------------------------------------
 # Read-ID parsing
 # ---------------------------------------------------------------------------
@@ -102,6 +115,11 @@ def _discover_bam(partition_dir: "str | Path") -> Optional[Path]:
 _READ_ID_RE = re.compile(r"read_(\d+)")
 
 
-def _parse_read_id(qname: str) -> Optional[int]:
+def _parse_read_id(qname: Optional[str]) -> Optional[int]:
+    """None-in, None-out: pysam types `query_name` as Optional, and a record
+    without one simply has no read id -- previously this reached
+    `re.search(None)` and raised TypeError."""
+    if qname is None:
+        return None
     m = _READ_ID_RE.search(qname)
     return int(m.group(1)) if m else None

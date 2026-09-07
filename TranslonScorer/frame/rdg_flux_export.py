@@ -696,6 +696,8 @@ def export_rdg_flux_v1(
     )
 
     if lazy_precomputed:
+        if frame_support_path is None:
+            raise ValueError("lazy_precomputed export requires frame_support_path")
         sample_ids, rows = _export_rdg_flux_v1_lazy_precomputed(
             profiles_path=profiles_path,
             frame_support_path=frame_support_path,

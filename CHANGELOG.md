@@ -6,7 +6,38 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- Three real runtime bugs surfaced by making `mypy` fatal:
+  - `assemble.py` called `DataFrame.take`, removed in polars 1.x (and with no
+    `DataFrame.gather` replacement — only `Series` has one), so every ILP
+    `assemble` solve raised `AttributeError`. Row selection by positional index
+    is `df[indices]`.
+  - `file_handlers/sparse_parquet._parse_read_id` and
+    `io/matrix._parse_read_id` passed pysam's `Optional[str]` `query_name`
+    straight into `re.search`, raising `TypeError` on an unnamed record. They
+    are now None-in/None-out: a record with no name has no read id.
+  - `io/bam.readbam` keyed its per-qname count dict on `aln.query_name` without
+    checking for None, so an unnamed record would key the dict on `None`.
+- `matrix/qc` used `LazyFrame.collect(streaming=True)`, which polars 1.x
+  replaced with `engine="streaming"` — the old keyword is rejected.
+- `utils/logging.log_error` typed `exception_type` as `Optional`, which would
+  mean `None(message)`; it is never None.
+- Partitions with no BAM now fail at discovery with the directory named
+  (`io/matrix.require_bam`) instead of passing `None` into pysam and failing
+  further down with a message that did not say which partition was empty.
+
+### Changed
+
+- **`mypy` is now fatal in CI** (229 errors → 0). Where a third-party stub is
+  genuinely wider than the runtime — polars scalar aggregates typed as
+  `int | float | Decimal | date | time | ... | None`, pysam's `Optional`
+  `reference_end`/`query_name` — narrowing goes through the new
+  `TranslonScorer/utils/narrow.py` (`as_int`, `as_float`, `opt_float`,
+  `require`) rather than scattered `# type: ignore`, so a real error on those
+  lines is not silenced later.
+- Dropped an unreachable polars <1.0 `scan_csv(dtypes=...)` fallback
+  (`schema_overrides` is the 1.x spelling; polars is pinned `==1.36.1`).
 
 ## [0.3.1] - 2026-09-07
 

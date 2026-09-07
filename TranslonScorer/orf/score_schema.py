@@ -4,6 +4,28 @@ from typing import Any
 
 import polars as pl
 
+
+def _fmean(series: pl.Series) -> float:
+    """`series.mean()` as a plain float.
+
+    Polars types `Series.mean()` as a union spanning int/float/Decimal/date/
+    time/timedelta/str/bytes/ndarray/list/None, because a Series can hold any
+    of those. Every arithmetic or `float()` use of it therefore fails type
+    checking even on columns that are always numeric here. Narrowing once, in
+    one place, is honest about that being a stub limitation rather than
+    scattering per-call ignores through the module.
+
+    Callers must guard emptiness themselves (`height`/`is_empty`); on an empty
+    Series polars returns None and this raises, which is the right failure.
+    """
+    return float(series.mean())  # type: ignore[arg-type]
+
+
+def _fmedian(series: pl.Series) -> float:
+    """`series.median()` as a plain float. See `_fmean`."""
+    return float(series.median())  # type: ignore[arg-type]
+
+
 RAW_SCORE_COLUMNS = ["rise_up", "step_down", "hrf", "avg", "nzc", "score"]
 
 FRAME_SCORE_COLUMNS = [
@@ -275,11 +297,9 @@ def add_frame_score_columns(
         codon_hi = ((e - 1) // 3) + 1
         sub = tx_fs.filter((pl.col("codon") >= codon_lo) & (pl.col("codon") < codon_hi))
 
-        posterior = float(sub[p_col].mean()) if not sub.is_empty() else None
+        posterior = _fmean(sub[p_col]) if not sub.is_empty() else None
         entropy = (
-            float(sub["entropy"].mean())
-            if not sub.is_empty() and "entropy" in sub.columns
-            else None
+            _fmean(sub["entropy"]) if not sub.is_empty() and "entropy" in sub.columns else None
         )
         method = (
             str(sub["method"][0])
@@ -349,20 +369,18 @@ def compare_score_tables(
         "n_frame": frame_s.height,
         "n_joined": joined.height,
         "mean_score_raw": (
-            float(raw_s["score"].mean()) if "score" in raw_s.columns and raw_s.height else None
+            _fmean(raw_s["score"]) if "score" in raw_s.columns and raw_s.height else None
         ),
         "mean_score_frame": (
-            float(frame_s["score"].mean())
-            if "score" in frame_s.columns and frame_s.height
-            else None
+            _fmean(frame_s["score"]) if "score" in frame_s.columns and frame_s.height else None
         ),
         "median_score_delta": (
-            float(joined["score_delta"].median())
+            _fmedian(joined["score_delta"])
             if "score_delta" in joined.columns and joined.height
             else None
         ),
         "mean_score_delta": (
-            float(joined["score_delta"].mean())
+            _fmean(joined["score_delta"])
             if "score_delta" in joined.columns and joined.height
             else None
         ),
@@ -377,10 +395,10 @@ def compare_score_tables(
             summary_values["label_a"] = str(label_a)
             summary_values["label_b"] = str(label_b)
             summary_values["raw_label_score_gap"] = (
-                float(a["score"].mean() - b["score"].mean()) if a.height and b.height else None
+                (_fmean(a["score"]) - _fmean(b["score"])) if a.height and b.height else None
             )
             summary_values["frame_label_score_gap"] = (
-                float(a["score_frame"].mean() - b["score_frame"].mean())
+                (_fmean(a["score_frame"]) - _fmean(b["score_frame"]))
                 if a.height and b.height
                 else None
             )

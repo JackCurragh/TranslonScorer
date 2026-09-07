@@ -92,17 +92,17 @@ def _extract_record(
 
     # Read NH from tag; fall back to 1 only if tag absent (should not happen).
     try:
-        nh: int = rec.get_tag("NH")
+        nh: int = int(rec.get_tag("NH"))  # type: ignore[arg-type]
     except KeyError:
         nh = 1
 
     try:
-        aln_score: int | None = rec.get_tag("AS")
+        aln_score: int | None = int(rec.get_tag("AS"))  # type: ignore[arg-type]
     except KeyError:
         aln_score = None
 
     try:
-        mismatches: int | None = rec.get_tag("NM")
+        mismatches: int | None = int(rec.get_tag("NM"))  # type: ignore[arg-type]
     except KeyError:
         mismatches = None
 

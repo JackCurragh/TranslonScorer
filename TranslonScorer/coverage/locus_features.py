@@ -8,6 +8,8 @@ import pandas as pd
 import polars as pl
 import pyranges as pr
 
+from TranslonScorer.utils.narrow import as_int
+
 from ..utils.logging import log_info
 
 
@@ -86,7 +88,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
         if not starts:
             return []
         # Build event map
-        ev = {}
+        ev: dict[int, int] = {}
         for s in starts:
             ev[s] = ev.get(s, 0) + 1
         for e in ends:
@@ -301,7 +303,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
             trans = row["transcripts"]
             exon_tbl = pl.DataFrame({"start": starts, "end": ends, "transcript_id": trans})
             chunks = _chunks_for_gene(exon_tbl.select(["start", "end"]))
-            chunk_ids: List[str] = []
+            chunk_ids = []
             for a, b in chunks:
                 covered = exon_tbl.filter((pl.col("start") < b) & (pl.col("end") > a))
                 if covered.height == 0:
@@ -334,10 +336,10 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                     order = sorted(range(len(s_list)), key=lambda i: s_list[i], reverse=True)
                 s_list = [s_list[i] for i in order]
                 e_list = [e_list[i] for i in order]
-                path: List[str] = []
-                tr_starts: List[int | None] = []
-                tr_ends: List[int | None] = []
-                tr_pos: List[int | None] = []
+                path = []
+                tr_starts = []
+                tr_ends = []
+                tr_pos = []
                 tr_offset = 0
                 for s, e in zip(s_list, e_list):
                     for a, b in chunks:
@@ -377,11 +379,11 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
                 cds_tx = cds.filter(pl.col("transcript_id") == tx)
                 if cds_tx.height > 0:
                     if strand == "+":
-                        tis_pos = int(cds_tx["start"].min())
-                        tts_pos = int(cds_tx["end"].max())
+                        tis_pos = as_int(cds_tx["start"].min())
+                        tts_pos = as_int(cds_tx["end"].max())
                     else:
-                        tis_pos = int(cds_tx["end"].max())
-                        tts_pos = int(cds_tx["start"].min())
+                        tis_pos = as_int(cds_tx["end"].max())
+                        tts_pos = as_int(cds_tx["start"].min())
                     tis_id = f"{gene_id}|TIS|{tis_pos}"
                     tts_id = f"{gene_id}|TTS|{tts_pos}"
                     features.extend(
@@ -449,7 +451,7 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
 
         # Exonic chunks (split at any exon boundary, keep spans covered by at least one exon)
         chunks = _chunks_for_gene(exon_tbl.select(["start", "end"]))
-        chunk_ids: List[str] = []
+        chunk_ids = []
         for a, b in chunks:
             fid = f"{gene_id}|chunk|{a}-{b}"
             chunk_ids.append(fid)
@@ -478,10 +480,10 @@ def build_locus_features(gtf_path: str, progress: bool = True) -> tuple[pl.DataF
             s_list = [s_list[i] for i in order]
             e_list = [e_list[i] for i in order]
 
-            path: List[str] = []
-            tr_starts: List[int | None] = []
-            tr_ends: List[int | None] = []
-            tr_pos: List[int | None] = []
+            path = []
+            tr_starts = []
+            tr_ends = []
+            tr_pos = []
             tr_offset = 0
 
             for s, e in zip(s_list, e_list):

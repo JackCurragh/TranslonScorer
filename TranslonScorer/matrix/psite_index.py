@@ -49,8 +49,17 @@ import numpy as np
 import polars as pl
 import pysam
 
+from TranslonScorer.utils.narrow import as_int
+
 from ..io.bam import normalise_chrom as _normalise_chrom
-from ..io.matrix import _count_parquets, _discover_bam, _manifest, _parse_read_id, _samples_df
+from ..io.matrix import (
+    _count_parquets,
+    _discover_bam,
+    _manifest,
+    _parse_read_id,
+    _samples_df,
+    require_bam,
+)
 from ..utils.logging import log_info, log_warning
 from .qc import _bam_chroms, _build_frame_intervals, fast_reads_qc
 
@@ -328,7 +337,7 @@ def _build_worker(pdir_str: str) -> bytes:
             if length == 0:
                 continue
             is_rev = rec.is_reverse
-            p5 = int(rec.reference_end) - 1 if is_rev else int(rec.reference_start)
+            p5 = as_int(rec.reference_end) - 1 if is_rev else int(rec.reference_start)
             chrom = _normalise_chrom(rec.reference_name, bam_refs) or rec.reference_name
             read_id_list.append(rid)
             pos5_list.append(p5)
@@ -482,7 +491,7 @@ def build_psite_index(
         log_info("build_psite_index: no partitions found")
         return
 
-    bam_refs = _bam_chroms(_discover_bam(dirs[0]))
+    bam_refs = _bam_chroms(require_bam(dirs[0]))
     frame_ivs = _build_frame_intervals(cds_df, cds_df, bam_refs)
     if chrom:
         # restrict CDS intervals to target chrom — reads on other chroms are skipped

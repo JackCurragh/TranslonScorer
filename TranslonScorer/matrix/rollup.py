@@ -44,6 +44,9 @@ import numpy as np
 import polars as pl
 import pysam
 
+from TranslonScorer.io.matrix import require_bam
+from TranslonScorer.utils.narrow import as_int
+
 from ..utils.logging import log_info
 from .qc import (
     _assign_frames_sweep,
@@ -127,7 +130,7 @@ def _scan_partition_alignments(
             rec_count[rid] += 1
             strand = "-" if rec.is_reverse else "+"
             asite = (
-                int(rec.reference_end) - 1 - ref_offset
+                as_int(rec.reference_end) - 1 - ref_offset
                 if rec.is_reverse
                 else int(rec.reference_start) + ref_offset
             )
@@ -317,7 +320,7 @@ def build_alignment_index(
     if not dirs:
         return pl.DataFrame(schema=_INDEX_SCHEMA)
 
-    bam_refs = _bam_chroms(_discover_bam(dirs[0]))
+    bam_refs = _bam_chroms(require_bam(dirs[0]))
     frame_ivs = _build_frame_intervals(cds_df, cds_df, bam_refs)
     gene_ivs, _gene_id_of = build_gene_spans(cds_df)
     if n_workers is None:
@@ -526,7 +529,7 @@ def build_matrix_rollup(
     if not dirs:
         return pl.DataFrame(schema=out_schema)
 
-    bam_refs = _bam_chroms(_discover_bam(dirs[0]))
+    bam_refs = _bam_chroms(require_bam(dirs[0]))
     frame_ivs = _build_frame_intervals(cds_df, cds_df, bam_refs)
     gene_ivs, _ = build_gene_spans(cds_df)
     mp0, manifest0 = _manifest(dirs[0])
@@ -707,7 +710,7 @@ def _prof_worker(pdir_str: str) -> bytes:
                 if r is None:
                     continue
                 a = (
-                    int(rec.reference_end) - 1 - ref_offset
+                    as_int(rec.reference_end) - 1 - ref_offset
                     if rec.is_reverse
                     else int(rec.reference_start) + ref_offset
                 )
@@ -790,7 +793,7 @@ def tabulate_profiles(
 
     regions = gene_regions(cds_df, gene_ids)
     code_to_gene = {c: g for g, c in {g: i for i, g in enumerate(sorted(gene_ids))}.items()}
-    bam_refs = _bam_chroms(_discover_bam(dirs[0]))
+    bam_refs = _bam_chroms(require_bam(dirs[0]))
     mp0, manifest0 = _manifest(dirs[0])
     sample_map = _samples_df(mp0, manifest0).select(["sample_id", "sample_name"])
     if sample_names:
@@ -968,7 +971,7 @@ def _cov_worker(pdir_str: str) -> bytes:
                     continue
                 if rec.is_reverse:
                     rid.append(r)
-                    pos.append(int(rec.reference_end) - 1 - off)
+                    pos.append(as_int(rec.reference_end) - 1 - off)
                     strand.append(-1)
                 else:
                     rid.append(r)
@@ -1067,7 +1070,7 @@ def region_coverage(
     )
     if not dirs or not regions:
         return pl.DataFrame(schema=out_schema)
-    bam_refs = _bam_chroms(_discover_bam(dirs[0]))
+    bam_refs = _bam_chroms(require_bam(dirs[0]))
     mp0, manifest0 = _manifest(dirs[0])
     sample_map = _samples_df(mp0, manifest0).select(["sample_id", "sample_name"])
     if sample_names:
@@ -1224,7 +1227,7 @@ def tabulate_junctions(
     out_schema = {"group": pl.Utf8, "junction_id": pl.UInt64, "kind": pl.Utf8, "count": pl.Float64}
     if not dirs or not junctions:
         return pl.DataFrame(schema=out_schema)
-    bam_refs = _bam_chroms(_discover_bam(dirs[0]))
+    bam_refs = _bam_chroms(require_bam(dirs[0]))
     mp0, manifest0 = _manifest(dirs[0])
     sample_map = _samples_df(mp0, manifest0).select(["sample_id", "sample_name"])
     if sample_names:
@@ -1715,7 +1718,7 @@ def _scan_partition_tx(
             strand = "-" if rec.is_reverse else "+"
             chrom = _normalise_chrom(rec.reference_name, bam_refs) or rec.reference_name
             if rec.is_reverse:
-                five_prime = int(rec.reference_end) - 1
+                five_prime = as_int(rec.reference_end) - 1
             else:
                 five_prime = int(rec.reference_start)
             alns.append((rid, length, strand, chrom, five_prime))
@@ -1868,7 +1871,7 @@ def build_frame_rollup(
     if not dirs:
         return pl.DataFrame(schema=_FR_SCHEMA)
 
-    bam_refs = _bam_chroms(_discover_bam(dirs[0]))
+    bam_refs = _bam_chroms(require_bam(dirs[0]))
     feature_ivs, _ = build_feature_exon_index(cds_df, bam_refs)
 
     mp0, manifest0 = _manifest(dirs[0])
@@ -1995,7 +1998,7 @@ def build_coverage_index(
     if not dirs:
         return pl.DataFrame(schema=_CI_SCHEMA)
 
-    bam_refs = _bam_chroms(_discover_bam(dirs[0]))
+    bam_refs = _bam_chroms(require_bam(dirs[0]))
     feature_ivs, _ = build_feature_exon_index(cds_df, bam_refs)
 
     mp0, manifest0 = _manifest(dirs[0])

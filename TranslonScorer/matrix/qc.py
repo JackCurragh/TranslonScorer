@@ -51,7 +51,9 @@ from TranslonScorer.io.matrix import (  # noqa: F401, E402
     _parse_read_id,
     _reads_parquet_path,
     _samples_df,
+    require_bam,
 )
+from TranslonScorer.utils.narrow import as_int
 
 from ..utils.logging import log_info, log_warning
 
@@ -161,7 +163,7 @@ def fast_reads_qc(
         .agg(pl.col("count").sum().cast(pl.Float64))
     )
 
-    agg = agg_lf.collect(streaming=True)
+    agg = agg_lf.collect(engine="streaming")
 
     empty_len = pl.DataFrame(
         schema={
@@ -349,7 +351,7 @@ def periodicity_qc(
                     continue
                 strand = "-" if rec.is_reverse else "+"
                 asite = (
-                    int(rec.reference_end) - 1 - default_offset
+                    as_int(rec.reference_end) - 1 - default_offset
                     if rec.is_reverse
                     else int(rec.reference_start) + default_offset
                 )
@@ -497,7 +499,7 @@ def _scan_partition_loci(
             if length == 0:
                 continue
             asite = (
-                int(rec.reference_end) - 1 - default_offset
+                as_int(rec.reference_end) - 1 - default_offset
                 if rec.is_reverse
                 else int(rec.reference_start) + default_offset
             )
@@ -590,7 +592,7 @@ def build_read_loci_index(
     if not dirs:
         return pl.DataFrame(schema={"read_id": pl.UInt64, "length": pl.Int64, "frame": pl.Int8})
 
-    bam_refs = _bam_chroms(_discover_bam(dirs[0]))
+    bam_refs = _bam_chroms(require_bam(dirs[0]))
     frame_ivs = _build_frame_intervals(cds_df, cds_df, bam_refs)
     if n_workers is None:
         n_workers = min(len(dirs), os.cpu_count() or 1)
@@ -847,7 +849,7 @@ def matrix_qc(
     if exon_df is not None:
         log_info("Running periodicity QC across all partitions…")
         perio = periodicity_qc(
-            dirs,
+            list(dirs),
             exon_df,
             cds_df=cds_df,
             sample_names=sample_names,

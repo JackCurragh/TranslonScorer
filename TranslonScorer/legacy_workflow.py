@@ -25,6 +25,8 @@ def process_bam_workflow(
     log_info("Processing BAM file → coverage tracks…")
 
     # Read BAM and annotation
+    if config.bam is None:
+        raise ValueError("process-bam requires --bam")
     bam_df = bam_handlers.readbam(
         config.bam,
         collapsed=config.bam_collapsed,

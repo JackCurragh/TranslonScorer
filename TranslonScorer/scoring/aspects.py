@@ -1076,8 +1076,17 @@ def score_junction_event(
         "eligibility": elig,
         "call": call,
     }
-    have_all = None not in (donor_pos, acceptor_pos, strand, donor_phase, acceptor_phase, coverage)
-    if have_all:
+    # Explicit per-name checks rather than `None not in (...)`: the tuple form
+    # reads well but tells a type checker nothing, so every argument below stays
+    # Optional at the call site.
+    if (
+        donor_pos is not None
+        and acceptor_pos is not None
+        and strand is not None
+        and donor_phase is not None
+        and acceptor_phase is not None
+        and coverage is not None
+    ):
         out.update(
             junction_internal_consistency(
                 donor_pos,

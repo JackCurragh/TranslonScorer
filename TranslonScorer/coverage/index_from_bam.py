@@ -18,6 +18,8 @@ from typing import Dict, Iterable, Optional, Tuple
 
 import polars as pl
 
+from TranslonScorer.utils.narrow import as_int
+
 
 def _open_counts(zarr_root: str):
     # Lazy import to avoid hard dependency at CLI import time
@@ -41,7 +43,7 @@ def _detect_row_count(zarr_root: str) -> int:
 def _iter_fasta(path: str) -> Iterable[Tuple[str, str]]:
     """Yield (header, sequence) from a FASTA file without external deps."""
     header = None
-    seq_chunks = []
+    seq_chunks: list[str] = []
     with open(path, "r") as fh:
         for line in fh:
             if not line:
@@ -195,7 +197,7 @@ def build_read_index_from_bam(
                         "read_id": curr,
                         "chr": bam.get_reference_name(aln.reference_id),
                         "start": int(aln.reference_start),
-                        "stop": int(aln.reference_end),
+                        "stop": as_int(aln.reference_end),
                         "strand": strand,
                         "length": int(aln.query_length or 0),
                     }
@@ -231,7 +233,7 @@ def build_read_index_from_bam(
                     "read_id": read_id,
                     "chr": bam.get_reference_name(aln.reference_id),
                     "start": int(aln.reference_start),
-                    "stop": int(aln.reference_end),
+                    "stop": as_int(aln.reference_end),
                     "strand": strand,
                     "length": int(aln.query_length or 0),
                 }

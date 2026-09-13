@@ -19,8 +19,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     are now None-in/None-out: a record with no name has no read id.
   - `io/bam.readbam` keyed its per-qname count dict on `aln.query_name` without
     checking for None, so an unnamed record would key the dict on `None`.
-- `matrix/qc` used `LazyFrame.collect(streaming=True)`, which polars 1.x
-  replaced with `engine="streaming"` — the old keyword is rejected.
+- `matrix/qc` used `LazyFrame.collect(streaming=True)`, deprecated since
+  polars 1.25 in favour of `engine="streaming"`. It still ran on the pinned
+  1.36.1 (with a `DeprecationWarning`), so this was not a live failure — it
+  would have become one on the polars release that removes the keyword.
 - `utils/logging.log_error` typed `exception_type` as `Optional`, which would
   mean `None(message)`; it is never None.
 - Partitions with no BAM now fail at discovery with the directory named
